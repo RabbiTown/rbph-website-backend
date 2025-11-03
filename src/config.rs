@@ -1,6 +1,5 @@
 use base64::{Engine, prelude::BASE64_STANDARD};
 use config::Config;
-use log::warn;
 use serde::Deserialize;
 
 #[derive(Deserialize, Clone)]
@@ -19,7 +18,7 @@ impl AppConfig {
         let decoded = BASE64_STANDARD.decode(&self.secret_key);
 
         if decoded.is_err() {
-            warn!("invalid secret key found, default to zero bytes.")
+            log::warn!("invalid secret key found, default to zero bytes.")
         }
 
         let decoded = decoded.unwrap_or_default();

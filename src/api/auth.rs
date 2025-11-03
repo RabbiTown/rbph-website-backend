@@ -1,4 +1,4 @@
-use crate::{api::RbError, config::Settings, db};
+use crate::{config::Settings, db, error::RbError};
 use actix_session::Session;
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
@@ -49,24 +49,24 @@ async fn login(
 ) -> Result<HttpResponse> {
     let trimmed_email = req.email.trim();
     if !EMAIL_REGEX.is_match(trimmed_email) {
-        RbError::with_code(UserLoginResult::WrongPwd.into()).err()?
+        RbError::bad_req(UserLoginResult::WrongPwd.into()).err()?
     }
 
     let trimmed_pwd = req.password.trim();
     if !PWD_REGEX.is_match(trimmed_pwd) {
-        RbError::with_code(UserLoginResult::WrongPwd.into()).err()?
+        RbError::bad_req(UserLoginResult::WrongPwd.into()).err()?
     }
 
     let user = db::user::get_user_by_email(&pool, &req.email).await?;
     if user.is_none() {
-        RbError::with_code(UserLoginResult::NotExists.into()).err()?
+        RbError::bad_req(UserLoginResult::NotExists.into()).err()?
     }
 
     let user = user.unwrap();
     match bcrypt::verify(&req.password, &user.upass) {
         Ok(true) => {}
-        Ok(false) => RbError::with_code(UserLoginResult::NotExists.into()).err()?,
-        Err(e) => RbError::with_code(UserLoginResult::BCryptError.into()).intern_err(e)?,
+        Ok(false) => RbError::bad_req(UserLoginResult::NotExists.into()).err()?,
+        Err(e) => RbError::internal(e).err()?,
     }
 
     sess.insert("user_id", user.id)?;
@@ -108,16 +108,16 @@ async fn register(
 ) -> Result<HttpResponse> {
     let trimmed_email = req.email.trim();
     if !EMAIL_REGEX.is_match(trimmed_email) {
-        RbError::with_code(UserRegisterResult::InvalidEmail.into()).err()?
+        RbError::bad_req(UserRegisterResult::InvalidEmail.into()).err()?
     }
 
     let trimmed_pwd = req.password.trim();
     if !PWD_REGEX.is_match(trimmed_pwd) {
-        RbError::with_code(UserRegisterResult::InvalidPassword.into()).err()?
+        RbError::bad_req(UserRegisterResult::InvalidPassword.into()).err()?
     }
 
     if db::user::check_user_exists(&db_pool, &req.email).await? {
-        RbError::with_code(UserRegisterResult::UserExists.into()).err()?
+        RbError::bad_req(UserRegisterResult::UserExists.into()).err()?
     }
 
     let token = db::user::put_pending_user(&kv_pool, trimmed_email, trimmed_pwd).await?;
@@ -157,7 +157,7 @@ async fn verify(
 ) -> Result<HttpResponse> {
     let result = db::user::verify_pending_user(&db_pool, &kv_pool, &req.token).await?;
     if result.is_none() {
-        RbError::with_code(UserVerifyResult::Invalid.into()).err()?
+        RbError::bad_req(UserVerifyResult::Invalid.into()).err()?
     }
     Ok(HttpResponse::Ok().json(UserVerifyResponse {
         code: UserVerifyResult::Ok,

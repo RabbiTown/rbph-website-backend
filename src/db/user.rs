@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
-use crate::{db::DbError, model::user::RbUser};
+use crate::{error::RbInternalError, model::user::RbUser};
 
-pub async fn register_user(pool: &PgPool, email: &str, upass: &str) -> Result<i32, DbError> {
+pub async fn register_user(pool: &PgPool, email: &str, upass: &str) -> Result<i32, RbInternalError> {
     let uid = sqlx::query_scalar!(
         "INSERT INTO rb_user (email, upass)
         VALUES ($1, $2)
@@ -23,7 +23,7 @@ pub async fn register_user_upass_hashed(
     pool: &PgPool,
     email: &str,
     upass_hashed: &str,
-) -> Result<i32, DbError> {
+) -> Result<i32, RbInternalError> {
     let uid = sqlx::query_scalar!(
         "INSERT INTO rb_user (email, upass)
         VALUES ($1, $2)
@@ -37,7 +37,7 @@ pub async fn register_user_upass_hashed(
     Ok(uid)
 }
 
-pub async fn check_user_exists(pool: &PgPool, email: &str) -> Result<bool, DbError> {
+pub async fn check_user_exists(pool: &PgPool, email: &str) -> Result<bool, RbInternalError> {
     let result = sqlx::query_scalar!(
         "SELECT EXISTS (SELECT 1 FROM rb_user WHERE email = $1);",
         email
@@ -47,7 +47,10 @@ pub async fn check_user_exists(pool: &PgPool, email: &str) -> Result<bool, DbErr
     Ok(result.unwrap_or(false))
 }
 
-pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<RbUser>, DbError> {
+pub async fn get_user_by_email(
+    pool: &PgPool,
+    email: &str,
+) -> Result<Option<RbUser>, RbInternalError> {
     let ret = sqlx::query_as!(RbUser, "SELECT * FROM rb_user WHERE email = $1;", email)
         .fetch_one(pool)
         .await;
@@ -55,7 +58,7 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<RbUs
     match ret {
         Ok(user) => Ok(Some(user)),
         Err(sqlx::Error::RowNotFound) => Ok(None),
-        Err(err) => Err(DbError::SqlError(err)),
+        Err(err) => Err(RbInternalError::Sql(err)),
     }
 }
 
@@ -69,7 +72,7 @@ pub async fn put_pending_user(
     pool: &deadpool_redis::Pool,
     email: &str,
     upass: &str,
-) -> Result<String, DbError> {
+) -> Result<String, RbInternalError> {
     let mut conn = pool.get().await?;
 
     let token = Uuid::new_v4().to_string();
@@ -94,7 +97,7 @@ pub async fn verify_pending_user(
     db_pool: &PgPool,
     kv_pool: &deadpool_redis::Pool,
     token: &str,
-) -> Result<Option<i32>, DbError> {
+) -> Result<Option<i32>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
 
     let data: Option<String> = conn.get_del(format!("pending_user:{}", token)).await?;

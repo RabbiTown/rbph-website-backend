@@ -3,9 +3,16 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
-use crate::{error::RbInternalError, model::user::RbUser};
+use crate::{
+    error::RbInternalError,
+    model::user::{RbUser, RbUserRole},
+};
 
-pub async fn register_user(pool: &PgPool, email: &str, upass: &str) -> Result<i32, RbInternalError> {
+pub async fn register_user(
+    pool: &PgPool,
+    email: &str,
+    upass: &str,
+) -> Result<i32, RbInternalError> {
     let uid = sqlx::query_scalar!(
         "INSERT INTO rb_user (email, upass)
         VALUES ($1, $2)
@@ -109,4 +116,21 @@ pub async fn verify_pending_user(
     let uid = register_user_upass_hashed(db_pool, &user.email, &user.upass).await?;
 
     Ok(Some(uid))
+}
+
+// TODO : add redis cache
+pub async fn get_user_role_by_id(
+    pool: &PgPool,
+    user_id: i32,
+) -> Result<Option<RbUserRole>, RbInternalError> {
+    let ret = sqlx::query_scalar!("SELECT urole FROM rb_user WHERE id = $1;", user_id)
+        .fetch_one(pool)
+        .await
+        .map(RbUserRole::from);
+
+    match ret {
+        Ok(role) => Ok(Some(role)),
+        Err(sqlx::Error::RowNotFound) => Ok(None),
+        Err(err) => Err(RbInternalError::Sql(err)),
+    }
 }

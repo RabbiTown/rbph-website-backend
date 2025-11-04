@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod db;
 mod error;
+mod middleware;
 mod model;
 mod module;
 

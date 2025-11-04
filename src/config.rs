@@ -55,26 +55,3 @@ impl Settings {
         Ok(cfg.try_deserialize()?)
     }
 }
-
-// impl Default for AppConfig {
-//     fn default() -> Self {
-//         Self {
-//             production: false,
-
-//             bind_addr: ("localhost", 9999),
-//             db_addr: "postgres://postgres:123456@localhost/rbph",
-//             kv_addr: "redis://localhost/",
-
-//             secret_key: b"\x12",
-//         }
-//     }
-// }
-
-// impl Default for AuthConfig {
-//     fn default() -> Self {
-//         Self {
-//             max_session: 3,
-//             captcha: None,
-//         }
-//     }
-// }

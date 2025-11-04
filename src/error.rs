@@ -1,11 +1,20 @@
 use std::fmt::Debug;
 
 use actix_session::SessionInsertError;
-use actix_web::{HttpResponse, ResponseError, error, http::StatusCode};
+use actix_web::{HttpResponse, ResponseError, http::StatusCode};
 use deadpool_redis::redis::RedisError;
 use derive_more::Display;
+use num_enum::IntoPrimitive;
 use rand::Rng;
 use serde::Serialize;
+
+#[repr(i32)]
+#[derive(IntoPrimitive)]
+enum RbErrorCode {
+    Forbidden = -102,
+    Unauthorized = -101,
+    InternalServerError = -100,
+}
 
 #[derive(Debug, Serialize, Display)]
 #[display("code = {code} ; {message:?}")]
@@ -19,11 +28,11 @@ pub struct RbError {
 }
 
 impl RbError {
-    pub fn new(code: i32, message: &str) -> Self {
+    pub fn new(code: i32, message: &str, status_code: StatusCode) -> Self {
         Self {
             code: code,
             message: Some(message.to_string()),
-            status_code: StatusCode::BAD_REQUEST,
+            status_code: status_code,
         }
     }
 
@@ -44,9 +53,25 @@ impl RbError {
 
         log::warn!("internal server error ({}): {:?}", code, e);
         Self {
-            code: -100,
+            code: RbErrorCode::InternalServerError.into(),
             message: Some(format!("internal server error ({})", code)),
             status_code: StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    pub fn unauth() -> Self {
+        Self {
+            code: RbErrorCode::Unauthorized.into(),
+            message: Some("unauthorized".to_string()),
+            status_code: StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    pub fn forbid() -> Self {
+        Self {
+            code: RbErrorCode::Forbidden.into(),
+            message: Some("forbidden".to_string()),
+            status_code: StatusCode::UNAUTHORIZED,
         }
     }
 

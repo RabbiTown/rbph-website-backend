@@ -2,7 +2,7 @@ use actix_session::Session;
 use deadpool_redis::redis::AsyncCommands;
 use uuid::Uuid;
 
-use crate::error::RbInternalError;
+use crate::{KvPool, error::RbInternalError};
 
 static USER_SESSIONS: &str = "user_sessions";
 
@@ -16,8 +16,8 @@ pub fn get_session_id(sess: &Session) -> Result<String, RbInternalError> {
     }
 }
 
-pub async fn put(
-    pool: &deadpool_redis::Pool,
+pub async fn append(
+    pool: &KvPool,
     sess: &Session,
     user_id: i32,
     max_session: usize,
@@ -34,7 +34,7 @@ pub async fn put(
     Ok(())
 }
 
-pub async fn verify(pool: &deadpool_redis::Pool, sess: &Session) -> Result<bool, RbInternalError> {
+pub async fn verify(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();
 
@@ -51,10 +51,7 @@ pub async fn verify(pool: &deadpool_redis::Pool, sess: &Session) -> Result<bool,
     }
 }
 
-pub async fn invalidate(
-    pool: &deadpool_redis::Pool,
-    sess: &Session,
-) -> Result<bool, RbInternalError> {
+pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();
 
@@ -71,10 +68,7 @@ pub async fn invalidate(
     }
 }
 
-pub async fn invalidate_others(
-    pool: &deadpool_redis::Pool,
-    sess: &Session,
-) -> Result<bool, RbInternalError> {
+pub async fn invalidate_others(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();
 

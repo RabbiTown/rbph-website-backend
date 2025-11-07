@@ -1,4 +1,7 @@
+mod admin;
 mod auth;
+mod game;
+mod team;
 mod user;
 
 use actix_web::{
@@ -15,14 +18,32 @@ async fn error_handler() -> Result<HttpResponse> {
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
-        web::scope("auth")
+        web::scope("/auth")
             .configure(auth::config)
             .default_service(web::route().to(error_handler)),
     )
     .service(
-        web::scope("user")
+        web::scope("/user")
             .wrap(PrivilegeMiddleware::new(RbUserRole::User))
             .configure(user::config)
+            .default_service(web::route().to(error_handler)),
+    )
+    .service(
+        web::scope("/games")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::User))
+            .configure(game::config)
+            .default_service(web::route().to(error_handler)),
+    )
+    .service(
+        web::scope("/teams")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::User))
+            .configure(team::config)
+            .default_service(web::route().to(error_handler)),
+    )
+    .service(
+        web::scope("/admin")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::Admin))
+            .configure(admin::config)
             .default_service(web::route().to(error_handler)),
     )
     .default_service(web::route().to(error_handler));

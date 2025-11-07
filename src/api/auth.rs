@@ -1,4 +1,4 @@
-use crate::{config::Settings, db, error::RbError, module::session};
+use crate::{DbPool, KvPool, config::Settings, db, error::RbError, module::session};
 use actix_session::Session;
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
@@ -6,7 +6,6 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
-use sqlx::PgPool;
 
 static EMAIL_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\w+(-+.\w+)*@\w+(-.\w+)*.\w+(-.\w+)*$").unwrap());
@@ -36,7 +35,6 @@ struct UserLoginResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum UserLoginResult {
-    BCryptError = -10,
     NotExists = -2,
     WrongPwd = -1,
     Ok = 0,
@@ -45,33 +43,39 @@ enum UserLoginResult {
 async fn login(
     req: web::Json<UserLoginRequest>,
     sess: Session,
-    db_pool: web::Data<PgPool>,
-    kv_pool: web::Data<deadpool_redis::Pool>,
+    db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
     settings: web::Data<Settings>,
 ) -> Result<HttpResponse> {
     let trimmed_email = req.email.trim().to_lowercase();
     if !EMAIL_REGEX.is_match(&trimmed_email) {
-        RbError::bad_req(UserLoginResult::WrongPwd.into()).err()?
+        RbError::unauth()
+            .code(UserLoginResult::WrongPwd.into())
+            .err()?
     }
 
     let trimmed_pwd = req.password.trim();
     if !PWD_REGEX.is_match(trimmed_pwd) {
-        RbError::bad_req(UserLoginResult::WrongPwd.into()).err()?
+        RbError::unauth()
+            .code(UserLoginResult::WrongPwd.into())
+            .err()?
     }
 
-    let user = db::user::get_user_by_email(&db_pool, &trimmed_email).await?;
+    let user = db::user::get_by_email(&db_pool, &trimmed_email).await?;
     if user.is_none() {
-        RbError::bad_req(UserLoginResult::NotExists.into()).err()?
+        RbError::unauth()
+            .code(UserLoginResult::NotExists.into())
+            .err()?
     }
 
     let user = user.unwrap();
-    match bcrypt::verify(&trimmed_pwd, &user.upass) {
+    match bcrypt::verify(&trimmed_pwd, &user.pass) {
         Ok(true) => {}
         Ok(false) => RbError::bad_req(UserLoginResult::NotExists.into()).err()?,
         Err(e) => RbError::internal(e).err()?,
     }
 
-    session::put(&kv_pool, &sess, user.id, settings.auth.max_session).await?;
+    session::append(&kv_pool, &sess, user.id, settings.auth.max_session).await?;
     sess.renew();
 
     Ok(HttpResponse::Ok().json(UserLoginResponse {
@@ -106,8 +110,8 @@ enum UserRegisterResult {
 
 async fn register(
     req: web::Json<UserRegisterRequest>,
-    db_pool: web::Data<PgPool>,
-    kv_pool: web::Data<deadpool_redis::Pool>,
+    db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
     let trimmed_email = req.email.trim().to_lowercase();
     if !EMAIL_REGEX.is_match(&trimmed_email) {
@@ -119,11 +123,11 @@ async fn register(
         RbError::bad_req(UserRegisterResult::InvalidPassword.into()).err()?
     }
 
-    if db::user::check_user_exists(&db_pool, &trimmed_email).await? {
-        RbError::bad_req(UserRegisterResult::UserExists.into()).err()?
+    if db::user::check_exists(&db_pool, &trimmed_email).await? {
+        RbError::conflict(UserRegisterResult::UserExists.into()).err()?
     }
 
-    let token = db::user::put_pending_user(&kv_pool, &trimmed_email, trimmed_pwd).await?;
+    let token = db::user::put_pending(&kv_pool, &trimmed_email, trimmed_pwd).await?;
 
     log::debug!("register : {} ({})", trimmed_email, token);
 
@@ -155,10 +159,10 @@ enum UserVerifyResult {
 
 async fn verify(
     req: web::Query<UserVerifyQuery>,
-    db_pool: web::Data<PgPool>,
-    kv_pool: web::Data<deadpool_redis::Pool>,
+    db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
-    let result = db::user::verify_pending_user(&db_pool, &kv_pool, &req.token).await?;
+    let result = db::user::verify_pending(&db_pool, &kv_pool, &req.token).await?;
     if result.is_none() {
         RbError::bad_req(UserVerifyResult::Invalid.into()).err()?
     }
@@ -179,7 +183,7 @@ enum UserLogoutResult {
     Ok = 0,
 }
 
-async fn logout(sess: Session, kv_pool: web::Data<deadpool_redis::Pool>) -> Result<HttpResponse> {
+async fn logout(sess: Session, kv_pool: web::Data<KvPool>) -> Result<HttpResponse> {
     session::invalidate(&kv_pool, &sess).await?;
     sess.purge();
 
@@ -189,9 +193,9 @@ async fn logout(sess: Session, kv_pool: web::Data<deadpool_redis::Pool>) -> Resu
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.route("pre-auth", web::get().to(pre_auth))
-        .route("login", web::post().to(login))
-        .route("register", web::post().to(register))
-        .route("verify", web::get().to(verify))
-        .route("logout", web::post().to(logout));
+    cfg.route("/pre-auth", web::get().to(pre_auth))
+        .route("/login", web::post().to(login))
+        .route("/register", web::post().to(register))
+        .route("/verify", web::get().to(verify))
+        .route("/logout", web::post().to(logout));
 }

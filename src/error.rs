@@ -11,7 +11,8 @@ use serde::Serialize;
 #[repr(i32)]
 #[derive(IntoPrimitive)]
 enum RbErrorCode {
-    Forbidden = -102,
+    NotFound = -104,
+    Forbidden = -103,
     Unauthorized = -101,
     InternalServerError = -100,
 }
@@ -36,11 +37,29 @@ impl RbError {
         }
     }
 
+    pub fn msg(mut self, msg: impl Into<String>) -> Self {
+        self.message = Some(msg.into());
+        self
+    }
+
+    pub fn code(mut self, code: i32) -> Self {
+        self.code = code;
+        self
+    }
+
     pub fn bad_req(code: i32) -> Self {
         Self {
             code: code,
             message: None,
             status_code: StatusCode::BAD_REQUEST,
+        }
+    }
+
+    pub fn conflict(code: i32) -> Self {
+        Self {
+            code: code,
+            message: None,
+            status_code: StatusCode::CONFLICT,
         }
     }
 
@@ -75,6 +94,14 @@ impl RbError {
         }
     }
 
+    pub fn not_found() -> Self {
+        Self {
+            code: RbErrorCode::NotFound.into(),
+            message: Some("not found".to_string()),
+            status_code: StatusCode::NOT_FOUND,
+        }
+    }
+
     pub fn resp(&self) -> HttpResponse {
         HttpResponse::build(self.status_code).json(self)
     }
@@ -86,7 +113,7 @@ impl RbError {
 
 impl ResponseError for RbError {
     fn error_response(&self) -> HttpResponse {
-        HttpResponse::BadRequest().json(self)
+        self.resp()
     }
 }
 

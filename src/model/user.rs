@@ -4,7 +4,7 @@ use sqlx::types::time::OffsetDateTime;
 pub struct RbUser {
     pub id: i32,
     pub email: String,
-    pub upass: String,
+    pub pass: String,
     pub urole: RbUserRole,
     pub nickname: String,
     pub bio: Option<String>,

@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod db;
 mod error;
+mod extractor;
 mod middleware;
 mod model;
 mod module;
@@ -10,6 +11,10 @@ use actix_session::{SessionMiddleware, storage::RedisSessionStore};
 use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
+use sqlx::PgPool;
+
+pub type DbPool = PgPool;
+pub type KvPool = deadpool_redis::Pool;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

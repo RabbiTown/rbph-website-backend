@@ -1,50 +1,47 @@
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPool;
 use uuid::Uuid;
 
 use crate::{
+    DbPool, KvPool,
     error::RbInternalError,
     model::user::{RbUser, RbUserRole},
 };
 
-pub async fn register_user(
-    pool: &PgPool,
-    email: &str,
-    upass: &str,
-) -> Result<i32, RbInternalError> {
-    let uid = sqlx::query_scalar!(
-        "INSERT INTO rb_user (email, upass)
+pub async fn register(pool: &DbPool, email: &str, pass: &str) -> Result<i32, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "INSERT INTO rb_user (email, pass)
         VALUES ($1, $2)
         RETURNING id;",
         email,
-        bcrypt::hash(upass, bcrypt::DEFAULT_COST)?,
+        bcrypt::hash(pass, bcrypt::DEFAULT_COST)?,
     )
     .fetch_one(pool)
     .await?;
 
-    Ok(uid)
+    Ok(result)
 }
 
-pub async fn register_user_upass_hashed(
-    pool: &PgPool,
+pub async fn register_pass_hashed(
+    pool: &DbPool,
     email: &str,
-    upass_hashed: &str,
+    pass_hashed: &str,
 ) -> Result<i32, RbInternalError> {
-    let uid = sqlx::query_scalar!(
-        "INSERT INTO rb_user (email, upass)
+    let result = sqlx::query_scalar!(
+        "INSERT INTO rb_user (email, pass)
         VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
         RETURNING id;",
         email,
-        upass_hashed,
+        pass_hashed,
     )
     .fetch_one(pool)
     .await?;
 
-    Ok(uid)
+    Ok(result)
 }
 
-pub async fn check_user_exists(pool: &PgPool, email: &str) -> Result<bool, RbInternalError> {
+pub async fn check_exists(pool: &DbPool, email: &str) -> Result<bool, RbInternalError> {
     let result = sqlx::query_scalar!(
         "SELECT EXISTS (SELECT 1 FROM rb_user WHERE email = $1);",
         email
@@ -54,40 +51,33 @@ pub async fn check_user_exists(pool: &PgPool, email: &str) -> Result<bool, RbInt
     Ok(result.unwrap_or(false))
 }
 
-pub async fn get_user_by_email(
-    pool: &PgPool,
-    email: &str,
-) -> Result<Option<RbUser>, RbInternalError> {
-    let ret = sqlx::query_as!(RbUser, "SELECT * FROM rb_user WHERE email = $1;", email)
-        .fetch_one(pool)
-        .await;
+pub async fn get_by_email(pool: &DbPool, email: &str) -> Result<Option<RbUser>, RbInternalError> {
+    let result = sqlx::query_as!(RbUser, "SELECT * FROM rb_user WHERE email = $1;", email)
+        .fetch_optional(pool)
+        .await?;
 
-    match ret {
-        Ok(user) => Ok(Some(user)),
-        Err(sqlx::Error::RowNotFound) => Ok(None),
-        Err(err) => Err(RbInternalError::Sql(err)),
-    }
+    Ok(result)
 }
 
 #[derive(Deserialize, Serialize)]
 struct PendingUser {
     email: String,
-    upass: String,
+    pass: String,
 }
 
-pub async fn put_pending_user(
-    pool: &deadpool_redis::Pool,
+pub async fn put_pending(
+    pool: &KvPool,
     email: &str,
-    upass: &str,
+    pass: &str,
 ) -> Result<String, RbInternalError> {
     let mut conn = pool.get().await?;
 
     let token = Uuid::new_v4().to_string();
-    let upass_hashed = bcrypt::hash(upass, bcrypt::DEFAULT_COST)?;
+    let pass_hashed = bcrypt::hash(pass, bcrypt::DEFAULT_COST)?;
 
     let user = PendingUser {
         email: email.to_string(),
-        upass: upass_hashed,
+        pass: pass_hashed,
     };
 
     conn.set_ex::<_, _, ()>(
@@ -100,9 +90,9 @@ pub async fn put_pending_user(
     Ok(token)
 }
 
-pub async fn verify_pending_user(
-    db_pool: &PgPool,
-    kv_pool: &deadpool_redis::Pool,
+pub async fn verify_pending(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
     token: &str,
 ) -> Result<Option<i32>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
@@ -113,24 +103,20 @@ pub async fn verify_pending_user(
     }
 
     let user: PendingUser = serde_json::from_str(&data.unwrap())?;
-    let uid = register_user_upass_hashed(db_pool, &user.email, &user.upass).await?;
+    let result = register_pass_hashed(db_pool, &user.email, &user.pass).await?;
 
-    Ok(Some(uid))
+    Ok(Some(result))
 }
 
 // TODO : add redis cache
-pub async fn get_user_role_by_id(
-    pool: &PgPool,
+pub async fn get_role_by_id(
+    pool: &DbPool,
     user_id: i32,
 ) -> Result<Option<RbUserRole>, RbInternalError> {
-    let ret = sqlx::query_scalar!("SELECT urole FROM rb_user WHERE id = $1;", user_id)
-        .fetch_one(pool)
-        .await
+    let result = sqlx::query_scalar!("SELECT urole FROM rb_user WHERE id = $1;", user_id)
+        .fetch_optional(pool)
+        .await?
         .map(RbUserRole::from);
 
-    match ret {
-        Ok(role) => Ok(Some(role)),
-        Err(sqlx::Error::RowNotFound) => Ok(None),
-        Err(err) => Err(RbInternalError::Sql(err)),
-    }
+    Ok(result)
 }

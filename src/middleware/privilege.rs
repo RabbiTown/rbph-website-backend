@@ -5,7 +5,7 @@ use std::{
 
 use actix_session::SessionExt;
 use actix_web::{
-    Error, ResponseError,
+    Error, HttpMessage, ResponseError,
     body::EitherBody,
     dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
     web,
@@ -111,6 +111,7 @@ where
                 match db::user::get_role_by_id(&db_pool, uid).await {
                     Ok(Some(role)) => {
                         if role >= required {
+                            req.extensions_mut().insert(role);
                             return Ok(srv.call(req).await?.map_into_left_body());
                         } else {
                             return Ok(

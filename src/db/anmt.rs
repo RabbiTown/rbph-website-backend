@@ -5,20 +5,20 @@ use crate::{DbPool, error::RbInternalError, model::anmt::RbAnmt};
 pub struct RbAnmtPutData<'a> {
     pub title: &'a str,
     pub content: &'a str,
-    pub pinned: bool,
-    pub shown: bool,
+    pub is_pinned: bool,
+    pub is_shown: bool,
     pub game_id: Option<i32>,
 }
 
 pub async fn append(pool: &DbPool, data: &RbAnmtPutData<'_>) -> Result<i32, RbInternalError> {
     let result = sqlx::query_scalar!(
-        "INSERT INTO rb_anmt (title, content, pinned, shown, game_id)
+        "INSERT INTO rb_anmt (title, content, is_pinned, is_shown, game_id)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING id;",
         data.title,
         data.content,
-        data.pinned,
-        data.shown,
+        data.is_pinned,
+        data.is_shown,
         data.game_id
     )
     .fetch_one(pool)
@@ -47,7 +47,7 @@ pub async fn list_all(
     let mut qb = QueryBuilder::new("SELECT * FROM rb_anmt WHERE 1=1");
 
     if only_shown {
-        qb.push(" AND shown = true");
+        qb.push(" AND is_shown = true");
     }
 
     if let Some(gid) = game_id {
@@ -56,7 +56,7 @@ pub async fn list_all(
         qb.push(")");
     }
 
-    qb.push(" ORDER BY pinned DESC, ctime_at DESC;");
+    qb.push(" ORDER BY is_pinned DESC, ctime_at DESC;");
 
     let result = qb.build_query_as::<RbAnmt>().fetch_all(pool).await?;
 

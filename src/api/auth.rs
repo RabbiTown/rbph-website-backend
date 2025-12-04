@@ -69,7 +69,7 @@ async fn login(
     }
 
     let user = user.unwrap();
-    match bcrypt::verify(&trimmed_pwd, &user.pass) {
+    match bcrypt::verify(trimmed_pwd, &user.pass) {
         Ok(true) => {}
         Ok(false) => RbError::bad_req(UserLoginResult::NotExists.into()).err()?,
         Err(e) => RbError::internal(e).err()?,
@@ -123,7 +123,7 @@ async fn register(
         RbError::bad_req(UserRegisterResult::InvalidPassword.into()).err()?
     }
 
-    if db::user::check_exists(&db_pool, &trimmed_email).await? {
+    if db::user::exists(&db_pool, &trimmed_email).await? {
         RbError::conflict(UserRegisterResult::UserExists.into()).err()?
     }
 

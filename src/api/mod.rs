@@ -30,14 +30,13 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     )
     .service(
         web::scope("/games")
-            .wrap(PrivilegeMiddleware::new(RbUserRole::User))
             .configure(game::config)
             .default_service(web::route().to(error_handler)),
     )
     .service(
         web::scope("/teams")
             .wrap(PrivilegeMiddleware::new(RbUserRole::User))
-            .configure(team::config)
+            .configure(team::teams_config)
             .default_service(web::route().to(error_handler)),
     )
     .service(

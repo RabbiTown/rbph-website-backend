@@ -1,5 +1,7 @@
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 
@@ -8,11 +10,24 @@ use crate::{
     db::{self, team::RbTeamPutData},
     error::RbError,
     extractor::auth::AuthUser,
+    model::game::RbTeamState,
 };
 
 #[derive(Deserialize)]
-struct PathInfo {
+struct GamePathInfo {
+    game_id: i32,
+}
+
+#[derive(Deserialize)]
+struct TeamPathInfo {
     team_id: i32,
+}
+
+#[derive(Deserialize)]
+struct TeamCreateRequest {
+    pub tname: String,
+    pub pass: String,
+    pub bio: String,
 }
 
 #[derive(Serialize)]
@@ -24,27 +39,80 @@ struct TeamCreateResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum TeamCreateResult {
+    Invalid = -2,
     ToMany = -1,
     Ok = 0,
 }
 
-async fn create(
+static PWD_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[!-~]{8,32}$").unwrap());
+
+async fn create_self(
     user: AuthUser,
-    req: web::Json<RbTeamPutData>,
+    path: web::Path<GamePathInfo>,
+    req: web::Json<TeamCreateRequest>,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    let count = db::team::count_user_teams(&db_pool, user.uid).await?;
-    // TODO : make limit configurable
-    if count > 0 {
+    let req = req.into_inner();
+
+    let trimmed_pwd = req.pass.trim();
+    if !PWD_REGEX.is_match(trimmed_pwd) {
+        RbError::unauth()
+            .code(TeamCreateResult::Invalid.into())
+            .err()?
+    }
+
+    let data = RbTeamPutData {
+        tname: req.tname.trim().to_string(),
+        pass: trimmed_pwd.to_string(),
+        bio: req.bio,
+        game_id: path.game_id,
+    };
+
+    let team_id = db::team::user_create(&db_pool, user.uid, &data).await?;
+    if team_id.is_none() {
         RbError::conflict(TeamCreateResult::ToMany.into()).err()?
     }
 
-    let team_id = db::team::append(&db_pool, &req).await?;
-    db::team::join(&db_pool, team_id, user.uid, true).await?;
-
     Ok(HttpResponse::Ok().json(TeamCreateResponse {
         code: TeamCreateResult::Ok,
-        tid: team_id,
+        tid: team_id.unwrap(),
+    }))
+}
+
+async fn update_self(
+    user: AuthUser,
+    path: web::Path<GamePathInfo>,
+    req: web::Json<TeamCreateRequest>,
+    db_pool: web::Data<DbPool>,
+) -> Result<HttpResponse> {
+    // TODO
+    Ok(HttpResponse::Ok().finish())
+}
+
+#[derive(Serialize)]
+struct TeamLeaveResponse {
+    code: TeamLeaveResult,
+}
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+enum TeamLeaveResult {
+    Bad = -1,
+    Ok = 0,
+}
+
+async fn leave_self(
+    user: AuthUser,
+    path: web::Path<GamePathInfo>,
+    db_pool: web::Data<DbPool>,
+) -> Result<HttpResponse> {
+    let result = db::team::leave(&db_pool, path.game_id, user.uid).await?;
+    if !result {
+        RbError::conflict(TeamLeaveResult::Bad.into()).err()?;
+    }
+
+    Ok(HttpResponse::Ok().json(TeamLeaveResponse {
+        code: TeamLeaveResult::Ok
     }))
 }
 
@@ -70,26 +138,19 @@ struct TeamJoinResponse {
 
 // FIXME : TOCTOU
 async fn join(
-    path: web::Path<PathInfo>,
+    path: web::Path<TeamPathInfo>,
     req: web::Json<TeamJoinRequest>,
     user: AuthUser,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    let count = db::team::count_user_teams(&db_pool, user.uid).await?;
-    // TODO : make limit configurable
-    if count > 0 {
-        RbError::conflict(TeamJoinResult::ToMany.into()).err()?
-    }
-
     let data = db::team::get_by_id_verify(&db_pool, path.team_id).await?;
-
     if data.is_none() {
         RbError::not_found().err()?
     }
 
     let data = data.unwrap();
 
-    if data.locked {
+    if data.tstate == RbTeamState::InGame {
         RbError::conflict(TeamJoinResult::Locked.into()).err()?
     }
 
@@ -104,15 +165,27 @@ async fn join(
             .err()?
     }
 
-    db::team::join(&db_pool, path.team_id, user.uid, false).await?;
+    let result = db::team::join(&db_pool, path.team_id, user.uid, false).await?;
 
     Ok(HttpResponse::Ok().json(TeamJoinResponse {
-        code: TeamJoinResult::Ok,
+        code: if result {
+            TeamJoinResult::Ok
+        } else {
+            TeamJoinResult::ToMany
+        },
     }))
 }
 
-async fn list_self(user: AuthUser, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
-    let result = db::team::get_by_user(&db_pool, user.uid).await?;
+async fn get_self(
+    path: web::Path<GamePathInfo>,
+    user: AuthUser,
+    db_pool: web::Data<DbPool>,
+) -> Result<HttpResponse> {
+    let result = db::team::get_by_user_game(&db_pool, user.uid, path.game_id).await?;
+    if result.is_none() {
+        RbError::not_found().err()?
+    }
+
     Ok(HttpResponse::Ok().json(result))
 }
 
@@ -121,14 +194,29 @@ async fn list_all(user: AuthUser, db_pool: web::Data<DbPool>) -> Result<HttpResp
     Ok(HttpResponse::Ok().finish())
 }
 
-async fn get_info(req: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().finish())
+async fn get_info(
+    req: web::Path<TeamPathInfo>,
+    db_pool: web::Data<DbPool>,
+) -> Result<HttpResponse> {
+    let result = db::team::get_by_id_show(&db_pool, req.team_id).await?;
+    if result.is_none() {
+        RbError::not_found().err()?
+    }
+
+    Ok(HttpResponse::Ok().json(result))
 }
 
-pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.route("/", web::get().to(list_all))
-        .route("/self", web::get().to(list_self))
-        .route("/self", web::post().to(create))
-        .route("/{team_id}", web::get().to(get_info))
+// /games/{game_id}/teams/...
+pub fn games_config(cfg: &mut web::ServiceConfig) {
+    cfg.route("", web::get().to(list_all))
+        .route("/self", web::get().to(get_self))
+        .route("/self", web::post().to(create_self))
+        .route("/self", web::patch().to(update_self))
+        .route("/self/leave", web::post().to(leave_self));
+}
+
+// /teams/...
+pub fn teams_config(cfg: &mut web::ServiceConfig) {
+    cfg.route("/{team_id}", web::get().to(get_info))
         .route("/{team_id}/join", web::post().to(join));
 }

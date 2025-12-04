@@ -1,5 +1,6 @@
 use deadpool_redis::redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
@@ -41,13 +42,14 @@ pub async fn register_pass_hashed(
     Ok(result)
 }
 
-pub async fn check_exists(pool: &DbPool, email: &str) -> Result<bool, RbInternalError> {
+pub async fn exists(pool: &DbPool, email: &str) -> Result<bool, RbInternalError> {
     let result = sqlx::query_scalar!(
         "SELECT EXISTS (SELECT 1 FROM rb_user WHERE email = $1);",
         email
     )
     .fetch_one(pool)
     .await?;
+
     Ok(result.unwrap_or(false))
 }
 
@@ -106,6 +108,32 @@ pub async fn verify_pending(
     let result = register_pass_hashed(db_pool, &user.email, &user.pass).await?;
 
     Ok(Some(result))
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct RbUserDisplayData {
+    pub id: i32,
+    pub email: String,
+    pub urole: RbUserRole,
+    pub nickname: String,
+    pub bio: Option<String>,
+    pub ctime_at: OffsetDateTime,
+}
+
+pub async fn get_display_by_id(
+    pool: &DbPool,
+    user_id: i32,
+) -> Result<RbUserDisplayData, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbUserDisplayData,
+        "SELECT id, email, urole, nickname, bio, ctime_at
+        FROM rb_user WHERE id = $1;",
+        user_id
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(result)
 }
 
 // TODO : add redis cache

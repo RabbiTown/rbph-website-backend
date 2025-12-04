@@ -27,14 +27,30 @@ BEFORE INSERT ON rb_user
 FOR EACH ROW
 EXECUTE FUNCTION rb_user_def_nickname();
 
+-- game
+
+CREATE TABLE rb_game (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(60) NOT NULL,
+    is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
+    is_online       BOOLEAN NOT NULL DEFAULT FALSE,
+    reg_open_at     TIMESTAMPTZ,
+    pre_open_at     TIMESTAMPTZ,
+    start_at        TIMESTAMPTZ NOT NULL,
+    end_at          TIMESTAMPTZ NOT NULL,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cover           TEXT
+);
+
 -- team
 
 CREATE TABLE rb_team (
     id              SERIAL PRIMARY KEY,
     tname           VARCHAR(60) NOT NULL,
+    tstate          SMALLINT NOT NULL DEFAULT 0,
     pass            VARCHAR(32) NOT NULL,
     bio             TEXT NOT NULL,
-    locked          BOOLEAN NOT NULL DEFAULT FALSE,
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -43,39 +59,32 @@ CREATE TABLE rb_team (
 CREATE TABLE rb_team_member (
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     user_id         INT NOT NULL REFERENCES rb_user(id) ON DELETE CASCADE,
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
     is_captain      BOOLEAN NOT NULL,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (team_id, user_id)
+    PRIMARY KEY (team_id, user_id),
+    UNIQUE (user_id, game_id)
 );
 
 CREATE INDEX rb_idx_team_member_team ON rb_team_member(team_id);
 CREATE INDEX rb_idx_team_member_user ON rb_team_member(user_id);
 
--- game
+CREATE UNIQUE INDEX rb_idx_team_captain_unique
+ON rb_team_member (team_id)
+WHERE is_captain = TRUE;
 
-CREATE TABLE rb_game (
-    id              SERIAL PRIMARY KEY,
-    title           VARCHAR(60) NOT NULL,
-    shown           BOOLEAN NOT NULL DEFAULT FALSE,
-    reg_open_at     TIMESTAMPTZ,
-    pre_open_at     TIMESTAMPTZ,
-    start_at        TIMESTAMPTZ NOT NULL,
-    end_at          TIMESTAMPTZ NOT NULL,
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+CREATE OR REPLACE FUNCTION rb_team_member_set_game_id()
+RETURNS TRIGGER AS $$
+BEGIN
+    SELECT game_id INTO NEW.game_id FROM rb_team WHERE id = NEW.team_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- game entry (participation)
-
-CREATE TABLE rb_game_entry (
-    game_id         INT REFERENCES rb_game(id),
-    team_id         INT REFERENCES rb_team(id),
-    estate          SMALLINT NOT NULL DEFAULT 0,
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (game_id, team_id)
-);
-
-CREATE INDEX rb_idx_game_entry_game ON rb_game_entry(game_id);
-CREATE INDEX rb_idx_game_entry_team ON rb_game_entry(team_id);
+CREATE TRIGGER rb_trg_team_member_set_game_id
+BEFORE INSERT ON rb_team_member
+FOR EACH ROW
+EXECUTE FUNCTION rb_team_member_set_game_id();
 
 -- announcement
 
@@ -83,19 +92,19 @@ CREATE TABLE rb_anmt (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
-    pinned          BOOLEAN NOT NULL DEFAULT FALSE,
-    shown           BOOLEAN NOT NULL DEFAULT FALSE,
+    is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
     game_id         INT REFERENCES rb_game(id),
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- area
+-- round
 
-CREATE TABLE rb_area (
+CREATE TABLE rb_round (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
-    atype           SMALLINT NOT NULL DEFAULT 1
+    game_id         INT NOT NULL REFERENCES rb_game(id)
 );
 
 -- puzzle
@@ -106,6 +115,27 @@ CREATE TABLE rb_puzzle (
     content         TEXT NOT NULL,
     ptype           INT NOT NULL,
     judge           TEXT NOT NULL,
-    area_id         INT REFERENCES rb_area(id),
+    round_id        INT NOT NULL REFERENCES rb_round(id),
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- hint
+
+-- CREATE TABLE rb_hint (
+--     id              SERIAL PRIMARY KEY,
+--     title           VARCHAR(120) NOT NULL,
+--     content         TEXT NOT NULL,
+--     -- cost
+--     puzzle_id       INT REFERENCES rb_puzzle(id),
+--     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+-- );
+
+-- currency
+
+-- CREATE TABLE rb_currency (
+--     team_id         SERIAL PRIMARY KEY,
+--     ctype           INT NOT NULL,
+--     count           INT NOT NULL,
+--     growth_rate     INT NOT NULL,
+--     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+-- );

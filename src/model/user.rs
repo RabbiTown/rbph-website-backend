@@ -1,4 +1,5 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
+use serde::{Deserialize, Serialize};
 use sqlx::types::time::OffsetDateTime;
 
 pub struct RbUser {
@@ -11,8 +12,9 @@ pub struct RbUser {
     pub ctime_at: OffsetDateTime,
 }
 
-#[derive(FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
 #[repr(i16)]
+#[serde(into = "i16")]
 pub enum RbUserRole {
     Banned = 0,
     User = 1,

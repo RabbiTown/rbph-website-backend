@@ -15,6 +15,6 @@ async fn edit(info: web::Path<PathInfo>) -> Result<HttpResponse> {
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.route("/", web::post().to(append))
+    cfg.route("", web::post().to(append))
         .route("/{game_id}", web::patch().to(edit));
 }

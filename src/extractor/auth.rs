@@ -1,11 +1,12 @@
 use actix_session::SessionExt;
-use actix_web::{Error, FromRequest, HttpRequest, dev::Payload};
+use actix_web::{Error, FromRequest, HttpMessage, HttpRequest, dev::Payload};
 use futures_util::future::{Ready, ready};
 
-use crate::error::RbError;
+use crate::{error::RbError, model::user::RbUserRole};
 
 pub struct AuthUser {
     pub uid: i32,
+    pub role: RbUserRole,
 }
 
 impl FromRequest for AuthUser {
@@ -16,9 +17,15 @@ impl FromRequest for AuthUser {
         let sess = req.get_session();
 
         match sess.get::<i32>("user_id") {
-            Ok(Some(uid)) => ready(Ok(AuthUser { uid })),
+            Ok(Some(uid)) => ready(Ok(AuthUser {
+                uid,
+                role: *req
+                    .extensions()
+                    .get::<RbUserRole>()
+                    .unwrap_or(&RbUserRole::Banned),
+            })),
             Ok(None) | Err(_) => {
-                let _ = sess.purge();
+                sess.purge();
                 ready(Err(RbError::unauth().into()))
             }
         }

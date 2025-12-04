@@ -49,9 +49,9 @@ pub struct Settings {
 impl Settings {
     pub fn read_from_file(file: &str) -> Result<Self, config::ConfigError> {
         let cfg = Config::builder()
-            .add_source(config::File::with_name(&file).required(true))
+            .add_source(config::File::with_name(file).required(true))
             .add_source(config::Environment::with_prefix("RBPH").separator("__"))
             .build()?;
-        Ok(cfg.try_deserialize()?)
+        cfg.try_deserialize()
     }
 }

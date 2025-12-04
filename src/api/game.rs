@@ -1,7 +1,20 @@
-use actix_web::{HttpResponse, Result, web};
+use actix_web::{
+    HttpMessage, HttpResponse, Result,
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    middleware::{self, Next},
+    web,
+};
 use serde::Deserialize;
 
-use crate::{DbPool, db};
+use crate::{
+    DbPool,
+    api::{error_handler, team},
+    db,
+    error::RbError,
+    middleware::privilege::PrivilegeMiddleware,
+    model::user::RbUserRole,
+};
 
 #[derive(Deserialize)]
 struct PathInfo {
@@ -9,13 +22,63 @@ struct PathInfo {
 }
 
 async fn get_info(info: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().finish())
+    let result = db::game::get_by_id(&db_pool, info.game_id).await?;
+    if result.is_none() {
+        RbError::not_found().err()?
+    }
+
+    Ok(HttpResponse::Ok().json(result))
+}
+
+async fn list_online(db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
+    let result = db::game::list_all(&db_pool, true, true).await?;
+
+    Ok(HttpResponse::Ok().json(result))
 }
 
 async fn get_anmts(info: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(db::anmt::list_all(&db_pool, true, Some(info.game_id)).await?))
 }
 
+// as games' visibilities don't change a lot, we ignore TOCTOU issues here
+async fn check_game_id_middleware(
+    req: ServiceRequest,
+    next: Next<impl MessageBody>,
+) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
+    if let Some(game_id) = req.match_info().get("game_id") {
+        if let Ok(game_id) = game_id.parse::<i32>() {
+            let pool = req.app_data::<web::Data<DbPool>>().unwrap();
+            let user_role = *req
+                .extensions()
+                .get::<RbUserRole>()
+                .unwrap_or(&RbUserRole::Banned);
+            if !db::game::exists(pool, game_id, user_role).await? {
+                RbError::not_found().err()?
+            }
+        } else {
+            RbError::not_found().err()?
+        }
+    }
+    next.call(req).await
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.route("/{game_id}/announcements", web::get().to(get_anmts));
+    cfg.route("/online", web::get().to(list_online));
+    cfg.service(
+        web::scope("/{game_id}")
+            .wrap(middleware::from_fn(check_game_id_middleware))
+            .route("", web::get().to(get_info))
+            .route("/announcements", web::get().to(get_anmts))
+            .service(
+                web::scope("")
+                    .wrap(PrivilegeMiddleware::new(RbUserRole::User))
+                    .service(
+                        web::scope("/teams")
+                            .configure(team::games_config)
+                            .default_service(web::route().to(error_handler)),
+                    )
+                    .default_service(web::route().to(error_handler)),
+            )
+            .default_service(web::route().to(error_handler)),
+    );
 }

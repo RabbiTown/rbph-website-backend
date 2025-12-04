@@ -59,7 +59,7 @@ async fn main() -> std::io::Result<()> {
                     .cookie_name("rbph_session".to_string())
                     .build(),
             )
-            .service(web::scope("/api/v1").configure(api::config))
+            .service(web::scope("/api").configure(api::config))
     })
     .bind((host.as_str(), port))?
     .run();

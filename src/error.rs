@@ -31,9 +31,9 @@ pub struct RbError {
 impl RbError {
     pub fn new(code: i32, message: &str, status_code: StatusCode) -> Self {
         Self {
-            code: code,
+            code,
             message: Some(message.to_string()),
-            status_code: status_code,
+            status_code,
         }
     }
 
@@ -49,7 +49,7 @@ impl RbError {
 
     pub fn bad_req(code: i32) -> Self {
         Self {
-            code: code,
+            code,
             message: None,
             status_code: StatusCode::BAD_REQUEST,
         }
@@ -57,7 +57,7 @@ impl RbError {
 
     pub fn conflict(code: i32) -> Self {
         Self {
-            code: code,
+            code,
             message: None,
             status_code: StatusCode::CONFLICT,
         }

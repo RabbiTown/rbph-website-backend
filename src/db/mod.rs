@@ -1,5 +1,6 @@
 pub mod anmt;
 pub mod game;
+pub mod puzzle;
 pub mod team;
 pub mod user;
 

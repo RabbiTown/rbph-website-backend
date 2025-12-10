@@ -71,7 +71,9 @@ async fn login(
     let user = user.unwrap();
     match bcrypt::verify(trimmed_pwd, &user.pass) {
         Ok(true) => {}
-        Ok(false) => RbError::bad_req(UserLoginResult::NotExists.into()).err()?,
+        Ok(false) => RbError::unauth()
+            .code(UserLoginResult::WrongPwd.into())
+            .err()?,
         Err(e) => RbError::internal(e).err()?,
     }
 

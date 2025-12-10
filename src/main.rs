@@ -3,6 +3,7 @@ mod config;
 mod db;
 mod error;
 mod extractor;
+mod game;
 mod middleware;
 mod model;
 mod module;

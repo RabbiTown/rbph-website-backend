@@ -82,7 +82,11 @@ pub async fn append(pool: &DbPool, data: &RbGamePutData) -> Result<i32, RbIntern
     Ok(result)
 }
 
-pub async fn list_all(pool: &DbPool, only_shown: bool, only_online: bool) -> Result<Vec<RbGame>, RbInternalError> {
+pub async fn list_all(
+    pool: &DbPool,
+    only_shown: bool,
+    only_online: bool,
+) -> Result<Vec<RbGame>, RbInternalError> {
     let mut qb = QueryBuilder::new("SELECT * FROM rb_game WHERE 1=1");
 
     if only_shown {

@@ -24,7 +24,7 @@ pub async fn append(
 ) -> Result<(), RbInternalError> {
     let mut conn = pool.get().await?;
 
-    let key = format!("{}:{}", USER_SESSIONS, user_id);
+    let key = format!("{USER_SESSIONS}:{user_id}");
 
     let _: () = conn.lpush(&key, get_session_id(sess)?).await?;
     let _: () = conn.ltrim(&key, 0, (max_session - 1) as isize).await?;
@@ -42,7 +42,7 @@ pub async fn verify(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalErr
         (Some(user_id), Some(sid)) => {
             let mut conn = pool.get().await?;
 
-            let key = format!("{}:{}", USER_SESSIONS, user_id);
+            let key = format!("{USER_SESSIONS}:{user_id}");
             let sessions: Vec<String> = conn.lrange(&key, 0, -1).await.unwrap_or_default();
 
             Ok(sessions.contains(&sid))
@@ -59,7 +59,7 @@ pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInterna
         (Some(user_id), Some(sid)) => {
             let mut conn = pool.get().await?;
 
-            let key = format!("{}:{}", USER_SESSIONS, user_id);
+            let key = format!("{USER_SESSIONS}:{user_id}");
             let count: i32 = conn.lrem(&key, 1, &sid).await?;
 
             Ok(count > 0)
@@ -76,7 +76,7 @@ pub async fn invalidate_others(pool: &KvPool, sess: &Session) -> Result<bool, Rb
         (Some(user_id), Some(sid)) => {
             let mut conn = pool.get().await?;
 
-            let key = format!("{}:{}", USER_SESSIONS, user_id);
+            let key = format!("{USER_SESSIONS}:{user_id}");
             let _: () = conn.del(&key).await?;
             let _: () = conn.lpush(&key, &sid).await?;
 

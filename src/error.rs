@@ -73,7 +73,7 @@ impl RbError {
         log::warn!("internal server error ({}): {:?}", code, e);
         Self {
             code: RbErrorCode::InternalServerError.into(),
-            message: Some(format!("internal server error ({})", code)),
+            message: Some(format!("internal server error ({code})")),
             status_code: StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -109,6 +109,10 @@ impl RbError {
     pub fn err(self) -> Result<(), Self> {
         Err(self)
     }
+
+    pub fn http_err(self) -> Result<HttpResponse, actix_web::Error> {
+        Err(self.into())
+    }
 }
 
 impl ResponseError for RbError {
@@ -125,6 +129,7 @@ pub enum RbInternalError {
     RedisPool(deadpool::managed::PoolError<RedisError>),
     Json(serde_json::Error),
     Session(SessionInsertError),
+    Other(String),
 }
 
 impl ResponseError for RbInternalError {
@@ -136,6 +141,7 @@ impl ResponseError for RbInternalError {
             RbInternalError::Redis(err) => RbError::internal(err).resp(),
             RbInternalError::Json(err) => RbError::internal(err).resp(),
             RbInternalError::Session(err) => RbError::internal(err).resp(),
+            RbInternalError::Other(err) => RbError::internal(err).resp(),
         }
     }
 }
@@ -173,5 +179,17 @@ impl From<serde_json::Error> for RbInternalError {
 impl From<SessionInsertError> for RbInternalError {
     fn from(value: SessionInsertError) -> Self {
         RbInternalError::Session(value)
+    }
+}
+
+impl From<String> for RbInternalError {
+    fn from(value: String) -> Self {
+        RbInternalError::Other(value)
+    }
+}
+
+impl From<&str> for RbInternalError {
+    fn from(value: &str) -> Self {
+        value.to_string().into()
     }
 }

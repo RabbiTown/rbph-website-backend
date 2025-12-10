@@ -1,6 +1,7 @@
 mod admin;
 mod auth;
 mod game;
+mod puzzle;
 mod team;
 mod user;
 
@@ -37,6 +38,12 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("/teams")
             .wrap(PrivilegeMiddleware::new(RbUserRole::User))
             .configure(team::teams_config)
+            .default_service(web::route().to(error_handler)),
+    )
+    .service(
+        web::scope("/puzzles")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::User))
+            .configure(puzzle::puzzles_config)
             .default_service(web::route().to(error_handler)),
     )
     .service(

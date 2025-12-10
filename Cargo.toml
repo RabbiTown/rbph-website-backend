@@ -9,6 +9,7 @@ actix-web = { version = "4" }
 base64 = "0.22.1"
 bcrypt = "0.17.1"
 config = "0.15.18"
+dashmap = "6.1.0"
 deadpool = "0.12.3"
 deadpool-redis = "0.22.0"
 derive_more = "2.0.1"
@@ -25,4 +26,5 @@ serde_json = "1.0.145"
 serde_repr = "0.1.20"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "time"] }
 time = { version = "0.3.44", features = ["serde"] }
+tokio = "1.48.0"
 uuid = { version = "1.18.1", features = ["v4"] }

@@ -39,6 +39,7 @@ CREATE TABLE rb_game (
     start_at        TIMESTAMPTZ NOT NULL,
     end_at          TIMESTAMPTZ NOT NULL,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    intro_puzzle    INT,
     cover           TEXT
 );
 
@@ -112,11 +113,41 @@ CREATE TABLE rb_round (
 CREATE TABLE rb_puzzle (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(120) NOT NULL,
+    ptype           SMALLINT NOT NULL DEFAULT 0,
     content         TEXT NOT NULL,
-    ptype           INT NOT NULL,
+    content_type    SMALLINT NOT NULL DEFAULT 0,
     judge           TEXT NOT NULL,
+    unlock_cond     TEXT NOT NULL,
     round_id        INT NOT NULL REFERENCES rb_round(id),
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE rb_game ADD CONSTRAINT rb_fk_game_intro_puzzle
+FOREIGN KEY (intro_puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;
+
+-- puzzle unlock
+
+CREATE TABLE rb_team_puzzle(
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    pstate          SMALLINT NOT NULL DEFAULT 0,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- submission
+
+CREATE TABLE rb_submission(
+    id              SERIAL PRIMARY KEY,
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    user_id         INT NOT NULL REFERENCES rb_user(id) ON DELETE CASCADE,
+    puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    user_answer     TEXT NOT NULL,
+    norm_answer     TEXT NOT NULL,
+    saction         SMALLINT NOT NULL DEFAULT -1,
+    sresult         TEXT,
+    real_answer     TEXT,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (team_id, puzzle_id, norm_answer)
 );
 
 -- hint

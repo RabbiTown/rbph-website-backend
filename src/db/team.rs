@@ -1,9 +1,9 @@
+use deadpool_redis::redis::{AsyncCommands, RedisError};
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool,
+    DbPool, KvPool,
     error::RbInternalError,
     model::game::{RbTeam, RbTeamState},
 };
@@ -30,6 +30,55 @@ pub async fn append(pool: &DbPool, data: &RbTeamPutData) -> Result<i32, RbIntern
     .await?;
 
     Ok(result)
+}
+
+pub async fn get_id_by_user_game(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    user_id: i32,
+    game_id: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    let mut conn = kv_pool.get().await?;
+    let key = format!("game:{game_id}:user:{user_id}:team_id");
+
+    if let Some(cache) = conn.get(&key).await? {
+        return Ok((cache != -1).then(|| cache));
+    }
+
+    let result = sqlx::query_scalar!(
+        "SELECT team_id FROM rb_team_member
+        WHERE user_id = $1 AND game_id = $2;",
+        user_id,
+        game_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    let kv_pool = kv_pool.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        let _: Result<(), RedisError> = conn.set_ex(&key, result.unwrap_or(-1), 60 * 60).await;
+    });
+
+    Ok(result)
+}
+
+pub async fn update_user_team_cache(
+    kv_pool: &KvPool,
+    user_id: i32,
+    game_id: i32,
+    team_id: Option<i32>,
+) -> Result<(), RbInternalError> {
+    let mut conn = kv_pool.get().await?;
+    let key = format!("game:{game_id}:user:{user_id}:team_id");
+
+    let kv_pool = kv_pool.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        let _: Result<(), RedisError> = conn.set_ex(&key, team_id.unwrap_or(-1), 60 * 60).await;
+    });
+
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -123,31 +172,38 @@ pub async fn get_by_id_verify(
 }
 
 pub async fn join(
-    pool: &DbPool,
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
     team_id: i32,
     user_id: i32,
     is_captain: bool,
 ) -> Result<bool, RbInternalError> {
-    let result = sqlx::query!(
+    let result = sqlx::query_scalar!(
         "INSERT INTO rb_team_member (team_id, user_id, is_captain)
         VALUES ($1, $2, $3)
-        ON CONFLICT (team_id, user_id) DO NOTHING;",
+        ON CONFLICT (team_id, user_id) DO NOTHING
+        RETURNING game_id;",
         team_id,
         user_id,
         is_captain
     )
-    .execute(pool)
+    .fetch_optional(db_pool)
     .await?;
 
-    Ok(result.rows_affected() > 0)
+    if let Some(game_id) = result {
+        update_user_team_cache(kv_pool, user_id, game_id, Some(team_id)).await?;
+    }
+
+    Ok(result.is_some())
 }
 
 pub async fn user_create(
-    pool: &DbPool,
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
     user_id: i32,
     data: &RbTeamPutData,
 ) -> Result<Option<i32>, RbInternalError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = db_pool.begin().await?;
 
     let team_id = sqlx::query_scalar!(
         "INSERT INTO rb_team (tname, pass, bio, game_id)
@@ -173,22 +229,29 @@ pub async fn user_create(
 
     if result.rows_affected() > 0 {
         tx.commit().await?;
+        update_user_team_cache(kv_pool, user_id, data.game_id, Some(team_id)).await?;
         Ok(Some(team_id))
     } else {
         Ok(None)
     }
 }
 
-pub async fn leave(pool: &DbPool, game_id: i32, user_id: i32) -> Result<bool, RbInternalError> {
+pub async fn leave(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    game_id: i32,
+    user_id: i32,
+) -> Result<bool, RbInternalError> {
     let result = sqlx::query!(
         "DELETE FROM rb_team_member
         WHERE game_id = $1 AND user_id = $2 AND is_captain = FALSE",
         game_id,
         user_id
     )
-    .execute(pool)
+    .execute(db_pool)
     .await?;
 
+    update_user_team_cache(kv_pool, user_id, game_id, None).await?;
     Ok(result.rows_affected() > 0)
 }
 

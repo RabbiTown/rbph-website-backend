@@ -31,7 +31,7 @@ pub async fn register_pass_hashed(
     let result = sqlx::query_scalar!(
         "INSERT INTO rb_user (email, pass)
         VALUES ($1, $2)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (email) DO NOTHING
         RETURNING id;",
         email,
         pass_hashed,
@@ -83,7 +83,7 @@ pub async fn put_pending(
     };
 
     conn.set_ex::<_, _, ()>(
-        format!("pending_user:{}", token),
+        format!("pending_user:{token}"),
         serde_json::to_string(&user).unwrap(),
         15 * 60,
     )
@@ -99,7 +99,7 @@ pub async fn verify_pending(
 ) -> Result<Option<i32>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
 
-    let data: Option<String> = conn.get_del(format!("pending_user:{}", token)).await?;
+    let data: Option<String> = conn.get_del(format!("pending_user:{token}")).await?;
     if data.is_none() {
         return Ok(None);
     }

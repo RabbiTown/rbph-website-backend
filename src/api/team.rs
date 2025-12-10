@@ -6,11 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 
 use crate::{
-    DbPool,
-    db::{self, team::RbTeamPutData},
-    error::RbError,
-    extractor::auth::AuthUser,
-    model::game::RbTeamState,
+    DbPool, KvPool, db::{self, team::RbTeamPutData}, error::RbError, extractor::auth::AuthUser, model::game::RbTeamState
 };
 
 #[derive(Deserialize)]
@@ -51,6 +47,7 @@ async fn create_self(
     path: web::Path<GamePathInfo>,
     req: web::Json<TeamCreateRequest>,
     db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
     let req = req.into_inner();
 
@@ -68,7 +65,7 @@ async fn create_self(
         game_id: path.game_id,
     };
 
-    let team_id = db::team::user_create(&db_pool, user.uid, &data).await?;
+    let team_id = db::team::user_create(&db_pool, &kv_pool, user.uid, &data).await?;
     if team_id.is_none() {
         RbError::conflict(TeamCreateResult::ToMany.into()).err()?
     }
@@ -105,8 +102,9 @@ async fn leave_self(
     user: AuthUser,
     path: web::Path<GamePathInfo>,
     db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
-    let result = db::team::leave(&db_pool, path.game_id, user.uid).await?;
+    let result = db::team::leave(&db_pool, &kv_pool, path.game_id, user.uid).await?;
     if !result {
         RbError::conflict(TeamLeaveResult::Bad.into()).err()?;
     }
@@ -142,6 +140,7 @@ async fn join(
     req: web::Json<TeamJoinRequest>,
     user: AuthUser,
     db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
     let data = db::team::get_by_id_verify(&db_pool, path.team_id).await?;
     if data.is_none() {
@@ -165,7 +164,7 @@ async fn join(
             .err()?
     }
 
-    let result = db::team::join(&db_pool, path.team_id, user.uid, false).await?;
+    let result = db::team::join(&db_pool, &kv_pool, path.team_id, user.uid, false).await?;
 
     Ok(HttpResponse::Ok().json(TeamJoinResponse {
         code: if result {

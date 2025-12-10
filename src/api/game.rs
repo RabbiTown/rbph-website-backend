@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::{
     DbPool,
-    api::{error_handler, team},
+    api::{error_handler, puzzle, team},
     db,
     error::RbError,
     middleware::privilege::PrivilegeMiddleware,
@@ -45,20 +45,20 @@ async fn check_game_id_middleware(
     req: ServiceRequest,
     next: Next<impl MessageBody>,
 ) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
-    if let Some(game_id) = req.match_info().get("game_id") {
-        if let Ok(game_id) = game_id.parse::<i32>() {
-            let pool = req.app_data::<web::Data<DbPool>>().unwrap();
-            let user_role = *req
-                .extensions()
-                .get::<RbUserRole>()
-                .unwrap_or(&RbUserRole::Banned);
-            if !db::game::exists(pool, game_id, user_role).await? {
-                RbError::not_found().err()?
-            }
-        } else {
-            RbError::not_found().err()?
-        }
+    let game_id: i32 = req
+        .match_info()
+        .get("game_id")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| RbError::not_found())?;
+
+    let user_role = *req.extensions().get().unwrap_or(&RbUserRole::Banned);
+
+    let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
+
+    if !db::game::exists(&db_pool, game_id, user_role).await? {
+        RbError::not_found().err()?
     }
+
     next.call(req).await
 }
 
@@ -75,6 +75,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                     .service(
                         web::scope("/teams")
                             .configure(team::games_config)
+                            .default_service(web::route().to(error_handler)),
+                    )
+                    .service(
+                        web::scope("/puzzles")
+                            .configure(puzzle::games_config)
                             .default_service(web::route().to(error_handler)),
                     )
                     .default_service(web::route().to(error_handler)),

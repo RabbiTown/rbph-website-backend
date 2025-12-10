@@ -149,6 +149,7 @@ pub struct RbPuzzleShowData {
     pub content: String,
     pub content_type: RbContentType,
     pub round_id: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
 
@@ -201,6 +202,7 @@ pub struct SubmissionUserShowData {
     saction: RbJudgeAction,
     sresult: Option<String>,
     real_answer: Option<String>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     ctime_at: OffsetDateTime,
 }
 

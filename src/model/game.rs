@@ -8,10 +8,15 @@ pub struct RbGame {
     pub title: String,
     pub is_shown: bool,
     pub is_online: bool,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub reg_open_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub pre_open_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub start_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub end_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
     pub intro_puzzle: Option<i32>,
     pub cover: Option<String>,
@@ -50,6 +55,7 @@ pub struct RbTeam {
     pub pass: String,
     pub bio: String,
     pub game_id: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
 
@@ -85,6 +91,7 @@ pub struct RbPuzzle {
     pub judge: String,
     pub unlock_cond: String,
     pub round_id: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
 
@@ -114,6 +121,7 @@ pub struct RbTeamPuzzle {
     pub team_id: i32,
     pub puzzle_id: i32,
     pub pstate: RbTeamPuzzleState,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
 
@@ -171,5 +179,6 @@ pub struct RbSubmission {
     pub saction: RbJudgeAction,
     pub sresult: Option<String>,
     pub real_answer: Option<String>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }

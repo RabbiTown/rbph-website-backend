@@ -42,9 +42,13 @@ pub async fn exists(
 pub struct RbGameShowData {
     pub id: i32,
     pub title: String,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub reg_open_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub pre_open_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub start_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub end_at: OffsetDateTime,
     pub cover: Option<String>,
 }

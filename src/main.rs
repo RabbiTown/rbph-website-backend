@@ -7,6 +7,7 @@ mod game;
 mod middleware;
 mod model;
 mod module;
+mod serde_helpers;
 
 use actix_session::{SessionMiddleware, storage::RedisSessionStore};
 use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};

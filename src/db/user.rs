@@ -117,6 +117,7 @@ pub struct RbUserDisplayData {
     pub urole: RbUserRole,
     pub nickname: String,
     pub bio: Option<String>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
 

@@ -9,5 +9,6 @@ pub struct RbAnmt {
     pub is_pinned: bool,
     pub is_shown: bool,
     pub game_id: Option<i32>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }

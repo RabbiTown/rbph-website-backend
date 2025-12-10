@@ -88,6 +88,7 @@ pub struct RbTeamFullData {
     pub tstate: RbTeamState,
     pub pass: String,
     pub bio: String,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
     pub members: Vec<RbTeamMemberData>,
 }
@@ -97,6 +98,7 @@ pub struct RbTeamMemberData {
     pub id: i32,
     pub is_captain: bool,
     pub nickname: String,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
 

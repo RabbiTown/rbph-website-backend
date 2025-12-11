@@ -17,7 +17,7 @@ use crate::{
     model::game::{RbContentType, RbJudgeAction, RbPuzzleType, RbTeamPuzzleState},
 };
 
-static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Option<Vec<JudgeRule>>>>> = Lazy::new(|| DashMap::new());
+static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(|| DashMap::new());
 
 pub struct PuzzleSource {
     puzzle_id: Option<i32>,
@@ -113,15 +113,21 @@ pub async fn get_puzzle_state(
     Ok(result.into())
 }
 
-pub async fn check_user_access(
+#[derive(Clone)]
+pub struct PuzzleUserInfo {
+    pub game_id: i32,
+    pub team_id: i32,
+}
+
+pub async fn get_puzzle_user_info(
     db_pool: &DbPool,
     kv_pool: &KvPool,
     user_id: i32,
     source: &PuzzleSource,
-) -> Result<bool, RbInternalError> {
+) -> Result<Option<PuzzleUserInfo>, RbInternalError> {
     let game_id = get_puzzle_game(db_pool, kv_pool, source).await?;
     if game_id.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
     let game_id = game_id.unwrap();
 
@@ -129,15 +135,20 @@ pub async fn check_user_access(
 
     let team_id = db::team::get_id_by_user_game(db_pool, kv_pool, user_id, game_id).await?;
     if team_id.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
     let team_id = team_id.unwrap();
 
-    match source.is_intro {
-        true => Ok(true),
-        false => Ok(get_puzzle_state(db_pool, kv_pool, team_id, source)
+    let access = match source.is_intro {
+        true => true,
+        false => get_puzzle_state(db_pool, kv_pool, team_id, source)
             .await?
-            .accessible()),
+            .accessible(),
+    };
+
+    match access {
+        true => Ok(Some(PuzzleUserInfo { game_id, team_id })),
+        false => Ok(None),
     }
 }
 
@@ -149,8 +160,6 @@ pub struct RbPuzzleShowData {
     pub content: String,
     pub content_type: RbContentType,
     pub round_id: i32,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub ctime_at: OffsetDateTime,
 }
 
 pub async fn get_puzzle_show(
@@ -161,9 +170,9 @@ pub async fn get_puzzle_show(
         true => {
             sqlx::query_as!(
                 RbPuzzleShowData,
-                "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id, p.ctime_at
+                "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id
                 FROM rb_game g
-                LEFT JOIN rb_puzzle p ON g.intro_puzzle = p.id
+                JOIN rb_puzzle p ON g.intro_puzzle = p.id
                 WHERE g.id = $1 AND g.intro_puzzle IS NOT NULL;",
                 source.game_id.unwrap()
             )
@@ -173,9 +182,9 @@ pub async fn get_puzzle_show(
         false => {
             sqlx::query_as!(
                 RbPuzzleShowData,
-                "SELECT id, title, ptype, content, content_type, round_id, ctime_at
-                FROM rb_puzzle
-                WHERE id = $1;",
+                "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id
+                FROM rb_puzzle p
+                WHERE p.id = $1;",
                 source.puzzle_id.unwrap()
             )
             .fetch_optional(db_pool)
@@ -186,27 +195,136 @@ pub async fn get_puzzle_show(
     Ok(result)
 }
 
+pub async fn get_puzzle_show_str(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    source: &PuzzleSource,
+) -> Result<Option<String>, RbInternalError> {
+    let mut conn = kv_pool.get().await?;
+    let key = match source.is_intro {
+        true => format!("game:{}:intro_show", source.game_id.unwrap()),
+        false => format!("puzzle:{}:show", source.puzzle_id.unwrap()),
+    };
+
+    if let Some(cache) = conn.get(&key).await? {
+        return Ok(Some(cache));
+    }
+
+    let result = get_puzzle_show(db_pool, source)
+        .await?
+        .map(|x| serde_json::to_string(&x))
+        .transpose()?;
+
+    if result.is_some() {
+        let kv_pool = kv_pool.clone();
+        let result = result.clone();
+        tokio::spawn(async move {
+            let mut conn = kv_pool.get().await.unwrap();
+            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
+        });
+    }
+
+    Ok(result)
+}
+
+pub async fn get_puzzle_unlock_time(
+    db_pool: &DbPool,
+    team_id: i32,
+    source: &PuzzleSource,
+) -> Result<Option<OffsetDateTime>, RbInternalError> {
+    let result = match source.is_intro {
+        true => None,
+        false => {
+            sqlx::query_scalar!(
+                "SELECT ctime_at
+                FROM rb_team_puzzle
+                WHERE team_id = $1 AND puzzle_id = $2;",
+                team_id,
+                source.puzzle_id.unwrap()
+            )
+            .fetch_optional(db_pool)
+            .await?
+        }
+    };
+
+    Ok(result)
+}
+
+pub async fn get_puzzle_unlock_time_str(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    team_id: i32,
+    source: &PuzzleSource,
+) -> Result<Option<String>, RbInternalError> {
+    if source.is_intro {
+        return Ok(None);
+    }
+
+    let mut conn = kv_pool.get().await?;
+    let key = format!(
+        "team:{team_id}:puzzle:{}:utime_at",
+        source.puzzle_id.unwrap()
+    );
+
+    if let Some(cache) = conn.get(&key).await? {
+        return Ok(Some(cache));
+    }
+
+    let result = get_puzzle_unlock_time(db_pool, team_id, source)
+        .await?
+        .map(|x| crate::serde_helpers::format_offset_datetime(&x));
+
+    if result.is_some() {
+        let kv_pool = kv_pool.clone();
+        let result = result.clone();
+        tokio::spawn(async move {
+            let mut conn = kv_pool.get().await.unwrap();
+            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
+        });
+    }
+
+    Ok(result)
+}
+
+pub async fn get_puzzle_show_str_for_team(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    team_id: i32,
+    source: &PuzzleSource,
+) -> Result<Option<String>, RbInternalError> {
+    if let Some(show_str) = get_puzzle_show_str(db_pool, kv_pool, source).await? {
+        let json = match get_puzzle_unlock_time_str(db_pool, kv_pool, team_id, source).await? {
+            Some(utime_str) => format!("{{\"data\":{show_str},\"utime_at\":\"{utime_str}\"}}"),
+            None => format!("{{\"data\":{show_str}}}"),
+        };
+        Ok(Some(json))
+    } else {
+        Ok(None)
+    }
+}
+
 pub async fn get_judge_rules(
     pool: &DbPool,
     puzzle_id: i32,
-) -> Result<Arc<Option<Vec<JudgeRule>>>, RbInternalError> {
+) -> Result<Option<Arc<Vec<JudgeRule>>>, RbInternalError> {
     if let Some(c) = JUDGE_CACHE.get(&puzzle_id) {
-        return Ok(c.clone());
+        return Ok(Some(c.clone()));
     }
 
     let judge_json = sqlx::query_scalar!("SELECT judge FROM rb_puzzle WHERE id = $1;", puzzle_id)
         .fetch_optional(pool)
         .await?;
 
-    let rules = match judge_json {
-        Some(s) => Some(game::puzzle::parse_judge(&s)?),
-        None => None,
-    };
+    if judge_json.is_none() {
+        return Ok(None);
+    }
+
+    let rules = game::puzzle::parse_judge(&judge_json.unwrap())?;
 
     let rules = Arc::new(rules);
     JUDGE_CACHE.insert(puzzle_id, rules.clone());
 
-    Ok(rules)
+    Ok(Some(rules))
 }
 
 #[derive(FromRow, Serialize)]
@@ -384,7 +502,7 @@ pub async fn submit_answer(
         return Ok(SubmitAnswerResult::NotFound);
     }
 
-    let rules = judge.as_ref().as_ref().unwrap();
+    let rules = judge.unwrap();
     let result = game::puzzle::judge_by_rules(&rules, &norm_answer)?;
 
     let submit_count = sqlx::query_scalar!(

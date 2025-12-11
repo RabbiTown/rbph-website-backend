@@ -2,11 +2,12 @@ use actix_session::SessionExt;
 use actix_web::{Error, FromRequest, HttpMessage, HttpRequest, dev::Payload};
 use futures_util::future::{Ready, ready};
 
-use crate::{error::RbError, model::user::RbUserRole};
+use crate::{db::puzzle::PuzzleUserInfo, error::RbError, model::user::RbUserRole};
 
 pub struct AuthUser {
     pub uid: i32,
     pub role: RbUserRole,
+    pub puzzle: Option<PuzzleUserInfo>,
 }
 
 impl FromRequest for AuthUser {
@@ -23,6 +24,7 @@ impl FromRequest for AuthUser {
                     .extensions()
                     .get::<RbUserRole>()
                     .unwrap_or(&RbUserRole::Banned),
+                puzzle: req.extensions().get::<PuzzleUserInfo>().cloned(),
             })),
             Ok(None) | Err(_) => {
                 sess.purge();

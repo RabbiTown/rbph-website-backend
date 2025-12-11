@@ -1,8 +1,9 @@
 use actix_session::SessionExt;
 use actix_web::{
-    HttpResponse, Result,
+    HttpMessage, HttpResponse, Result,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
+    http::header::ContentType,
     middleware::{self, Next},
     web,
 };
@@ -34,28 +35,48 @@ struct PuzzlePathInfo {
 
 async fn get_intro(
     info: web::Path<GamePathInfo>,
+    user: AuthUser,
     db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
     let source = PuzzleSource::new_intro(info.game_id);
-    let result = db::puzzle::get_puzzle_show(&db_pool, &source).await?;
+    let result = db::puzzle::get_puzzle_show_str_for_team(
+        &db_pool,
+        &kv_pool,
+        user.puzzle.unwrap().team_id,
+        &source,
+    )
+    .await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
 
-    Ok(HttpResponse::Ok().json(result))
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::json())
+        .body(result.unwrap()))
 }
 
 async fn get_puzzle(
     info: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
     db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
     let source = PuzzleSource::new(info.puzzle_id);
-    let result = db::puzzle::get_puzzle_show(&db_pool, &source).await?;
+    let result = db::puzzle::get_puzzle_show_str_for_team(
+        &db_pool,
+        &kv_pool,
+        user.puzzle.unwrap().team_id,
+        &source,
+    )
+    .await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
 
-    Ok(HttpResponse::Ok().json(result))
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::json())
+        .body(result.unwrap()))
 }
 
 #[derive(Deserialize)]
@@ -191,9 +212,14 @@ async fn check_intro_middleware(
     let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();
 
     let source = PuzzleSource::new_intro(game_id);
-    if !db::puzzle::check_user_access(db_pool, kv_pool, user_id, &source).await? {
-        RbError::not_found().err()?;
-    }
+    match db::puzzle::get_puzzle_user_info(db_pool, kv_pool, user_id, &source).await? {
+        Some(info) => {
+            req.extensions_mut().insert(info);
+        }
+        None => {
+            RbError::not_found().err()?;
+        }
+    };
 
     next.call(req).await
 }
@@ -219,9 +245,14 @@ async fn check_puzzle_middleware(
     let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();
 
     let source = PuzzleSource::new(puzzle_id);
-    if !db::puzzle::check_user_access(db_pool, kv_pool, user_id, &source).await? {
-        RbError::not_found().err()?;
-    }
+    match db::puzzle::get_puzzle_user_info(db_pool, kv_pool, user_id, &source).await? {
+        Some(info) => {
+            req.extensions_mut().insert(info);
+        }
+        None => {
+            RbError::not_found().err()?;
+        }
+    };
 
     next.call(req).await
 }

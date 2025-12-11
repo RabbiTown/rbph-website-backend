@@ -14,10 +14,7 @@ use serde_repr::Serialize_repr;
 use crate::{
     DbPool, KvPool,
     api::error_handler,
-    db::{
-        self,
-        puzzle::{PuzzleSource, SubmitAnswerData},
-    },
+    db::{self},
     error::RbError,
     extractor::auth::AuthUser,
     game::puzzle::JudgeResult,
@@ -33,41 +30,17 @@ struct PuzzlePathInfo {
     puzzle_id: i32,
 }
 
-async fn get_intro(
-    info: web::Path<GamePathInfo>,
-    user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
-) -> Result<HttpResponse> {
-    let source = PuzzleSource::new_intro(info.game_id);
-    let result = db::puzzle::get_puzzle_show_str_for_team(
-        &db_pool,
-        &kv_pool,
-        user.puzzle.unwrap().team_id,
-        &source,
-    )
-    .await?;
-    if result.is_none() {
-        RbError::not_found().err()?
-    }
-
-    Ok(HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body(result.unwrap()))
-}
-
 async fn get_puzzle(
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     db_pool: web::Data<DbPool>,
     kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
-    let source = PuzzleSource::new(info.puzzle_id);
     let result = db::puzzle::get_puzzle_show_str_for_team(
         &db_pool,
         &kv_pool,
         user.puzzle.unwrap().team_id,
-        &source,
+        info.puzzle_id,
     )
     .await?;
     if result.is_none() {
@@ -98,40 +71,20 @@ enum PuzzleJudgeResult {
     Ok = 0,
 }
 
-async fn judge_intro(
-    req: web::Json<PuzzleJudgeRequest>,
-    info: web::Path<GamePathInfo>,
-    user: AuthUser,
-    db_pool: web::Data<DbPool>,
-) -> Result<HttpResponse> {
-    let data = SubmitAnswerData::new_intro(user.uid, info.game_id, &req.answer);
-    let submit_result = db::puzzle::submit_answer(&db_pool, &data).await?;
-
-    match submit_result {
-        db::puzzle::SubmitAnswerResult::NotFound => RbError::not_found().http_err(),
-        db::puzzle::SubmitAnswerResult::Duplicate => {
-            RbError::conflict(PuzzleJudgeResult::Duplicate.into()).http_err()
-        }
-        db::puzzle::SubmitAnswerResult::Invalid => {
-            RbError::bad_req(PuzzleJudgeResult::Invalid.into()).http_err()
-        }
-        db::puzzle::SubmitAnswerResult::Ok(result) => {
-            Ok(HttpResponse::Ok().json(PuzzleJudgeResponse {
-                code: PuzzleJudgeResult::Ok,
-                result,
-            }))
-        }
-    }
-}
-
 async fn judge_puzzle(
     req: web::Json<PuzzleJudgeRequest>,
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    let data = SubmitAnswerData::new(user.uid, info.puzzle_id, &req.answer);
-    let submit_result = db::puzzle::submit_answer(&db_pool, &data).await?;
+    let submit_result = db::puzzle::submit_answer(
+        &db_pool,
+        user.uid,
+        user.puzzle.unwrap().team_id,
+        info.puzzle_id,
+        &req.answer,
+    )
+    .await?;
 
     match submit_result {
         db::puzzle::SubmitAnswerResult::NotFound => RbError::not_found().http_err(),
@@ -155,73 +108,21 @@ pub struct SubmissionQuery {
     page: Option<i64>,
 }
 
-async fn get_intro_submissions(
-    req: web::Query<SubmissionQuery>,
-    info: web::Path<GamePathInfo>,
-    user: AuthUser,
-    db_pool: web::Data<DbPool>,
-) -> Result<HttpResponse> {
-    let source = PuzzleSource::new_intro(info.game_id);
-    let result = db::puzzle::get_team_submissions_by_user(
-        &db_pool,
-        user.uid,
-        &source,
-        req.page.unwrap_or(0),
-    )
-    .await?;
-
-    Ok(HttpResponse::Ok().json(result))
-}
-
 async fn get_puzzle_submissions(
     req: web::Query<SubmissionQuery>,
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    let source = PuzzleSource::new(info.puzzle_id);
-    let result = db::puzzle::get_team_submissions_by_user(
+    let result = db::puzzle::get_team_submissions(
         &db_pool,
-        user.uid,
-        &source,
+        user.puzzle.unwrap().team_id,
+        info.puzzle_id,
         req.page.unwrap_or(0),
     )
     .await?;
 
     Ok(HttpResponse::Ok().json(result))
-}
-
-async fn check_intro_middleware(
-    req: ServiceRequest,
-    next: Next<impl MessageBody>,
-) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
-    let game_id: i32 = req
-        .match_info()
-        .get("game_id")
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| RbError::not_found())?;
-
-    let user_id: i32 = req
-        .get_session()
-        .get::<i32>("user_id")
-        .ok()
-        .flatten()
-        .ok_or_else(|| RbError::not_found())?;
-
-    let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
-    let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();
-
-    let source = PuzzleSource::new_intro(game_id);
-    match db::puzzle::get_puzzle_user_info(db_pool, kv_pool, user_id, &source).await? {
-        Some(info) => {
-            req.extensions_mut().insert(info);
-        }
-        None => {
-            RbError::not_found().err()?;
-        }
-    };
-
-    next.call(req).await
 }
 
 async fn check_puzzle_middleware(
@@ -244,8 +145,7 @@ async fn check_puzzle_middleware(
     let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
     let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();
 
-    let source = PuzzleSource::new(puzzle_id);
-    match db::puzzle::get_puzzle_user_info(db_pool, kv_pool, user_id, &source).await? {
+    match db::puzzle::get_puzzle_user_info(db_pool, kv_pool, user_id, puzzle_id).await? {
         Some(info) => {
             req.extensions_mut().insert(info);
         }
@@ -255,18 +155,6 @@ async fn check_puzzle_middleware(
     };
 
     next.call(req).await
-}
-
-// /games/{game_id}/puzzles/...
-pub fn games_config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/intro")
-            .wrap(middleware::from_fn(check_intro_middleware))
-            .route("", web::get().to(get_intro))
-            .route("/submit", web::post().to(judge_intro))
-            .route("/submissions", web::get().to(get_intro_submissions))
-            .default_service(web::route().to(error_handler)),
-    );
 }
 
 // /puzzles/...

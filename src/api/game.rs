@@ -77,11 +77,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                             .configure(team::games_config)
                             .default_service(web::route().to(error_handler)),
                     )
-                    .service(
-                        web::scope("/puzzles")
-                            .configure(puzzle::games_config)
-                            .default_service(web::route().to(error_handler)),
-                    )
                     .default_service(web::route().to(error_handler)),
             )
             .default_service(web::route().to(error_handler)),

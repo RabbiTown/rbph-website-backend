@@ -32,15 +32,14 @@ EXECUTE FUNCTION rb_user_def_nickname();
 CREATE TABLE rb_game (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(60) NOT NULL,
+    cover           TEXT,
     is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
     is_online       BOOLEAN NOT NULL DEFAULT FALSE,
     reg_open_at     TIMESTAMPTZ,
     pre_open_at     TIMESTAMPTZ,
     start_at        TIMESTAMPTZ NOT NULL,
     end_at          TIMESTAMPTZ NOT NULL,
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    intro_puzzle    INT,
-    cover           TEXT
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- team
@@ -105,7 +104,10 @@ CREATE TABLE rb_round (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
-    game_id         INT NOT NULL REFERENCES rb_game(id)
+    cover           TEXT,
+    game_id         INT NOT NULL REFERENCES rb_game(id),
+    puzzle          INT,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- puzzle
@@ -122,8 +124,8 @@ CREATE TABLE rb_puzzle (
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-ALTER TABLE rb_game ADD CONSTRAINT rb_fk_game_intro_puzzle
-FOREIGN KEY (intro_puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;
+ALTER TABLE rb_round ADD CONSTRAINT rb_fk_round_puzzle
+FOREIGN KEY (puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;
 
 -- puzzle unlock
 

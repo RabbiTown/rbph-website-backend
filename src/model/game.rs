@@ -6,6 +6,7 @@ use sqlx::{prelude::FromRow, types::time::OffsetDateTime};
 pub struct RbGame {
     pub id: i32,
     pub title: String,
+    pub cover: Option<String>,
     pub is_shown: bool,
     pub is_online: bool,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
@@ -18,8 +19,6 @@ pub struct RbGame {
     pub end_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
-    pub intro_puzzle: Option<i32>,
-    pub cover: Option<String>,
 }
 
 impl RbGame {
@@ -179,6 +178,18 @@ pub struct RbSubmission {
     pub saction: RbJudgeAction,
     pub sresult: Option<String>,
     pub real_answer: Option<String>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}
+
+#[derive(FromRow, Serialize)]
+pub struct RbRound {
+    pub id: i32,
+    pub title: String,
+    pub content: String,
+    pub cover: Option<String>,
+    pub game_id: i32,
+    pub puzzle: Option<i32>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }

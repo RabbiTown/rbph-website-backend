@@ -153,20 +153,35 @@ pub struct RbPuzzleShowData {
     pub ctime_at: OffsetDateTime,
 }
 
-pub async fn get_intro_puzzle(
-    pool: &DbPool,
-    game_id: i32,
+pub async fn get_puzzle_show(
+    db_pool: &DbPool,
+    source: &PuzzleSource,
 ) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
-    let result = sqlx::query_as!(
-        RbPuzzleShowData,
-        "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id, p.ctime_at
-        FROM rb_game g
-        LEFT JOIN rb_puzzle p ON g.intro_puzzle = p.id
-        WHERE g.id = $1 AND g.intro_puzzle IS NOT NULL;",
-        game_id
-    )
-    .fetch_optional(pool)
-    .await?;
+    let result = match source.is_intro {
+        true => {
+            sqlx::query_as!(
+                RbPuzzleShowData,
+                "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id, p.ctime_at
+                FROM rb_game g
+                LEFT JOIN rb_puzzle p ON g.intro_puzzle = p.id
+                WHERE g.id = $1 AND g.intro_puzzle IS NOT NULL;",
+                source.game_id.unwrap()
+            )
+            .fetch_optional(db_pool)
+            .await?
+        }
+        false => {
+            sqlx::query_as!(
+                RbPuzzleShowData,
+                "SELECT id, title, ptype, content, content_type, round_id, ctime_at
+                FROM rb_puzzle
+                WHERE id = $1;",
+                source.puzzle_id.unwrap()
+            )
+            .fetch_optional(db_pool)
+            .await?
+        }
+    };
 
     Ok(result)
 }

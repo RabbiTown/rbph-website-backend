@@ -36,7 +36,8 @@ async fn get_intro(
     info: web::Path<GamePathInfo>,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    let result = db::puzzle::get_intro_puzzle(&db_pool, info.game_id).await?;
+    let source = PuzzleSource::new_intro(info.game_id);
+    let result = db::puzzle::get_puzzle_show(&db_pool, &source).await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
@@ -46,10 +47,15 @@ async fn get_intro(
 
 async fn get_puzzle(
     info: web::Path<PuzzlePathInfo>,
-    user: AuthUser,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().finish())
+    let source = PuzzleSource::new(info.puzzle_id);
+    let result = db::puzzle::get_puzzle_show(&db_pool, &source).await?;
+    if result.is_none() {
+        RbError::not_found().err()?
+    }
+
+    Ok(HttpResponse::Ok().json(result))
 }
 
 #[derive(Deserialize)]
@@ -98,10 +104,29 @@ async fn judge_intro(
 }
 
 async fn judge_puzzle(
+    req: web::Json<PuzzleJudgeRequest>,
     info: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().finish())
+    let data = SubmitAnswerData::new(user.uid, info.puzzle_id, &req.answer);
+    let submit_result = db::puzzle::submit_answer(&db_pool, &data).await?;
+
+    match submit_result {
+        db::puzzle::SubmitAnswerResult::NotFound => RbError::not_found().http_err(),
+        db::puzzle::SubmitAnswerResult::Duplicate => {
+            RbError::conflict(PuzzleJudgeResult::Duplicate.into()).http_err()
+        }
+        db::puzzle::SubmitAnswerResult::Invalid => {
+            RbError::bad_req(PuzzleJudgeResult::Invalid.into()).http_err()
+        }
+        db::puzzle::SubmitAnswerResult::Ok(result) => {
+            Ok(HttpResponse::Ok().json(PuzzleJudgeResponse {
+                code: PuzzleJudgeResult::Ok,
+                result,
+            }))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -116,6 +141,24 @@ async fn get_intro_submissions(
     db_pool: web::Data<DbPool>,
 ) -> Result<HttpResponse> {
     let source = PuzzleSource::new_intro(info.game_id);
+    let result = db::puzzle::get_team_submissions_by_user(
+        &db_pool,
+        user.uid,
+        &source,
+        req.page.unwrap_or(0),
+    )
+    .await?;
+
+    Ok(HttpResponse::Ok().json(result))
+}
+
+async fn get_puzzle_submissions(
+    req: web::Query<SubmissionQuery>,
+    info: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
+    db_pool: web::Data<DbPool>,
+) -> Result<HttpResponse> {
+    let source = PuzzleSource::new(info.puzzle_id);
     let result = db::puzzle::get_team_submissions_by_user(
         &db_pool,
         user.uid,
@@ -201,7 +244,8 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
         web::scope("/{puzzle_id}")
             .wrap(middleware::from_fn(check_puzzle_middleware))
             .route("", web::get().to(get_puzzle))
-            .route("/{puzzle_id}/submit", web::post().to(judge_puzzle))
+            .route("/submit", web::post().to(judge_puzzle))
+            .route("/submissions", web::get().to(get_puzzle_submissions))
             .default_service(web::route().to(error_handler)),
     );
 }

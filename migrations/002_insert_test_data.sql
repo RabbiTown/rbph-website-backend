@@ -18,12 +18,17 @@ SELECT setval('rb_round_id_seq', 100);
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
 VALUES (1, '序幕', 1, '测试测试测试', 0,
         '[{"type": "exact","text":"a milestone","action":"milestone","result":"这是一个里程碑！"},{"type": "exact","text":"real answer","action":"correct","result":"回答正确！"}]',
-        '{}', 1);
+        'default', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
 VALUES (2, '序幕 2', 1, '测试测试测试 2', 0,
         '[{"type": "exact","text":"ACRE CAMP","action":"milestone","result":"这是一个里程碑！"},{"type": "exact","text":"ORME SHOE","action":"correct","result":"回答正确！"}]',
-        '{}', 1);
+        '', 1);
+
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
+VALUES (3, '序幕 3', 1, '测试测试测试 3', 0,
+        '[{"type": "exact","text":"ACRE CAMP","action":"milestone","result":"这是一个里程碑！"},{"type": "exact","text":"ORME SHOE","action":"correct","result":"回答正确！"}]',
+        '', 1);
 
 SELECT setval('rb_puzzle_id_seq', 100);
 

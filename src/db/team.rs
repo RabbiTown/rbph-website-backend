@@ -229,13 +229,25 @@ pub async fn user_create(
     .execute(&mut *tx)
     .await?;
 
-    if result.rows_affected() > 0 {
-        tx.commit().await?;
-        update_user_team_cache(kv_pool, user_id, data.game_id, Some(team_id)).await?;
-        Ok(Some(team_id))
-    } else {
-        Ok(None)
+    if result.rows_affected() == 0 {
+        return Ok(None);
     }
+
+    sqlx::query!(
+        "INSERT INTO rb_team_puzzle (team_id, puzzle_id)
+        SELECT $1 AS team_id, p.id AS puzzle_id
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id AND r.game_id = $2
+        WHERE p.unlock_cond = 'default';",
+        team_id,
+        data.game_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    update_user_team_cache(kv_pool, user_id, data.game_id, Some(team_id)).await?;
+    Ok(Some(team_id))
 }
 
 pub async fn leave(

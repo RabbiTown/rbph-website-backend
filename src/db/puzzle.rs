@@ -56,7 +56,7 @@ pub async fn get_puzzle_state(
     puzzle_id: i32,
 ) -> Result<RbTeamPuzzleState, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{}:team:{team_id}:state", puzzle_id);
+    let key = format!("puzzle:{puzzle_id}:team:{team_id}:state");
 
     if let Some(cache) = conn.get::<&str, Option<i16>>(&key).await? {
         return Ok(cache.into());
@@ -81,8 +81,24 @@ pub async fn get_puzzle_state(
     Ok(result.into())
 }
 
+pub async fn invalidate_puzzle_state_cache(
+    kv_pool: &KvPool,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<(), RbInternalError> {
+    let key = format!("puzzle:{puzzle_id}:team:{team_id}:state");
+
+    let kv_pool = kv_pool.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        let _: Result<(), RedisError> = conn.del(&key).await;
+    });
+
+    Ok(())
+}
+
 #[derive(Clone)]
-pub struct PuzzleUserInfo {
+pub struct GameUserInfo {
     pub game_id: i32,
     pub team_id: i32,
 }
@@ -92,7 +108,7 @@ pub async fn get_puzzle_user_info(
     kv_pool: &KvPool,
     user_id: i32,
     puzzle_id: i32,
-) -> Result<Option<PuzzleUserInfo>, RbInternalError> {
+) -> Result<Option<GameUserInfo>, RbInternalError> {
     let game_id = get_puzzle_game(db_pool, kv_pool, puzzle_id).await?;
     if game_id.is_none() {
         return Ok(None);
@@ -112,7 +128,7 @@ pub async fn get_puzzle_user_info(
         .accessible();
 
     match access {
-        true => Ok(Some(PuzzleUserInfo { game_id, team_id })),
+        true => Ok(Some(GameUserInfo { game_id, team_id })),
         false => Ok(None),
     }
 }
@@ -150,7 +166,7 @@ pub async fn get_puzzle_show_str(
     puzzle_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{}:show", puzzle_id);
+    let key = format!("puzzle:{puzzle_id}:show");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(Some(cache));
@@ -198,7 +214,7 @@ pub async fn get_puzzle_unlock_time_str(
     puzzle_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("team:{team_id}:puzzle:{}:utime_at", puzzle_id);
+    let key = format!("team:{team_id}:puzzle:{puzzle_id}:utime_at");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(Some(cache));
@@ -304,7 +320,8 @@ pub enum SubmitAnswerResult {
 }
 
 pub async fn submit_answer(
-    pool: &DbPool,
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
     user_id: i32,
     team_id: i32,
     puzzle_id: i32,
@@ -315,7 +332,7 @@ pub async fn submit_answer(
         return Ok(SubmitAnswerResult::Invalid);
     }
 
-    let mut tx = pool.begin().await?;
+    let mut tx = db_pool.begin().await?;
 
     let submit_id = sqlx::query_scalar!(
         "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
@@ -336,7 +353,7 @@ pub async fn submit_answer(
     }
     let submit_id = submit_id.unwrap();
 
-    let judge = get_judge_rules(pool, puzzle_id).await?;
+    let judge = get_judge_rules(db_pool, puzzle_id).await?;
     if judge.is_none() {
         return Ok(SubmitAnswerResult::NotFound);
     }
@@ -362,6 +379,19 @@ pub async fn submit_answer(
     .fetch_one(&mut *tx)
     .await?
     .unwrap();
+
+    if matches!(result.action, RbJudgeAction::Correct) {
+        sqlx::query!(
+            "UPDATE rb_team_puzzle SET pstate = 1
+            WHERE team_id = $1 AND puzzle_id = $2",
+            team_id,
+            puzzle_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        db::cache::invalidate_team_puzzle(kv_pool, team_id, puzzle_id).await?;
+    }
 
     tx.commit().await?;
 

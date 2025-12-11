@@ -69,7 +69,6 @@ pub async fn update_user_team_cache(
     game_id: i32,
     team_id: Option<i32>,
 ) -> Result<(), RbInternalError> {
-    let mut conn = kv_pool.get().await?;
     let key = format!("game:{game_id}:user:{user_id}:team_id");
 
     let kv_pool = kv_pool.clone();

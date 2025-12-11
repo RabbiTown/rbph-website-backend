@@ -8,8 +8,8 @@ SELECT setval('rb_game_id_seq', 100);
 
 -- round
 
-INSERT INTO rb_round (id, title, content, game_id)
-VALUES (1, '序幕', '序幕', 1);
+INSERT INTO rb_round (id, title, content, content_type, game_id)
+VALUES (1, '序幕', '序幕', 0, 1);
 
 SELECT setval('rb_round_id_seq', 100);
 

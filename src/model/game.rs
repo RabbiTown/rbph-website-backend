@@ -187,6 +187,7 @@ pub struct RbRound {
     pub id: i32,
     pub title: String,
     pub content: String,
+    pub content_type: RbContentType,
     pub cover: Option<String>,
     pub game_id: i32,
     pub puzzle: Option<i32>,

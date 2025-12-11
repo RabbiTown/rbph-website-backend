@@ -104,6 +104,7 @@ CREATE TABLE rb_round (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
+    content_type    SMALLINT NOT NULL DEFAULT 0,
     cover           TEXT,
     game_id         INT NOT NULL REFERENCES rb_game(id),
     puzzle          INT,

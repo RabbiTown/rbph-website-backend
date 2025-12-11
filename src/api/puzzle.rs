@@ -21,11 +21,6 @@ use crate::{
 };
 
 #[derive(Deserialize)]
-struct GamePathInfo {
-    game_id: i32,
-}
-
-#[derive(Deserialize)]
 struct PuzzlePathInfo {
     puzzle_id: i32,
 }
@@ -39,7 +34,7 @@ async fn get_puzzle(
     let result = db::puzzle::get_puzzle_show_str_for_team(
         &db_pool,
         &kv_pool,
-        user.puzzle.unwrap().team_id,
+        user.game.unwrap().team_id,
         info.puzzle_id,
     )
     .await?;
@@ -76,11 +71,13 @@ async fn judge_puzzle(
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
 ) -> Result<HttpResponse> {
     let submit_result = db::puzzle::submit_answer(
         &db_pool,
+        &kv_pool,
         user.uid,
-        user.puzzle.unwrap().team_id,
+        user.game.unwrap().team_id,
         info.puzzle_id,
         &req.answer,
     )
@@ -116,7 +113,7 @@ async fn get_puzzle_submissions(
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_team_submissions(
         &db_pool,
-        user.puzzle.unwrap().team_id,
+        user.game.unwrap().team_id,
         info.puzzle_id,
         req.page.unwrap_or(0),
     )

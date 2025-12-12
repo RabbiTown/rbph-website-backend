@@ -52,18 +52,11 @@ struct PuzzleJudgeRequest {
     answer: String,
 }
 
-#[derive(Serialize)]
-struct PuzzleJudgeResponse {
-    code: PuzzleJudgeResult,
-    result: JudgeResult,
-}
-
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum PuzzleJudgeResult {
     Duplicate = -2,
     Invalid = -1,
-    Ok = 0,
 }
 
 async fn judge_puzzle(
@@ -91,18 +84,14 @@ async fn judge_puzzle(
         db::puzzle::SubmitAnswerResult::Invalid => {
             RbError::bad_req(PuzzleJudgeResult::Invalid.into()).http_err()
         }
-        db::puzzle::SubmitAnswerResult::Ok(result) => {
-            Ok(HttpResponse::Ok().json(PuzzleJudgeResponse {
-                code: PuzzleJudgeResult::Ok,
-                result,
-            }))
-        }
+        db::puzzle::SubmitAnswerResult::Ok(result) => Ok(HttpResponse::Ok().json(result)),
     }
 }
 
 #[derive(Deserialize)]
 pub struct SubmissionQuery {
     page: Option<i64>,
+    only_ok: Option<bool>,
 }
 
 async fn get_puzzle_submissions(
@@ -116,6 +105,7 @@ async fn get_puzzle_submissions(
         user.game.unwrap().team_id,
         info.puzzle_id,
         req.page.unwrap_or(0),
+        req.only_ok.unwrap_or(false),
     )
     .await?;
 

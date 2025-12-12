@@ -141,6 +141,7 @@ pub struct RbPuzzleShowData {
     pub content: String,
     pub content_type: RbContentType,
     pub round_id: i32,
+    pub game_id: i32,
 }
 
 pub async fn get_puzzle_show(
@@ -149,8 +150,9 @@ pub async fn get_puzzle_show(
 ) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbPuzzleShowData,
-        "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id
+        "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id, r.game_id
         FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
         WHERE p.id = $1;",
         puzzle_id
     )
@@ -294,17 +296,19 @@ pub async fn get_team_submissions(
     team_id: i32,
     puzzle_id: i32,
     page: i64,
+    only_ok: bool,
 ) -> Result<Vec<SubmissionUserShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         SubmissionUserShowData,
         "SELECT user_id, user_answer, norm_answer, real_answer,
                 saction, sresult, ctime_at
         FROM rb_submission
-        WHERE puzzle_id = $2 AND team_id = $1
+        WHERE puzzle_id = $2 AND team_id = $1 AND (NOT $4 OR saction > 0)
         ORDER BY ctime_at DESC LIMIT 10 OFFSET $3;",
         team_id,
         puzzle_id,
-        page.saturating_mul(10)
+        page.saturating_mul(10),
+        only_ok
     )
     .fetch_all(pool)
     .await?;

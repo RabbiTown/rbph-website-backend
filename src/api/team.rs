@@ -6,7 +6,11 @@ use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 
 use crate::{
-    DbPool, KvPool, db::{self, team::RbTeamPutData}, error::RbError, extractor::auth::AuthUser, model::game::RbTeamState
+    DbPool, KvPool,
+    db::{self, team::RbTeamPutData},
+    error::RbError,
+    extractor::auth::AuthUser,
+    model::game::RbTeamState,
 };
 
 #[derive(Deserialize)]
@@ -110,7 +114,7 @@ async fn leave_self(
     }
 
     Ok(HttpResponse::Ok().json(TeamLeaveResponse {
-        code: TeamLeaveResult::Ok
+        code: TeamLeaveResult::Ok,
     }))
 }
 

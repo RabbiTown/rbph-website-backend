@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: rbph
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  app:
+    build: .
+    depends_on:
+      - db
+      - redis
+    environment:
+      RBPH__APP__DB_ADDR: "postgres://postgres:123456@db/rbph"
+      RBPH__APP__KV_ADDR: "redis://redis/1"
+      RUST_LOG: "debug"
+    ports:
+      - "9999:9999"
+volumes:
+  db-data:

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: 123456
+          POSTGRES_DB: rbph
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build
+        env:
+          RBPH__APP__DB_ADDR: "postgres://postgres:123456@localhost/rbph"
+          RBPH__APP__KV_ADDR: "redis://localhost/1"
+        run: |
+          cargo build --release
+      - name: Apply SQL migrations
+        env:
+          DB_URL: "postgres://postgres:123456@localhost/rbph"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          for f in migrations/*.sql; do
+            echo "Applying $f"
+            psql "$DB_URL" -f "$f"
+          done
+      - name: Run tests
+        env:
+          RBPH__APP__DB_ADDR: "postgres://postgres:123456@localhost/rbph"
+          RBPH__APP__KV_ADDR: "redis://localhost/1"
+        run: |
+          cargo test --verbose

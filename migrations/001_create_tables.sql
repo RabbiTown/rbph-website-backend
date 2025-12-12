@@ -88,7 +88,7 @@ EXECUTE FUNCTION rb_team_member_set_game_id();
 
 -- announcement
 
-CREATE TABLE rb_anmt (
+CREATE TABLE rb_announcement (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,

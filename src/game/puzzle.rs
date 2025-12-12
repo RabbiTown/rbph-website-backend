@@ -52,13 +52,14 @@ pub fn judge_by_rules(rules: &[JudgeRule], answer: &str) -> Result<JudgeResult, 
         match rule.rtype.as_deref() {
             Some("exact") => {
                 if let Some(expected) = &rule.text
-                    && expected == answer {
-                        return Ok(JudgeResult {
-                            action: rule.action.clone().into(),
-                            result: rule.result.clone(),
-                            answer: rule.answer.clone(),
-                        });
-                    }
+                    && expected == answer
+                {
+                    return Ok(JudgeResult {
+                        action: rule.action.clone().into(),
+                        result: rule.result.clone(),
+                        answer: rule.answer.clone(),
+                    });
+                }
             }
             Some("all") => {
                 return Ok(JudgeResult {

@@ -5,7 +5,7 @@ use crate::{
     DbPool, KvPool,
     db::{self, puzzle::GameUserInfo},
     error::RbInternalError,
-    model::game::{RbContentType, RbPuzzleType},
+    model::game::RbContentType,
 };
 
 pub async fn get_round_game(
@@ -17,7 +17,7 @@ pub async fn get_round_game(
     let key = format!("round:{}:game", round_id);
 
     if let Some(cache) = conn.get(&key).await? {
-        return Ok((cache != -1).then(|| cache));
+        return Ok((cache != -1).then_some(cache));
     }
 
     let result = sqlx::query_scalar!(

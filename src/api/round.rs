@@ -46,14 +46,14 @@ async fn check_round_middleware(
         .match_info()
         .get("round_id")
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| RbError::not_found())?;
+        .ok_or_else(RbError::not_found)?;
 
     let user_id: i32 = req
         .get_session()
         .get::<i32>("user_id")
         .ok()
         .flatten()
-        .ok_or_else(|| RbError::not_found())?;
+        .ok_or_else(RbError::not_found)?;
 
     let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
     let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();

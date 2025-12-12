@@ -17,7 +17,7 @@ use crate::{
     model::game::{RbContentType, RbJudgeAction, RbPuzzleType, RbTeamPuzzleState},
 };
 
-static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(|| DashMap::new());
+static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap::new);
 
 pub async fn get_puzzle_game(
     db_pool: &DbPool,
@@ -28,7 +28,7 @@ pub async fn get_puzzle_game(
     let key = format!("puzzle:{}:game", puzzle_id);
 
     if let Some(cache) = conn.get(&key).await? {
-        return Ok((cache != -1).then(|| cache));
+        return Ok((cache != -1).then_some(cache));
     }
 
     let result = sqlx::query_scalar!(

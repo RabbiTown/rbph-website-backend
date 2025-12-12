@@ -8,7 +8,7 @@ use actix_web::{
     web,
 };
 use num_enum::IntoPrimitive;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_repr::Serialize_repr;
 
 use crate::{
@@ -17,7 +17,6 @@ use crate::{
     db::{self},
     error::RbError,
     extractor::auth::AuthUser,
-    game::puzzle::JudgeResult,
 };
 
 #[derive(Deserialize)]
@@ -120,14 +119,14 @@ async fn check_puzzle_middleware(
         .match_info()
         .get("puzzle_id")
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| RbError::not_found())?;
+        .ok_or_else(RbError::not_found)?;
 
     let user_id: i32 = req
         .get_session()
         .get::<i32>("user_id")
         .ok()
         .flatten()
-        .ok_or_else(|| RbError::not_found())?;
+        .ok_or_else(RbError::not_found)?;
 
     let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
     let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();

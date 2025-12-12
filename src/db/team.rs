@@ -42,7 +42,7 @@ pub async fn get_id_by_user_game(
     let key = format!("game:{game_id}:user:{user_id}:team_id");
 
     if let Some(cache) = conn.get(&key).await? {
-        return Ok((cache != -1).then(|| cache));
+        return Ok((cache != -1).then_some(cache));
     }
 
     let result = sqlx::query_scalar!(

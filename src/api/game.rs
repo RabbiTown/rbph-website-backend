@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::{
     DbPool,
-    api::{error_handler, puzzle, team},
+    api::{error_handler, team},
     db,
     error::RbError,
     middleware::privilege::PrivilegeMiddleware,
@@ -49,13 +49,13 @@ async fn check_game_id_middleware(
         .match_info()
         .get("game_id")
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| RbError::not_found())?;
+        .ok_or_else(RbError::not_found)?;
 
     let user_role = *req.extensions().get().unwrap_or(&RbUserRole::Banned);
 
     let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
 
-    if !db::game::exists(&db_pool, game_id, user_role).await? {
+    if !db::game::exists(db_pool, game_id, user_role).await? {
         RbError::not_found().err()?
     }
 

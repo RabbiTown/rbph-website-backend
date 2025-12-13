@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod db;
 mod error;
+mod expr;
 mod extractor;
 mod game;
 mod middleware;

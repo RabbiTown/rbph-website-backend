@@ -18,7 +18,7 @@ pub enum RawSexpr {
     List(Vec<RawSexpr>),
 }
 
-pub fn tokenize(exprs: String) -> Vec<Token> {
+pub fn tokenize(expr: String) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     let mut buf = String::new();
 
@@ -28,7 +28,7 @@ pub fn tokenize(exprs: String) -> Vec<Token> {
         }
     }
 
-    for ch in exprs.chars() {
+    for ch in expr.chars() {
         match ch {
             '(' => {
                 flush(&mut tokens, &mut buf);
@@ -43,11 +43,12 @@ pub fn tokenize(exprs: String) -> Vec<Token> {
         }
     }
     flush(&mut tokens, &mut buf);
+
     tokens
 }
 
-pub fn parse_expr(toekns: Vec<Token>) -> Result<(RawSexpr, usize), ParseError> {
-    fn parse_at(index: usize, tokens: Vec<Token>) -> Result<(RawSexpr, usize), ParseError> {
+pub fn parse_expr(tokens: &Vec<Token>) -> Result<(RawSexpr, usize), ParseError> {
+    fn parse_at(index: usize, tokens: &Vec<Token>) -> Result<(RawSexpr, usize), ParseError> {
         let Some(token) = tokens.get(index) else {
             return Err(ParseError::UnexpectedEof);
         };
@@ -55,7 +56,7 @@ pub fn parse_expr(toekns: Vec<Token>) -> Result<(RawSexpr, usize), ParseError> {
         match token {
             Token::LParen => {
                 let mut inline_tokens: Vec<RawSexpr> = Vec::new();
-                let mut inline_index = index;
+                let mut inline_index = index + 1;
 
                 loop {
                     let Some(inline_token) = tokens.get(inline_index) else {
@@ -66,17 +67,30 @@ pub fn parse_expr(toekns: Vec<Token>) -> Result<(RawSexpr, usize), ParseError> {
                         return Ok((RawSexpr::List(inline_tokens), inline_index + 1));
                     }
 
-                    let (node, index) = parse_at(inline_index, tokens.clone())?;
-
-                    //
-                    inline_tokens.push(node);
-                    inline_index = index
+                    let (tokens, index) = parse_at(inline_index, tokens)?;
+                    inline_tokens.push(tokens);
+                    inline_index = index;
                 }
             }
-            Token::RParen => Err(ParseError::UnexpectedToken(")".into())),
+            Token::RParen => Err(ParseError::UnexpectedToken(")".to_string())),
             Token::Atom(expr) => Ok((RawSexpr::Atom(expr.clone()), index + 1)),
         }
     }
 
-    parse_at(0, toekns)
+    parse_at(0, tokens)
+}
+
+mod test {
+    use crate::expr::parser::{parse_expr, tokenize};
+
+    #[test]
+    fn test_sexpr() {
+        let expr = "(a (b 1 2 3))".to_string();
+
+        let tokens = tokenize(expr);
+        println!("{:?}", tokens);
+
+        let ast = parse_expr(&tokens);
+        println!("{:?}", ast)
+    }
 }

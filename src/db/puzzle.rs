@@ -281,7 +281,7 @@ pub async fn get_judge_rules(
 
 #[derive(FromRow, Serialize)]
 pub struct SubmissionUserShowData {
-    user_id: i32,
+    user_name: String,
     user_answer: String,
     norm_answer: String,
     saction: RbJudgeAction,
@@ -300,10 +300,11 @@ pub async fn get_team_submissions(
 ) -> Result<Vec<SubmissionUserShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         SubmissionUserShowData,
-        "SELECT user_id, user_answer, norm_answer, real_answer,
-                saction, sresult, ctime_at
-        FROM rb_submission
-        WHERE puzzle_id = $2 AND team_id = $1 AND (NOT $4 OR saction > 0)
+        "SELECT u.nickname AS user_name, s.user_answer, s.norm_answer, s.real_answer,
+                s.saction, s.sresult, s.ctime_at
+        FROM rb_submission s
+        JOIN rb_user u ON u.id = s.user_id
+        WHERE s.puzzle_id = $2 AND s.team_id = $1 AND (NOT $4 OR s.saction > 0)
         ORDER BY ctime_at DESC LIMIT 10 OFFSET $3;",
         team_id,
         puzzle_id,

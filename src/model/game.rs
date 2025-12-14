@@ -147,6 +147,8 @@ impl From<&str> for RbJudgeAction {
             "fail" => RbJudgeAction::Fail,
             "correct" => RbJudgeAction::Correct,
             "milestone" => RbJudgeAction::Milestone,
+            "start_game" => RbJudgeAction::StartGame,
+            "easter_egg" => RbJudgeAction::EasterEgg,
             _ => RbJudgeAction::Error,
         }
     }

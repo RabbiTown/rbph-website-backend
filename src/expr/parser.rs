@@ -18,7 +18,7 @@ pub enum RawSexpr {
     List(Vec<RawSexpr>),
 }
 
-pub fn tokenize(expr: String) -> Vec<Token> {
+pub fn tokenize<'a>(expr: &'a str) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     let mut buf = String::new();
 
@@ -85,8 +85,7 @@ mod test {
 
     #[test]
     fn test_sexpr() {
-        let expr = "(a (b 1 2 3))".to_string();
-
+        let expr = "(a (b 1 2 3))";
         let tokens = tokenize(expr);
         println!("{:?}", tokens);
 

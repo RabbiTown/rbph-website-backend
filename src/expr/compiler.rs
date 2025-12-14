@@ -130,6 +130,7 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                     }
                     Ok(GateExpr::AnyCompleted(compile_set(&items[1])?))
                 }
+                "set" | "range" => Ok(GateExpr::AnyCompleted(compile_set(expr)?)),
                 _ if head.starts_with("count") => {
                     let suffix = head.strip_prefix("count").unwrap();
                     let op = op_to_cmp(suffix)

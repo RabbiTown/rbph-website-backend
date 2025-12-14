@@ -8,13 +8,13 @@ mod types;
 use crate::expr::types::PluzzesState;
 
 /// A state-aware S-expression predicate language for gating and progression.
-pub fn eval<S: PluzzesState>(state: S, expr: String) -> bool {
+pub fn eval<'a, S: PluzzesState>(state: &S, expr: &'a str) -> bool {
     let tokens = parser::tokenize(expr);
     let (sexpr, _used) = parser::parse_expr(&tokens)
         .map_err(|e| format!("parse error: {e:?}"))
         .unwrap();
     let expr = compiler::compile_gate(&sexpr).map_err(|e| format!("compile error: {e:?}"));
-    let ok = ast::eval_compiled(&state, &expr.unwrap());
+    let ok = ast::eval_compiled(state, &expr.unwrap());
 
     ok
 }
@@ -46,9 +46,62 @@ mod test {
     #[test]
     pub fn text_eval() {
         let state = TestState {};
-        let expr = "(and 1 2 3)".to_string();
-        let result = eval(state, expr);
 
-        assert!(result)
+        let expr = "(and 1 2 3)";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(or (and 1 2) (and 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(and (countge (set 1 2 3 4 5) 1))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(or (counteq (set 1 2 3 4 5) 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(and (counteq (range 1 3) 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(or (counteq (range 1 3) 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(not (counteq (range 4 6) 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(not (counteq (set 4 5 6) 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "
+        (or
+          (range 1 3)
+          (set 4 5 6)
+        )
+        ";
+        let result = eval(&state, expr);
+        assert!(result);
+    }
+
+    #[test]
+    pub fn text_eval_complex() {
+        let state = TestState {};
+        let expr = "(or (and 1 2) (and 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+    }
+
+    #[test]
+    pub fn text_eval_failed() {
+        let state = TestState {};
+        let expr = "(countge (range 4 40) 1)";
+        let result = eval(&state, expr);
+        assert_eq!(result, false);
     }
 }

@@ -1,4 +1,7 @@
-use crate::expr::types::{CountSize, PluzzeId};
+use crate::expr::{
+    PluzzesState,
+    types::{CountSize, PluzzeId},
+};
 
 #[derive(Debug, Clone)]
 pub enum CmpOp {
@@ -22,17 +25,74 @@ pub enum SetExpr {
 pub enum GateExpr {
     And(Vec<GateExpr>),
     Or(Vec<GateExpr>),
-    Not(Vec<GateExpr>),
+    Not(Box<GateExpr>),
 
     Completed(PluzzeId),
+    AllCompleted(SetExpr),
     AnyCompleted(SetExpr),
-    NotCompleted(SetExpr),
-
-    AllCompleted,
 
     CountCmp {
         op: CmpOp,
         set: SetExpr,
         n: CountSize,
     },
+}
+
+fn cmp_usize(op: CmpOp, lhs: usize, rhs: usize) -> bool {
+    match op {
+        CmpOp::Gt => lhs > rhs,
+        CmpOp::Ge => lhs >= rhs,
+        CmpOp::Lt => lhs < rhs,
+        CmpOp::Le => lhs <= rhs,
+        CmpOp::Eq => lhs == rhs,
+        CmpOp::Ne => lhs != rhs,
+    }
+}
+
+fn cmp_f64(op: CmpOp, lhs: f64, rhs: f64) -> bool {
+    match op {
+        CmpOp::Gt => lhs > rhs,
+        CmpOp::Ge => lhs >= rhs,
+        CmpOp::Lt => lhs < rhs,
+        CmpOp::Le => lhs <= rhs,
+        CmpOp::Eq => (lhs - rhs).abs() <= 1e-12,
+        CmpOp::Ne => (lhs - rhs).abs() > 1e-12,
+    }
+}
+
+pub fn materialize_set<S: PluzzesState>(state: &S, set: &SetExpr) -> Vec<PluzzeId> {
+    match set {
+        SetExpr::Explicit(v) => v.clone(),
+        SetExpr::Range { start, end } => {
+            let (a, b) = (*start, *end);
+            if a <= b {
+                (a..=b).collect()
+            } else {
+                (b..=a).collect()
+            }
+        }
+    }
+}
+
+pub fn eval_compiled<S: PluzzesState>(state: &S, expr: &GateExpr) -> bool {
+    match expr {
+        GateExpr::And(xs) => xs.iter().all(|e| eval_compiled(state, e)),
+        GateExpr::Or(xs) => xs.iter().any(|e| eval_compiled(state, e)),
+        GateExpr::Not(x) => !eval_compiled(state, x),
+
+        GateExpr::Completed(id) => state.is_unlocked(*id),
+
+        GateExpr::AllCompleted(set) => materialize_set(state, set)
+            .iter()
+            .all(|&id| state.is_unlocked(id)),
+        GateExpr::AnyCompleted(set) => materialize_set(state, set)
+            .iter()
+            .any(|&id| state.is_unlocked(id)),
+
+        GateExpr::CountCmp { op, set, n } => {
+            let ids = materialize_set(state, set);
+            let cnt = ids.into_iter().filter(|&id| state.is_unlocked(id)).count();
+            cmp_usize(op.clone(), cnt, *n)
+        }
+    }
 }

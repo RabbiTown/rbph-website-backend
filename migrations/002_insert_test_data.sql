@@ -22,7 +22,7 @@ VALUES (1, '序幕', 1, '测试测试测试', 0,
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
 VALUES (2, '序幕 2', 1, '测试测试测试 2', 0,
-        '[{"type":"exact","text":"ACRE CAMP","action":"milestone"},{"type":"exact","text":"ORME SHOE","action":"correct"}],{"type": "exact","text":"ORME SHOE","action":"correct"}]',
+        '[{"type":"exact","text":"ACRE CAMP","action":"milestone"},{"type":"exact","text":"ORME SHOE","action":"correct"},{"type":"exact","text":"ORME SHOE","action":"correct"}]',
         '', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)

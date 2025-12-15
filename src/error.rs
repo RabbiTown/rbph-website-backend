@@ -70,10 +70,10 @@ impl RbError {
             .map(char::from)
             .collect();
 
-        log::warn!("internal server error ({}): {:?}", code, e);
+        log::warn!("Internal Server Error ({}): {:?}", code, e);
         Self {
             code: RbErrorCode::InternalServerError.into(),
-            message: Some(format!("internal server error ({code})")),
+            message: Some(format!("Internal Server Error ({code})")),
             status_code: StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -81,7 +81,7 @@ impl RbError {
     pub fn unauth() -> Self {
         Self {
             code: RbErrorCode::Unauthorized.into(),
-            message: Some("unauthorized".to_string()),
+            message: Some("Unauthorized".to_string()),
             status_code: StatusCode::UNAUTHORIZED,
         }
     }
@@ -89,7 +89,7 @@ impl RbError {
     pub fn forbid() -> Self {
         Self {
             code: RbErrorCode::Forbidden.into(),
-            message: Some("forbidden".to_string()),
+            message: Some("Forbidden".to_string()),
             status_code: StatusCode::UNAUTHORIZED,
         }
     }
@@ -97,7 +97,7 @@ impl RbError {
     pub fn not_found() -> Self {
         Self {
             code: RbErrorCode::NotFound.into(),
-            message: Some("not found".to_string()),
+            message: Some("Not Found".to_string()),
             status_code: StatusCode::NOT_FOUND,
         }
     }

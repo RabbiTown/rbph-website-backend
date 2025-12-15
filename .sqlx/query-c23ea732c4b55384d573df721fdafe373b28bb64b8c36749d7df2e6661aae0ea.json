@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)\n        VALUES ($1, $2, $3, $4, $5)\n        ON CONFLICT (team_id, puzzle_id, norm_answer) DO NOTHING\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c23ea732c4b55384d573df721fdafe373b28bb64b8c36749d7df2e6661aae0ea"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pstate FROM rb_team_puzzle\n        WHERE team_id = $1 AND puzzle_id = $2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pstate",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "047f79b243b026ef4c5a8b5d9cac93ea0e1b06ec9b502299ba3a1f575203a7a6"
+}

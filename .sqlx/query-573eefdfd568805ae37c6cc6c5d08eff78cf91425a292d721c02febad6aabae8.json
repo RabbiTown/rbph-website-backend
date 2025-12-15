@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.tstate, t.pass, t.game_id, COUNT(m.user_id) AS member_count\n        FROM rb_team t\n        LEFT JOIN rb_team_member m ON m.team_id = t.id\n        WHERE t.id = $1\n        GROUP BY t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tstate",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "pass",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "member_count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "573eefdfd568805ae37c6cc6c5d08eff78cf91425a292d721c02febad6aabae8"
+}

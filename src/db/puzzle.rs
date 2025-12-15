@@ -81,22 +81,6 @@ pub async fn get_puzzle_state(
     Ok(result.into())
 }
 
-pub async fn invalidate_puzzle_state_cache(
-    kv_pool: &KvPool,
-    team_id: i32,
-    puzzle_id: i32,
-) -> Result<(), RbInternalError> {
-    let key = format!("puzzle:{puzzle_id}:team:{team_id}:state");
-
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.del(&key).await;
-    });
-
-    Ok(())
-}
-
 #[derive(Clone)]
 pub struct GameUserInfo {
     pub game_id: i32,
@@ -134,13 +118,19 @@ pub async fn get_puzzle_user_info(
 }
 
 #[derive(FromRow, Serialize)]
+pub struct RbPuzzleShowRoundData {
+    pub id: i32,
+    pub title: String,
+}
+
+#[derive(FromRow, Serialize)]
 pub struct RbPuzzleShowData {
     pub id: i32,
     pub title: String,
     pub ptype: RbPuzzleType,
     pub content: String,
     pub content_type: RbContentType,
-    pub round_id: i32,
+    pub round: RbPuzzleShowRoundData,
     pub game_id: i32,
 }
 
@@ -148,18 +138,29 @@ pub async fn get_puzzle_show(
     db_pool: &DbPool,
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
-    let result = sqlx::query_as!(
-        RbPuzzleShowData,
-        "SELECT p.id, p.title, p.ptype, p.content, p.content_type, p.round_id, r.game_id
+    let result = sqlx::query!(
+        "SELECT p.id, p.title, p.ptype, p.content, p.content_type,
+                p.round_id, r.title AS round_title, r.game_id
         FROM rb_puzzle p
-        JOIN rb_round r ON r.id = p.round_id
+        JOIN rb_round r ON r.id = p.round_id AND r.puzzle != p.id
         WHERE p.id = $1;",
         puzzle_id
     )
     .fetch_optional(db_pool)
     .await?;
 
-    Ok(result)
+    Ok(result.map(|x| RbPuzzleShowData {
+        id: x.id,
+        title: x.title,
+        ptype: x.ptype.into(),
+        content: x.content,
+        content_type: x.content_type.into(),
+        round: RbPuzzleShowRoundData {
+            id: x.round_id,
+            title: x.round_title,
+        },
+        game_id: x.game_id,
+    }))
 }
 
 pub async fn get_puzzle_show_str(
@@ -191,40 +192,65 @@ pub async fn get_puzzle_show_str(
     Ok(result)
 }
 
-pub async fn get_puzzle_unlock_time(
+#[derive(FromRow, Serialize)]
+pub struct RbPuzzleTeamStateShowData {
+    pub state: RbTeamPuzzleState,
+    pub answers: Vec<String>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub utime_at: OffsetDateTime,
+}
+
+pub async fn get_puzzle_team_state(
     db_pool: &DbPool,
     team_id: i32,
     puzzle_id: i32,
-) -> Result<Option<OffsetDateTime>, RbInternalError> {
-    let result = sqlx::query_scalar!(
-        "SELECT ctime_at
-        FROM rb_team_puzzle
-        WHERE team_id = $1 AND puzzle_id = $2;",
+) -> Result<Option<RbPuzzleTeamStateShowData>, RbInternalError> {
+    let rows = sqlx::query!(
+        "SELECT tp.ctime_at AS utime_at, tp.pstate, s.real_answer
+        FROM rb_team_puzzle tp
+        LEFT JOIN rb_submission s ON s.puzzle_id = tp.puzzle_id
+            AND s.team_id = tp.team_id
+            AND s.saction = 1
+            AND s.real_answer IS NOT NULL
+        WHERE tp.team_id = $1 AND tp.puzzle_id = $2;",
         team_id,
         puzzle_id
     )
-    .fetch_optional(db_pool)
+    .fetch_all(db_pool)
     .await?;
 
-    Ok(result)
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let utime_at = rows.first().unwrap().utime_at;
+    let state = rows.first().unwrap().pstate;
+    let answers = rows.into_iter().filter_map(|r| r.real_answer).collect();
+
+    Ok(Some(RbPuzzleTeamStateShowData {
+        utime_at: utime_at,
+        state: state.into(),
+        answers,
+    }))
 }
 
-pub async fn get_puzzle_unlock_time_str(
+pub async fn get_puzzle_team_state_str(
     db_pool: &DbPool,
     kv_pool: &KvPool,
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("team:{team_id}:puzzle:{puzzle_id}:utime_at");
+    let key = format!("puzzle:{puzzle_id}:team:{team_id}:full_state");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(Some(cache));
     }
 
-    let result = get_puzzle_unlock_time(db_pool, team_id, puzzle_id)
+    let result = get_puzzle_team_state(db_pool, team_id, puzzle_id)
         .await?
-        .map(|x| crate::serde_helpers::format_offset_datetime(&x));
+        .map(|x| serde_json::to_string(&x))
+        .transpose()?;
 
     if result.is_some() {
         let kv_pool = kv_pool.clone();
@@ -245,8 +271,8 @@ pub async fn get_puzzle_show_str_for_team(
     puzzle_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     if let Some(show_str) = get_puzzle_show_str(db_pool, kv_pool, puzzle_id).await? {
-        let json = match get_puzzle_unlock_time_str(db_pool, kv_pool, team_id, puzzle_id).await? {
-            Some(utime_str) => format!("{{\"data\":{show_str},\"utime_at\":\"{utime_str}\"}}"),
+        let json = match get_puzzle_team_state_str(db_pool, kv_pool, team_id, puzzle_id).await? {
+            Some(state_str) => format!("{{\"data\":{show_str},\"state\":{state_str}}}"),
             None => format!("{{\"data\":{show_str}}}"),
         };
         Ok(Some(json))

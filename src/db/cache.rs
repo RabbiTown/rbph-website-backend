@@ -1,4 +1,4 @@
-use deadpool_redis::redis::{self, AsyncCommands};
+use deadpool_redis::redis::{self, AsyncCommands, RedisError};
 
 use crate::{KvPool, db, error::RbInternalError};
 
@@ -36,8 +36,22 @@ pub async fn invalidate_team_puzzle(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<(), RbInternalError> {
-    db::puzzle::invalidate_puzzle_state_cache(kv_pool, team_id, puzzle_id).await?;
-    db::round::invalidate_puzzles_for_team_cache(kv_pool, team_id).await?;
+    let keys = [
+        format!("puzzle:{puzzle_id}:team:{team_id}:state"),
+        format!("puzzle:{puzzle_id}:team:{team_id}:full_state"),
+    ];
+
+    let patterns = [format!("round:*:team:{team_id}:puzzles")];
+
+    let kv_pool = kv_pool.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        let _: Result<(), RedisError> = conn.del(&keys).await;
+
+        for pattern in patterns {
+            let _ = db::cache::del_pattern(&kv_pool, &pattern).await;
+        }
+    });
 
     Ok(())
 }

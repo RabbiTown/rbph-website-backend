@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tp.ctime_at AS utime_at, tp.pstate, s.real_answer\n        FROM rb_team_puzzle tp\n        LEFT JOIN rb_submission s ON s.puzzle_id = tp.puzzle_id\n            AND s.team_id = tp.team_id\n            AND s.saction = 1\n            AND s.real_answer IS NOT NULL\n        WHERE tp.team_id = $1 AND tp.puzzle_id = $2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "pstate",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "real_answer",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "774c978ae2b9d2f0d4198116eea88973d6532b3f41c6427904b1099e6b851bae"
+}

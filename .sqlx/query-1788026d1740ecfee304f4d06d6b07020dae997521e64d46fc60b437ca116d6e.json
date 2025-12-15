@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.nickname AS user_name, s.user_answer, s.norm_answer, s.real_answer,\n                s.saction, s.sresult, s.ctime_at\n        FROM rb_submission s\n        JOIN rb_user u ON u.id = s.user_id\n        WHERE s.puzzle_id = $2 AND s.team_id = $1 AND (NOT $4 OR s.saction > 0)\n        ORDER BY ctime_at DESC LIMIT 10 OFFSET $3;",
+  "query": "SELECT u.nickname AS user_name, s.user_answer, s.norm_answer,\n                s.real_answer, s.saction, s.sresult, s.ctime_at,\n                COUNT(*) OVER() AS total\n        FROM rb_submission s\n        JOIN rb_user u ON u.id = s.user_id\n        WHERE s.puzzle_id = $2 AND s.team_id = $1 AND (NOT $4 OR s.saction > 0)\n        ORDER BY ctime_at DESC LIMIT 10 OFFSET $3;",
   "describe": {
     "columns": [
       {
@@ -37,6 +37,11 @@
         "ordinal": 6,
         "name": "ctime_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "total",
+        "type_info": "Int8"
       }
     ],
     "parameters": {
@@ -54,8 +59,9 @@
       true,
       false,
       true,
-      false
+      false,
+      null
     ]
   },
-  "hash": "c86f2cc785ae76f758da121908df2859ea048e8f39fb5470e10640c5bb60ca8b"
+  "hash": "1788026d1740ecfee304f4d06d6b07020dae997521e64d46fc60b437ca116d6e"
 }

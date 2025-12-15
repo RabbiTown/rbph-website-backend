@@ -5,7 +5,7 @@ use crate::{
     DbPool, KvPool,
     db::{self, puzzle::GameUserInfo},
     error::RbInternalError,
-    model::game::RbContentType,
+    model::game::{RbContentType, RbTeamPuzzleState},
 };
 
 pub async fn get_round_game(
@@ -161,6 +161,8 @@ pub async fn get_info_show_str(
 pub struct RbPuzzleSimpleData {
     pub id: i32,
     pub title: String,
+    pub state: RbTeamPuzzleState,
+    pub answer: Option<String>,
 }
 
 pub async fn get_puzzles_for_team(
@@ -170,10 +172,17 @@ pub async fn get_puzzles_for_team(
 ) -> Result<Vec<RbPuzzleSimpleData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbPuzzleSimpleData,
-        "SELECT p.id, p.title FROM rb_puzzle p
+        "SELECT p.id, p.title, tp.pstate AS state,
+                CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
+        FROM rb_puzzle p
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
+        LEFT JOIN rb_submission s ON s.puzzle_id = p.id
+            AND s.team_id = tp.team_id
+            AND s.saction = 1
+            AND s.real_answer IS NOT NULL
         WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.pstate >= 0
-        AND p.id != (SELECT puzzle FROM rb_round WHERE id = $1);",
+            AND p.id != (SELECT puzzle FROM rb_round WHERE id = $1)
+        GROUP BY p.id, p.title, tp.pstate;",
         round_id,
         team_id
     )
@@ -207,20 +216,6 @@ pub async fn get_puzzles_for_team_str(
     });
 
     Ok(result)
-}
-
-pub async fn invalidate_puzzles_for_team_cache(
-    kv_pool: &KvPool,
-    team_id: i32,
-) -> Result<(), RbInternalError> {
-    let pattern = format!("round:*:team:{team_id}:puzzles");
-
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let _ = db::cache::del_pattern(&kv_pool, &pattern).await;
-    });
-
-    Ok(())
 }
 
 pub async fn get_info_for_team_str(

@@ -291,17 +291,23 @@ pub struct SubmissionUserShowData {
     ctime_at: OffsetDateTime,
 }
 
+#[derive(FromRow, Serialize)]
+pub struct SubmissionPageData {
+    data: Vec<SubmissionUserShowData>,
+    total: i64,
+}
+
 pub async fn get_team_submissions(
     pool: &DbPool,
     team_id: i32,
     puzzle_id: i32,
     page: i64,
     only_ok: bool,
-) -> Result<Vec<SubmissionUserShowData>, RbInternalError> {
-    let result = sqlx::query_as!(
-        SubmissionUserShowData,
-        "SELECT u.nickname AS user_name, s.user_answer, s.norm_answer, s.real_answer,
-                s.saction, s.sresult, s.ctime_at
+) -> Result<SubmissionPageData, RbInternalError> {
+    let rows = sqlx::query!(
+        "SELECT u.nickname AS user_name, s.user_answer, s.norm_answer,
+                s.real_answer, s.saction, s.sresult, s.ctime_at,
+                COUNT(*) OVER() AS total
         FROM rb_submission s
         JOIN rb_user u ON u.id = s.user_id
         WHERE s.puzzle_id = $2 AND s.team_id = $1 AND (NOT $4 OR s.saction > 0)
@@ -314,7 +320,22 @@ pub async fn get_team_submissions(
     .fetch_all(pool)
     .await?;
 
-    Ok(result)
+    let total = rows.first().and_then(|x| x.total).unwrap_or(0);
+
+    let data = rows
+        .into_iter()
+        .map(|x| SubmissionUserShowData {
+            user_name: x.user_name,
+            user_answer: x.user_answer,
+            norm_answer: x.norm_answer,
+            saction: x.saction.into(),
+            sresult: x.sresult,
+            real_answer: x.real_answer,
+            ctime_at: x.ctime_at,
+        })
+        .collect();
+
+    Ok(SubmissionPageData { data, total })
 }
 
 pub enum SubmitAnswerResult {

@@ -48,6 +48,12 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .default_service(web::route().to(error_handler)),
     )
     .service(
+        web::scope("/hints")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::User))
+            .configure(puzzle::hints_config)
+            .default_service(web::route().to(error_handler)),
+    )
+    .service(
         web::scope("/rounds")
             .wrap(PrivilegeMiddleware::new(RbUserRole::User))
             .configure(round::rounds_config)

@@ -196,3 +196,37 @@ pub struct RbRound {
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
+
+#[derive(FromRow, Serialize)]
+pub struct RbCurrency {
+    pub id: i32,
+    pub cname: String,
+    pub growth: i32,
+    pub max_amount: i32,
+    pub prec: i32,
+    pub game_id: i32,
+}
+
+#[derive(FromRow, Serialize)]
+pub struct RbTeamCurrency {
+    pub team_id: i32,
+    pub currency_id: i32,
+    pub amount: i32,
+    pub growth: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub utime_at: OffsetDateTime,
+}
+
+#[derive(FromRow, Serialize)]
+pub struct RbHint {
+    pub id: i32,
+    pub title: String,
+    pub content: String,
+    pub content_type: RbContentType,
+    pub cooldown: i32,
+    pub cost_id: Option<i32>,
+    pub cost_amount: i32,
+    pub puzzle_id: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}

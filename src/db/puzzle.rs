@@ -1,9 +1,11 @@
-use std::sync::Arc;
+use std::{fmt::format, sync::Arc};
 
 use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
+use num_enum::IntoPrimitive;
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use serde_repr::Serialize_repr;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
@@ -448,4 +450,202 @@ pub async fn submit_answer(
     tx.commit().await?;
 
     Ok(SubmitAnswerResult::Ok(result))
+}
+
+#[derive(FromRow, Serialize)]
+pub struct RbHintShowData {
+    pub id: i32,
+    pub title: String,
+    pub cooldown: i32,
+    pub cost_id: Option<i32>,
+    pub cost_amount: i32,
+}
+
+pub async fn get_hints_show(
+    db_pool: &DbPool,
+    puzzle_id: i32,
+) -> Result<Vec<RbHintShowData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbHintShowData,
+        "SELECT h.id, h.title, h.cooldown, h.cost_id, h.cost_amount
+        FROM rb_hint h
+        JOIN rb_puzzle p ON p.id = h.puzzle_id
+        WHERE p.id = $1;",
+        puzzle_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn get_hints_show_str(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    puzzle_id: i32,
+) -> Result<String, RbInternalError> {
+    let mut conn = kv_pool.get().await?;
+    let key = format!("puzzle:{puzzle_id}:hints");
+
+    if let Some(cache) = conn.get(&key).await? {
+        return Ok(cache);
+    }
+
+    let result = get_hints_show(db_pool, puzzle_id).await?;
+    let result = serde_json::to_string(&result)?;
+
+    let kv_pool = kv_pool.clone();
+    let result_clone = result.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, 60 * 60).await;
+    });
+
+    Ok(result)
+}
+
+#[derive(FromRow, Serialize)]
+pub struct RbHintTeamStateShowData {
+    pub id: i32,
+    pub content: String,
+    pub content_type: RbContentType,
+}
+
+pub async fn get_hints_team_state(
+    db_pool: &DbPool,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<Vec<RbHintTeamStateShowData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbHintTeamStateShowData,
+        "SELECT h.id, h.content, h.content_type
+        FROM rb_hint h
+        JOIN rb_team_hint th ON th.hint_id = h.id
+        WHERE th.team_id = $1 AND h.puzzle_id = $2 AND th.unlocked;",
+        team_id,
+        puzzle_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn get_hints_team_state_str(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<String, RbInternalError> {
+    let mut conn = kv_pool.get().await?;
+    let key = format!("puzzle:{puzzle_id}:team:{team_id}:hints");
+
+    if let Some(cache) = conn.get(&key).await? {
+        return Ok(cache);
+    }
+
+    let result = get_hints_team_state(db_pool, team_id, puzzle_id).await?;
+    let result = serde_json::to_string(&result)?;
+
+    let kv_pool = kv_pool.clone();
+    let result_clone = result.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, 60 * 60).await;
+    });
+
+    Ok(result)
+}
+
+pub async fn get_hints_show_str_for_team(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<String, RbInternalError> {
+    let show_str = get_hints_show_str(db_pool, kv_pool, puzzle_id).await?;
+    let state_str = get_hints_team_state_str(db_pool, kv_pool, team_id, puzzle_id).await?;
+    Ok(format!("{{\"data\":{show_str},\"state\":{state_str}}}"))
+}
+
+pub enum PurchaseHintResult {
+    Insufficient,
+    Unavailable,
+    Ok(RbHintTeamStateShowData),
+}
+
+pub async fn purchase_hint(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    user_id: i32,
+    hint_id: i32,
+) -> Result<PurchaseHintResult, RbInternalError> {
+    let info = sqlx::query!(
+        "SELECT r.game_id, tm.team_id, h.puzzle_id, h.cost_id, h.cost_amount
+        FROM rb_hint h
+        JOIN rb_puzzle p ON p.id = h.puzzle_id
+        JOIN rb_round r ON r.id = p.round_id
+        JOIN rb_team_member tm ON tm.game_id = r.game_id
+        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id
+        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
+        WHERE tm.user_id = $1 AND h.id = $2 AND tp.pstate >= 0
+            AND NOT COALESCE(th.unlocked, FALSE)
+            AND EXTRACT(EPOCH FROM (NOW() - tp.ctime_at)) >= h.cooldown;",
+        user_id,
+        hint_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    if info.is_none() {
+        return Ok(PurchaseHintResult::Unavailable);
+    }
+    let info = info.unwrap();
+
+    let mut tx = db_pool.begin().await?;
+
+    let result = sqlx::query!(
+        "UPDATE rb_team_currency tc
+        SET utime_at = NOW(), amount = LEAST(
+            tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+            c.max_amount
+        ) - $3
+        FROM rb_currency c
+        WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
+            AND LEAST(
+                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                c.max_amount
+            ) >= $3;",
+        info.team_id, info.cost_id, info.cost_amount
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Ok(PurchaseHintResult::Insufficient);
+    }
+
+    let result = sqlx::query_as!(
+        RbHintTeamStateShowData,
+        "
+        WITH upserted AS (
+            INSERT INTO rb_team_hint (team_id, hint_id, unlocked)
+            VALUES ($1, $2, TRUE)
+            ON CONFLICT (team_id, hint_id)
+            DO UPDATE SET unlocked = TRUE
+            RETURNING hint_id
+        )
+        SELECT h.id, h.content, h.content_type
+        FROM rb_hint h
+        JOIN upserted u ON h.id = u.hint_id",
+        info.team_id,
+        hint_id
+    )
+    .fetch_one(db_pool)
+    .await?;
+
+    db::cache::invalidate_team_hints(kv_pool, info.team_id, info.puzzle_id).await?;
+
+    tx.commit().await?;
+    Ok(PurchaseHintResult::Ok(result))
 }

@@ -317,3 +317,35 @@ pub async fn get_by_id_show(
         members,
     }))
 }
+
+#[derive(Serialize)]
+pub struct RbCurrencyShowData {
+    id: i32,
+    name: String,
+    growth: i32,
+    prec: i32,
+    amount: i32,
+    max_amount: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    utime_at: OffsetDateTime,
+}
+
+pub async fn get_currency_info(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    team_id: i32,
+) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbCurrencyShowData,
+        "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+                c.prec, tc.amount, c.max_amount, tc.utime_at
+        FROM rb_currency c
+        JOIN rb_team_currency tc ON tc.currency_id = c.id
+        WHERE tc.team_id = $1;",
+        team_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    return Ok(result);
+}

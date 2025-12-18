@@ -4,10 +4,14 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
+use time::OffsetDateTime;
 
 use crate::{
     DbPool, KvPool,
-    db::{self, team::RbTeamPutData},
+    db::{
+        self,
+        team::{RbCurrencyShowData, RbTeamPutData},
+    },
     error::RbError,
     extractor::auth::AuthUser,
     model::game::RbTeamState,
@@ -192,6 +196,32 @@ async fn get_self(
     Ok(HttpResponse::Ok().json(result))
 }
 
+#[derive(Serialize)]
+struct TeamCurrencyResponse {
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    server_time: OffsetDateTime,
+    data: Vec<RbCurrencyShowData>,
+}
+
+async fn get_self_currency(
+    req: web::Path<GamePathInfo>,
+    user: AuthUser,
+    db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
+) -> Result<HttpResponse> {
+    let team_id = db::team::get_id_by_user_game(&db_pool, &kv_pool, user.uid, req.game_id).await?;
+    if team_id.is_none() {
+        RbError::not_found().err()?
+    }
+
+    let result = db::team::get_currency_info(&db_pool, &kv_pool, team_id.unwrap()).await?;
+
+    Ok(HttpResponse::Ok().json(TeamCurrencyResponse {
+        server_time: OffsetDateTime::now_utc(),
+        data: result,
+    }))
+}
+
 // TODO : add paging
 async fn list_all(user: AuthUser, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().finish())
@@ -215,7 +245,8 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
         .route("/self", web::get().to(get_self))
         .route("/self", web::post().to(create_self))
         .route("/self", web::patch().to(update_self))
-        .route("/self/leave", web::post().to(leave_self));
+        .route("/self/leave", web::post().to(leave_self))
+        .route("/self/currency", web::get().to(get_self_currency));
 }
 
 // /teams/...

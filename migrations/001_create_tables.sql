@@ -66,9 +66,6 @@ CREATE TABLE rb_team_member (
     UNIQUE (user_id, game_id)
 );
 
-CREATE INDEX rb_idx_team_member_team ON rb_team_member(team_id);
-CREATE INDEX rb_idx_team_member_user ON rb_team_member(user_id);
-
 CREATE UNIQUE INDEX rb_idx_team_captain_unique
 ON rb_team_member (team_id)
 WHERE is_captain = TRUE;
@@ -134,7 +131,8 @@ CREATE TABLE rb_team_puzzle(
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     pstate          SMALLINT NOT NULL DEFAULT 0,
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (team_id, puzzle_id)
 );
 
 -- submission
@@ -153,23 +151,44 @@ CREATE TABLE rb_submission(
     UNIQUE (team_id, puzzle_id, norm_answer)
 );
 
--- hint
-
--- CREATE TABLE rb_hint (
---     id              SERIAL PRIMARY KEY,
---     title           VARCHAR(120) NOT NULL,
---     content         TEXT NOT NULL,
---     -- cost
---     puzzle_id       INT REFERENCES rb_puzzle(id),
---     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
--- );
-
 -- currency
 
--- CREATE TABLE rb_currency (
---     team_id         SERIAL PRIMARY KEY,
---     ctype           INT NOT NULL,
---     count           INT NOT NULL,
---     growth_rate     INT NOT NULL,
---     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
--- );
+CREATE TABLE rb_currency (
+    id              SERIAL PRIMARY KEY,
+    cname           VARCHAR(40) NOT NULL,
+    growth          INT NOT NULL,
+    max_amount      INT NOT NULL DEFAULT 2147483647,
+    prec            INT NOT NULL,
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE
+);
+
+CREATE TABLE rb_team_currency (
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    currency_id     INT NOT NULL REFERENCES rb_currency(id) ON DELETE CASCADE,
+    amount          INT NOT NULL,
+    growth          INT NOT NULL,
+    utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (team_id, currency_id)
+);
+
+-- hint
+
+CREATE TABLE rb_hint (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(120) NOT NULL,
+    content         TEXT NOT NULL,
+    content_type    SMALLINT NOT NULL DEFAULT 0,
+    cooldown        INT NOT NULL DEFAULT 0,
+    cost_id         INT NOT NULL REFERENCES rb_currency(id) ON DELETE CASCADE,
+    cost_amount     INT NOT NULL DEFAULT 0,
+    puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE rb_team_hint (
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    hint_id         INT NOT NULL REFERENCES rb_hint(id) ON DELETE CASCADE,
+    unlocked        BOOLEAN NOT NULL DEFAULT TRUE,
+    utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (team_id, hint_id)
+);

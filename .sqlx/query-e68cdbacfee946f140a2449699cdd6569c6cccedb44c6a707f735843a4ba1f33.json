@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.game_id, tm.team_id, h.puzzle_id, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.pstate >= 0\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND EXTRACT(EPOCH FROM (NOW() - tp.ctime_at)) >= h.cooldown;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cost_amount",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e68cdbacfee946f140a2449699cdd6569c6cccedb44c6a707f735843a4ba1f33"
+}

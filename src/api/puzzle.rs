@@ -24,6 +24,11 @@ struct PuzzlePathInfo {
     puzzle_id: i32,
 }
 
+#[derive(Deserialize)]
+struct HintPathInfo {
+    hint_id: i32,
+}
+
 async fn get_puzzle(
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
@@ -93,6 +98,53 @@ pub struct SubmissionQuery {
     only_ok: Option<bool>,
 }
 
+async fn get_puzzle_hints(
+    info: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
+    db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
+) -> Result<HttpResponse> {
+    let result = db::puzzle::get_hints_show_str_for_team(
+        &db_pool,
+        &kv_pool,
+        user.game.unwrap().team_id,
+        info.puzzle_id,
+    )
+    .await?;
+
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::json())
+        .body(result))
+}
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+pub enum PurchaseHintResult {
+    Insufficient = -2,
+    Unavailable = -1,
+    Ok = 0,
+}
+
+async fn purchase_hint(
+    info: web::Path<HintPathInfo>,
+    user: AuthUser,
+    db_pool: web::Data<DbPool>,
+    kv_pool: web::Data<KvPool>,
+) -> Result<HttpResponse> {
+    let purchase_result =
+        db::puzzle::purchase_hint(&db_pool, &kv_pool, user.uid, info.hint_id).await?;
+
+    match purchase_result {
+        db::puzzle::PurchaseHintResult::Unavailable => {
+            RbError::conflict(PurchaseHintResult::Unavailable.into()).http_err()
+        }
+        db::puzzle::PurchaseHintResult::Insufficient => {
+            RbError::conflict(PurchaseHintResult::Insufficient.into()).http_err()
+        }
+        db::puzzle::PurchaseHintResult::Ok(result) => Ok(HttpResponse::Ok().json(result)),
+    }
+}
+
 async fn get_puzzle_submissions(
     req: web::Query<SubmissionQuery>,
     info: web::Path<PuzzlePathInfo>,
@@ -150,7 +202,17 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
             .wrap(middleware::from_fn(check_puzzle_middleware))
             .route("", web::get().to(get_puzzle))
             .route("/submit", web::post().to(judge_puzzle))
+            .route("/hints", web::get().to(get_puzzle_hints))
             .route("/submissions", web::get().to(get_puzzle_submissions))
+            .default_service(web::route().to(error_handler)),
+    );
+}
+
+// /hints/...
+pub fn hints_config(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/{hint_id}")
+            .route("/purchase", web::post().to(purchase_hint))
             .default_service(web::route().to(error_handler)),
     );
 }

@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.id, h.title, h.cooldown, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        WHERE p.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cost_amount",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "89146600d1917f37f8e98662cb7a41fee2769e61be1b77784a173256c2394642"
+}

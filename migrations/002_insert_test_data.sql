@@ -42,11 +42,14 @@ VALUES (1, '提示点', 1, 1000000, 0, 1);
 
 -- hint
 
-INSERT INTO rb_hint (id, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id)
-VALUES (1, '我看不懂题目图中左上角写的那句话。', '这是提示内容。', 0, 0, 1, 100, 2);
+INSERT INTO rb_hint (id, sort, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id)
+VALUES (1, 0, '我看不懂题目图中左上角写的那句话。', '这是提示内容。', 0, 0, 1, 100, 2);
 
-INSERT INTO rb_hint (id, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id)
-VALUES (2, '这道题的答案是什么？', '这道题的答案是【ORME SHOE】', 0, 7200, 1, 100, 2);
+INSERT INTO rb_hint (id, sort, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id)
+VALUES (2, 1, '这是一个免费提示！', '但是是空的。', 0, 0, NULL, 0, 2);
+
+INSERT INTO rb_hint (id, sort, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id)
+VALUES (3, 2, '这道题的答案是什么？', '这道题的答案是【ORME SHOE】', 0, 7200, 1, 100, 2);
 
 SELECT setval('rb_hint_id_seq', 100);
 

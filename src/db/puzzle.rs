@@ -468,7 +468,8 @@ pub async fn get_hints_show(
         "SELECT h.id, h.title, h.cooldown, h.cost_id, h.cost_amount
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        WHERE p.id = $1;",
+        WHERE p.id = $1
+        ORDER BY h.sort, h.id;",
         puzzle_id
     )
     .fetch_all(db_pool)
@@ -602,25 +603,27 @@ pub async fn purchase_hint(
 
     let mut tx = db_pool.begin().await?;
 
-    let result = sqlx::query!(
-        "UPDATE rb_team_currency tc
-        SET utime_at = NOW(), amount = LEAST(
-            tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-            c.max_amount
-        ) - $3
-        FROM rb_currency c
-        WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
-            AND LEAST(
+    if info.cost_id.is_some() {
+        let result = sqlx::query!(
+            "UPDATE rb_team_currency tc
+            SET utime_at = NOW(), amount = LEAST(
                 tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
                 c.max_amount
-            ) >= $3;",
-        info.team_id, info.cost_id, info.cost_amount
-    )
-    .execute(&mut *tx)
-    .await?;
+            ) - $3
+            FROM rb_currency c
+            WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
+                AND LEAST(
+                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                    c.max_amount
+                ) >= $3;",
+            info.team_id, info.cost_id, info.cost_amount
+        )
+        .execute(&mut *tx)
+        .await?;
 
-    if result.rows_affected() == 0 {
-        return Ok(PurchaseHintResult::Insufficient);
+        if result.rows_affected() == 0 {
+            return Ok(PurchaseHintResult::Insufficient);
+        }
     }
 
     let result = sqlx::query_as!(

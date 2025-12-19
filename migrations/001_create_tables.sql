@@ -175,11 +175,12 @@ CREATE TABLE rb_team_currency (
 
 CREATE TABLE rb_hint (
     id              SERIAL PRIMARY KEY,
+    sort            INT NOT NULL DEFAULT 0,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
     content_type    SMALLINT NOT NULL DEFAULT 0,
     cooldown        INT NOT NULL DEFAULT 0,
-    cost_id         INT NOT NULL REFERENCES rb_currency(id) ON DELETE CASCADE,
+    cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
     cost_amount     INT NOT NULL DEFAULT 0,
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP

@@ -347,5 +347,5 @@ pub async fn get_currency_info(
     .fetch_all(db_pool)
     .await?;
 
-    return Ok(result);
+    Ok(result)
 }

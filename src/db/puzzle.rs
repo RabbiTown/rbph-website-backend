@@ -1,11 +1,9 @@
-use std::{fmt::format, sync::Arc};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
-use num_enum::IntoPrimitive;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use serde_repr::Serialize_repr;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
@@ -230,7 +228,7 @@ pub async fn get_puzzle_team_state(
     let answers = rows.into_iter().filter_map(|r| r.real_answer).collect();
 
     Ok(Some(RbPuzzleTeamStateShowData {
-        utime_at: utime_at,
+        utime_at,
         state: state.into(),
         answers,
     }))

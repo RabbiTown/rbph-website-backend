@@ -18,7 +18,7 @@ pub enum RawSexpr {
     List(Vec<RawSexpr>),
 }
 
-pub fn tokenize<'a>(expr: &'a str) -> Vec<Token> {
+pub fn tokenize(expr: &str) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     let mut buf = String::new();
 

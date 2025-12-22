@@ -1,6 +1,6 @@
 use crate::expr::{
-    PluzzesState,
-    types::{CountSize, PluzzeId},
+    PuzzleStates,
+    types::{CountSize, PuzzleId},
 };
 
 #[derive(Debug, Clone)]
@@ -16,9 +16,9 @@ pub enum CmpOp {
 #[derive(Debug, Clone)]
 pub enum SetExpr {
     // (set 1 2 3)
-    Explicit(Vec<PluzzeId>),
+    Explicit(Vec<PuzzleId>),
     // (range 1 5)
-    Range { start: PluzzeId, end: PluzzeId },
+    Range { start: PuzzleId, end: PuzzleId },
 }
 
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub enum GateExpr {
     Or(Vec<GateExpr>),
     Not(Box<GateExpr>),
 
-    Completed(PluzzeId),
+    Completed(PuzzleId),
     AllCompleted(SetExpr),
     AnyCompleted(SetExpr),
 
@@ -60,7 +60,7 @@ fn cmp_f64(op: CmpOp, lhs: f64, rhs: f64) -> bool {
     }
 }
 
-pub fn materialize_set<S: PluzzesState>(state: &S, set: &SetExpr) -> Vec<PluzzeId> {
+pub fn materialize_set<S: PuzzleStates>(state: &S, set: &SetExpr) -> Vec<PuzzleId> {
     match set {
         SetExpr::Explicit(v) => v.clone(),
         SetExpr::Range { start, end } => {
@@ -74,7 +74,7 @@ pub fn materialize_set<S: PluzzesState>(state: &S, set: &SetExpr) -> Vec<PluzzeI
     }
 }
 
-pub fn eval_compiled<S: PluzzesState>(state: &S, expr: &GateExpr) -> bool {
+pub fn eval_compiled<S: PuzzleStates>(state: &S, expr: &GateExpr) -> bool {
     match expr {
         GateExpr::And(xs) => xs.iter().all(|e| eval_compiled(state, e)),
         GateExpr::Or(xs) => xs.iter().any(|e| eval_compiled(state, e)),

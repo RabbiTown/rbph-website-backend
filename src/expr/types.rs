@@ -1,8 +1,8 @@
-pub type PluzzeId = u32;
+pub type PuzzleId = u32;
 pub type CountSize = usize;
 
-pub trait PluzzesState {
-    fn is_unlocked(&self, id: PluzzeId) -> bool;
+pub trait PuzzleStates {
+    fn is_unlocked(&self, id: PuzzleId) -> bool;
     fn unlocked_count(&self) -> CountSize;
-    fn unlocked() -> Vec<PluzzeId>;
+    fn unlocked() -> Vec<PuzzleId>;
 }

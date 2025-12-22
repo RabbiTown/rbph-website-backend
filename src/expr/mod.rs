@@ -5,32 +5,32 @@ mod compiler;
 mod parser;
 mod types;
 
-use crate::expr::types::PluzzesState;
+use crate::expr::types::PuzzleStates;
 
 /// A state-aware S-expression predicate language for gating and progression.
-pub fn eval<'a, S: PluzzesState>(state: &S, expr: &'a str) -> bool {
+pub fn eval<S: PuzzleStates>(state: &S, expr: &str) -> bool {
     let tokens = parser::tokenize(expr);
     let (sexpr, _used) = parser::parse_expr(&tokens)
         .map_err(|e| format!("parse error: {e:?}"))
         .unwrap();
     let expr = compiler::compile_gate(&sexpr).map_err(|e| format!("compile error: {e:?}"));
-    let ok = ast::eval_compiled(state, &expr.unwrap());
+    
 
-    ok
+    ast::eval_compiled(state, &expr.unwrap())
 }
 
 mod test {
     use crate::expr::{
         eval,
-        types::{PluzzeId, PluzzesState},
+        types::{PuzzleId, PuzzleStates},
     };
 
-    const UNLOCKED: [PluzzeId; 3] = [1, 2, 3];
+    const UNLOCKED: [PuzzleId; 3] = [1, 2, 3];
 
     struct TestState {}
 
-    impl PluzzesState for TestState {
-        fn is_unlocked(&self, id: super::types::PluzzeId) -> bool {
+    impl PuzzleStates for TestState {
+        fn is_unlocked(&self, id: super::types::PuzzleId) -> bool {
             UNLOCKED.contains(&id)
         }
 
@@ -38,13 +38,13 @@ mod test {
             UNLOCKED.len()
         }
 
-        fn unlocked() -> Vec<super::types::PluzzeId> {
+        fn unlocked() -> Vec<super::types::PuzzleId> {
             UNLOCKED.to_vec()
         }
     }
 
     #[test]
-    pub fn text_eval() {
+    pub fn test_eval() {
         let state = TestState {};
 
         let expr = "(and 1 2 3)";
@@ -90,7 +90,7 @@ mod test {
     }
 
     #[test]
-    pub fn text_eval_complex() {
+    pub fn test_eval_complex() {
         let state = TestState {};
         let expr = "(or (and 1 2) (and 3))";
         let result = eval(&state, expr);
@@ -98,7 +98,7 @@ mod test {
     }
 
     #[test]
-    pub fn text_eval_failed() {
+    pub fn test_eval_failed() {
         let state = TestState {};
         let expr = "(countge (range 4 40) 1)";
         let result = eval(&state, expr);

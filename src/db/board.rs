@@ -5,7 +5,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
-use crate::{DbPool, db::cache, error::RbInternalError};
+use crate::{DbPool, error::RbInternalError};
 
 #[derive(Clone, Serialize)]
 pub struct LeaderBoardTeamInfo {

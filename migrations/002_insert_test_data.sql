@@ -78,8 +78,3 @@ VALUES (1, 2, 0);
 
 INSERT INTO rb_team_puzzle (team_id, puzzle_id, pstate)
 VALUES (1, 3, 0);
-
--- TODO : INSERT rb_team_currency when team starts game
-
-INSERT INTO rb_team_currency (team_id, currency_id, amount, growth)
-VALUES (1, 1, 0, 0);

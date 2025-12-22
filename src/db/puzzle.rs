@@ -415,7 +415,7 @@ pub async fn submit_answer(
 
     let submit_count = sqlx::query_scalar!(
         "UPDATE rb_submission
-        SET saction = $1, sresult = $2, real_answer = $3
+        SET saction = $1, sresult = $2, real_answer = $3, ignored = $7
         WHERE id = $4
         RETURNING (
             SELECT COUNT(*) FROM rb_submission
@@ -426,24 +426,51 @@ pub async fn submit_answer(
         result.answer,
         submit_id,
         team_id,
-        puzzle_id
+        puzzle_id,
+        result.action == RbJudgeAction::Error
     )
     .fetch_one(&mut *tx)
     .await?
     .unwrap();
 
+    match result.action {
+        RbJudgeAction::Correct => {
+            sqlx::query!(
+                "UPDATE rb_team_puzzle SET pstate = 1
+                WHERE team_id = $1 AND puzzle_id = $2",
+                team_id,
+                puzzle_id
+            )
+            .execute(db_pool)
+            .await?;
+        }
+        RbJudgeAction::StartGame => {
+            sqlx::query!(
+                "UPDATE rb_team SET tstate = 1
+                WHERE id = $1 AND tstate = 0",
+                team_id
+            )
+            .execute(db_pool)
+            .await?;
+
+            sqlx::query!(
+                "INSERT INTO rb_team_currency (team_id, currency_id)
+                SELECT t.id AS team_id, c.id AS currency_id
+                FROM rb_team t
+                JOIN rb_currency c ON c.game_id = t.game_id
+                WHERE t.id = $1
+                ON CONFLICT (team_id, currency_id) DO NOTHING;",
+                team_id
+            )
+            .execute(db_pool)
+            .await?;
+        }
+        _ => {}
+    }
+
     tx.commit().await?;
 
-    if matches!(result.action, RbJudgeAction::Correct) {
-        sqlx::query!(
-            "UPDATE rb_team_puzzle SET pstate = 1
-            WHERE team_id = $1 AND puzzle_id = $2",
-            team_id,
-            puzzle_id
-        )
-        .execute(db_pool)
-        .await?;
-
+    if result.action.side_effect() {
         db::cache::invalidate_team_puzzle(db_pool, kv_pool, team_id, puzzle_id).await?;
     }
 

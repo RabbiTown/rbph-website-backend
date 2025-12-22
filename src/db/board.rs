@@ -5,10 +5,10 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
-use crate::{DbPool, error::RbInternalError};
+use crate::{DbPool, db::cache, error::RbInternalError};
 
 #[derive(Clone, Serialize)]
-pub struct TeamLeaderBoardInfo {
+pub struct LeaderBoardTeamInfo {
     pub id: i32,
     pub tname: String,
     pub bio: String,
@@ -20,9 +20,14 @@ pub struct TeamLeaderBoardInfo {
     pub members: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct LeaderBoardInfo {
+    pub data: Vec<LeaderBoardTeamInfo>,
+}
+
 struct LeaderBoard {
     order: Vec<i32>,
-    teams: HashMap<i32, TeamLeaderBoardInfo>,
+    teams: HashMap<i32, LeaderBoardTeamInfo>,
 
     order_dirty: bool,
     json_cache: Option<String>,
@@ -89,7 +94,7 @@ impl LeaderBoardCache {
         &self,
         db_pool: &DbPool,
         game_id: i32,
-    ) -> Result<Vec<TeamLeaderBoardInfo>, RbInternalError> {
+    ) -> Result<Vec<LeaderBoardTeamInfo>, RbInternalError> {
         let teams = sqlx::query!(
             "WITH team_solves AS (
                 SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at
@@ -131,7 +136,7 @@ impl LeaderBoardCache {
 
         let result = teams
             .iter()
-            .map(|t| TeamLeaderBoardInfo {
+            .map(|t| LeaderBoardTeamInfo {
                 id: t.id,
                 bio: t.bio.clone(),
                 tname: t.tname.clone(),
@@ -169,7 +174,7 @@ impl LeaderBoardCache {
         &self,
         db_pool: &DbPool,
         team_id: i32,
-    ) -> Result<(i32, TeamLeaderBoardInfo), RbInternalError> {
+    ) -> Result<(i32, LeaderBoardTeamInfo), RbInternalError> {
         let team = sqlx::query!(
             "WITH team_solves AS (
                 SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at
@@ -203,7 +208,7 @@ impl LeaderBoardCache {
 
         Ok((
             team.game_id,
-            TeamLeaderBoardInfo {
+            LeaderBoardTeamInfo {
                 id: team.id,
                 bio: team.bio.clone(),
                 tname: team.tname,
@@ -219,9 +224,10 @@ impl LeaderBoardCache {
         let (game_id, team) = self.fetch_team(db_pool, team_id).await?;
 
         let mut guard = self.cache.write().await;
-        let cache = guard.get_mut(&game_id).ok_or("Not Found")?;
-        cache.mark_order_dirty();
-        cache.teams.insert(team.id, team);
+        if let Some(cache) = guard.get_mut(&game_id) {
+            cache.mark_order_dirty();
+            cache.teams.insert(team.id, team);
+        }
 
         Ok(())
     }
@@ -239,7 +245,7 @@ impl LeaderBoardCache {
                 Some(leaderboard) => (false, leaderboard.order_dirty),
             }
         };
-        
+
         log::debug!("needs_all = {needs_all} ; needs_order = {needs_order}");
 
         if needs_all {
@@ -258,7 +264,7 @@ impl LeaderBoardCache {
             }
         }
 
-        let teams_vec: Vec<TeamLeaderBoardInfo> = {
+        let teams_vec: Vec<LeaderBoardTeamInfo> = {
             let guard = self.cache.read().await;
             let leaderboard = guard.get(&game_id).ok_or("Not Found")?;
             leaderboard
@@ -269,7 +275,9 @@ impl LeaderBoardCache {
                 .collect()
         };
 
-        let result = serde_json::to_string(&teams_vec)?;
+        let info = LeaderBoardInfo { data: teams_vec };
+
+        let result = serde_json::to_string(&info)?;
 
         // update json cache (W LOCK)
         {

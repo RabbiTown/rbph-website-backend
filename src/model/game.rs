@@ -142,6 +142,12 @@ pub enum RbJudgeAction {
     Invalid(i16),
 }
 
+impl RbJudgeAction {
+    pub fn side_effect(&self) -> bool {
+        matches!(self, RbJudgeAction::Correct | RbJudgeAction::StartGame)
+    }
+}
+
 impl From<&str> for RbJudgeAction {
     fn from(s: &str) -> Self {
         match s {

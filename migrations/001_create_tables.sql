@@ -178,8 +178,8 @@ CREATE TABLE rb_currency (
 CREATE TABLE rb_team_currency (
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     currency_id     INT NOT NULL REFERENCES rb_currency(id) ON DELETE CASCADE,
-    amount          INT NOT NULL,
-    growth          INT NOT NULL,
+    amount          INT NOT NULL DEFAULT 0,
+    growth          INT NOT NULL DEFAULT 0,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (team_id, currency_id)
 );

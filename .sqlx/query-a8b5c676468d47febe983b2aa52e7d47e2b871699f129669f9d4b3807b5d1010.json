@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tm.team_id, u.nickname\n            FROM rb_team_member tm\n            JOIN rb_user u ON u.id = tm.user_id\n            WHERE tm.game_id = $1\n            ORDER BY tm.team_id, tm.is_captain DESC, u.id ASC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "nickname",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a8b5c676468d47febe983b2aa52e7d47e2b871699f129669f9d4b3807b5d1010"
+}

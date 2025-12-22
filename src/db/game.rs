@@ -3,9 +3,11 @@ use sqlx::{QueryBuilder, prelude::FromRow};
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool,
-    error::RbInternalError,
-    model::{game::RbGame, user::RbUserRole},
+    DbPool, error::RbInternalError,
+    model::{
+        game::RbGame,
+        user::RbUserRole,
+    },
 };
 
 pub struct RbGamePutData {

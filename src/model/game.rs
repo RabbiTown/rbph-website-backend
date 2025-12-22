@@ -56,6 +56,8 @@ pub struct RbTeam {
     pub game_id: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub finish_at: Option<OffsetDateTime>,
 }
 
 #[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]

@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::PoisonError};
 
 use actix_session::SessionInsertError;
 use actix_web::{HttpResponse, ResponseError, http::StatusCode};

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH team_solves AS (\n                SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at\n                FROM rb_submission WHERE saction = 1\n                GROUP BY team_id, puzzle_id\n            )\n            SELECT t.id AS team_id\n            FROM rb_team t\n            LEFT JOIN team_solves ts ON ts.team_id = t.id\n            WHERE t.game_id = $1\n            GROUP BY t.id\n            ORDER BY CASE WHEN t.tstate = 2 THEN 10000000000 - EXTRACT(EPOCH FROM COALESCE(t.finish_at, NOW()))::int\n                ELSE COUNT(ts.puzzle_id) * 10000000 - EXTRACT(EPOCH FROM COALESCE(MAX(ts.ctime_at), NOW()))::int\n            END DESC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0a861cede343a831cab3413e82170d79a18ea0998076e1cede645cd82e347323"
+}

@@ -37,6 +37,11 @@
         "ordinal": 6,
         "name": "ctime_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "finish_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -51,7 +56,8 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
   "hash": "37b3c74e912fb65ea5996c6cd221a449e2ff884f38a8d5cacab0f292937e76da"

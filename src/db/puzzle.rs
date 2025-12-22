@@ -389,7 +389,7 @@ pub async fn submit_answer(
     let submit_id = sqlx::query_scalar!(
         "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
         VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (team_id, puzzle_id, norm_answer) DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING id",
         team_id,
         user_id,
@@ -432,6 +432,8 @@ pub async fn submit_answer(
     .await?
     .unwrap();
 
+    tx.commit().await?;
+
     if matches!(result.action, RbJudgeAction::Correct) {
         sqlx::query!(
             "UPDATE rb_team_puzzle SET pstate = 1
@@ -439,13 +441,11 @@ pub async fn submit_answer(
             team_id,
             puzzle_id
         )
-        .execute(&mut *tx)
+        .execute(db_pool)
         .await?;
 
-        db::cache::invalidate_team_puzzle(kv_pool, team_id, puzzle_id).await?;
+        db::cache::invalidate_team_puzzle(db_pool, kv_pool, team_id, puzzle_id).await?;
     }
-
-    tx.commit().await?;
 
     Ok(SubmitAnswerResult::Ok(result))
 }

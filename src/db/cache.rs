@@ -1,6 +1,6 @@
 use deadpool_redis::redis::{self, AsyncCommands, RedisError};
 
-use crate::{KvPool, db, error::RbInternalError};
+use crate::{DbPool, KvPool, db, error::RbInternalError};
 
 pub async fn del_pattern(kv_pool: &KvPool, pattern: &str) -> Result<(), RbInternalError> {
     let mut conn = kv_pool.get().await?;
@@ -59,6 +59,7 @@ macro_rules! invalidate_cache {
 }
 
 pub async fn invalidate_team_puzzle(
+    db_pool: &DbPool,
     kv_pool: &KvPool,
     team_id: i32,
     puzzle_id: i32,
@@ -71,6 +72,10 @@ pub async fn invalidate_team_puzzle(
         ],
         patterns = [format!("round:*:team:{team_id}:puzzles")]
     );
+
+    db::board::LEADER_BOARD_CACHE
+        .update_team(db_pool, team_id)
+        .await?;
 
     Ok(())
 }

@@ -1,4 +1,5 @@
 pub mod anmt;
+pub mod board;
 pub mod cache;
 pub mod game;
 pub mod puzzle;

@@ -2,6 +2,7 @@ use actix_web::{
     HttpMessage, HttpResponse, Result,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
+    http::header::ContentType,
     middleware::{self, Next},
     web,
 };
@@ -40,6 +41,19 @@ async fn get_anmts(info: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Res
     Ok(HttpResponse::Ok().json(db::anmt::list_all(&db_pool, true, Some(info.game_id)).await?))
 }
 
+async fn get_leaderboard(
+    info: web::Path<PathInfo>,
+    db_pool: web::Data<DbPool>,
+) -> Result<HttpResponse> {
+    let result = db::board::LEADER_BOARD_CACHE
+        .get_info_str(&db_pool, info.game_id)
+        .await?;
+
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::json())
+        .body(result))
+}
+
 // as games' visibilities don't change a lot, we ignore TOCTOU issues here
 async fn check_game_id_middleware(
     req: ServiceRequest,
@@ -69,6 +83,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .wrap(middleware::from_fn(check_game_id_middleware))
             .route("", web::get().to(get_info))
             .route("/announcements", web::get().to(get_anmts))
+            .route("/leaderboard", web::get().to(get_leaderboard))
             .service(
                 web::scope("")
                     .wrap(PrivilegeMiddleware::new(RbUserRole::User))

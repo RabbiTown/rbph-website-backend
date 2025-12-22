@@ -51,8 +51,12 @@ CREATE TABLE rb_team (
     pass            VARCHAR(32) NOT NULL,
     bio             TEXT NOT NULL,
     game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finish_at       TIMESTAMPTZ
 );
+
+CREATE INDEX rb_idx_team_game_state_finish
+ON rb_team(game_id, tstate, finish_at);
 
 -- team member
 
@@ -69,6 +73,9 @@ CREATE TABLE rb_team_member (
 CREATE UNIQUE INDEX rb_idx_team_captain_unique
 ON rb_team_member (team_id)
 WHERE is_captain = TRUE;
+
+CREATE INDEX rb_idx_team_member_team_captain
+ON rb_team_member(team_id, is_captain, user_id);
 
 CREATE OR REPLACE FUNCTION rb_team_member_set_game_id()
 RETURNS TRIGGER AS $$
@@ -125,8 +132,6 @@ CREATE TABLE rb_puzzle (
 ALTER TABLE rb_round ADD CONSTRAINT rb_fk_round_puzzle
 FOREIGN KEY (puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;
 
--- puzzle unlock
-
 CREATE TABLE rb_team_puzzle(
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
@@ -147,9 +152,17 @@ CREATE TABLE rb_submission(
     saction         SMALLINT NOT NULL DEFAULT -1,
     sresult         TEXT,
     real_answer     TEXT,
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (team_id, puzzle_id, norm_answer)
+    ignored         BOOLEAN NOT NULL DEFAULT FALSE,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX rb_idx_submission_team_puzzle_norm
+ON rb_submission(team_id, puzzle_id, norm_answer)
+WHERE ignored = FALSE;
+
+CREATE INDEX rb_idx_submission_team_action_puzzle_ctime
+ON rb_submission(team_id, saction, puzzle_id, ctime_at)
+WHERE saction = 1;
 
 -- currency
 

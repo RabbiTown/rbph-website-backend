@@ -1,21 +1,21 @@
 #![allow(unused)]
 
-mod ast;
+pub mod ast;
 mod compiler;
 mod parser;
-mod types;
+pub mod types;
 
-use crate::expr::types::PuzzleStates;
+use crate::expr::{ast::GateExpr, types::PuzzleStates};
+
+pub fn compile_gate_expr(expr: &str) -> Result<GateExpr, String> {
+    let tokens = parser::tokenize(expr);
+    let (sexpr, _used) = parser::parse_expr(&tokens).map_err(|e| format!("Parse Error: {e:?}"))?;
+    compiler::compile_gate(&sexpr).map_err(|e| format!("Compile Error: {e:?}"))
+}
 
 /// A state-aware S-expression predicate language for gating and progression.
 pub fn eval<S: PuzzleStates>(state: &S, expr: &str) -> bool {
-    let tokens = parser::tokenize(expr);
-    let (sexpr, _used) = parser::parse_expr(&tokens)
-        .map_err(|e| format!("parse error: {e:?}"))
-        .unwrap();
-    let expr = compiler::compile_gate(&sexpr).map_err(|e| format!("compile error: {e:?}"));
-    
-
+    let expr = compile_gate_expr(expr);
     ast::eval_compiled(state, &expr.unwrap())
 }
 
@@ -30,16 +30,20 @@ mod test {
     struct TestState {}
 
     impl PuzzleStates for TestState {
-        fn is_unlocked(&self, id: super::types::PuzzleId) -> bool {
+        fn is_completed(&self, id: super::types::PuzzleId) -> bool {
             UNLOCKED.contains(&id)
         }
 
-        fn unlocked_count(&self) -> super::types::CountSize {
+        fn completed_count(&self) -> super::types::CountSize {
             UNLOCKED.len()
         }
 
-        fn unlocked() -> Vec<super::types::PuzzleId> {
+        fn completed(&self) -> Vec<super::types::PuzzleId> {
             UNLOCKED.to_vec()
+        }
+
+        fn game_started(&self) -> bool {
+            true
         }
     }
 
@@ -76,6 +80,10 @@ mod test {
         assert!(result);
 
         let expr = "(not (counteq (set 4 5 6) 3))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(game-started)";
         let result = eval(&state, expr);
         assert!(result);
 

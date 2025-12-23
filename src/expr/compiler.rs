@@ -130,6 +130,12 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                     }
                     Ok(GateExpr::AnyCompleted(compile_set(&items[1])?))
                 }
+                "game-started" => {
+                    if items.len() != 1 {
+                        return Err(CompileError::BadForm("game-started expects 0 arg"));
+                    }
+                    Ok(GateExpr::GameStarted)
+                }
                 "set" | "range" => Ok(GateExpr::AnyCompleted(compile_set(expr)?)),
                 _ if head.starts_with("count") => {
                     let suffix = head.strip_prefix("count").unwrap();

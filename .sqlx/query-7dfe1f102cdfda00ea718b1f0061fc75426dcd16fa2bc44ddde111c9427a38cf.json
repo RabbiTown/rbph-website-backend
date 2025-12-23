@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_submission\n        SET saction = $1, sresult = $2, real_answer = $3, ignored = $7\n        WHERE id = $4\n        RETURNING (\n            SELECT COUNT(*) FROM rb_submission\n            WHERE team_id = $5 AND puzzle_id = $6\n        );",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Text",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7dfe1f102cdfda00ea718b1f0061fc75426dcd16fa2bc44ddde111c9427a38cf"
+}

@@ -30,6 +30,7 @@ pub enum GateExpr {
     Completed(PuzzleId),
     AllCompleted(SetExpr),
     AnyCompleted(SetExpr),
+    GameStarted,
 
     CountCmp {
         op: CmpOp,
@@ -80,18 +81,20 @@ pub fn eval_compiled<S: PuzzleStates>(state: &S, expr: &GateExpr) -> bool {
         GateExpr::Or(xs) => xs.iter().any(|e| eval_compiled(state, e)),
         GateExpr::Not(x) => !eval_compiled(state, x),
 
-        GateExpr::Completed(id) => state.is_unlocked(*id),
+        GateExpr::Completed(id) => state.is_completed(*id),
 
         GateExpr::AllCompleted(set) => materialize_set(state, set)
             .iter()
-            .all(|&id| state.is_unlocked(id)),
+            .all(|&id| state.is_completed(id)),
         GateExpr::AnyCompleted(set) => materialize_set(state, set)
             .iter()
-            .any(|&id| state.is_unlocked(id)),
+            .any(|&id| state.is_completed(id)),
+
+        GateExpr::GameStarted => state.game_started(),
 
         GateExpr::CountCmp { op, set, n } => {
             let ids = materialize_set(state, set);
-            let cnt = ids.into_iter().filter(|&id| state.is_unlocked(id)).count();
+            let cnt = ids.into_iter().filter(|&id| state.is_completed(id)).count();
             cmp_usize(op.clone(), cnt, *n)
         }
     }

@@ -38,6 +38,10 @@ impl LeaderBoard {
         self.order_dirty = true;
         self.json_cache = None;
     }
+
+    fn mark_order_clean(&mut self) {
+        self.order_dirty = false;
+    }
 }
 
 pub struct LeaderBoardCache {
@@ -55,19 +59,15 @@ impl LeaderBoardCache {
         game_id: i32,
     ) -> Result<Vec<i32>, RbInternalError> {
         let result = sqlx::query_scalar!(
-            "WITH team_solves AS (
-                SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at
-                FROM rb_submission WHERE saction = 1
-                GROUP BY team_id, puzzle_id
-            )
-            SELECT t.id AS team_id
+            "SELECT t.id
             FROM rb_team t
-            LEFT JOIN team_solves ts ON ts.team_id = t.id
-            WHERE t.game_id = $1
+            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1
+            WHERE t.game_id = $1 AND t.tstate > 0
             GROUP BY t.id
-            ORDER BY CASE WHEN t.tstate = 2 THEN 10000000000 - EXTRACT(EPOCH FROM COALESCE(t.finish_at, NOW()))::int
-                ELSE COUNT(ts.puzzle_id) * 10000000 - EXTRACT(EPOCH FROM COALESCE(MAX(ts.ctime_at), NOW()))::int
-            END DESC;",
+            ORDER BY t.tstate DESC,
+                finish_at ASC NULLS LAST,
+                COUNT(tp.puzzle_id) DESC,
+                MAX(tp.solve_at) ASC NULLS LAST;",
             game_id
         )
         .fetch_all(db_pool)
@@ -87,6 +87,8 @@ impl LeaderBoardCache {
         let cache = guard.get_mut(&game_id).ok_or("Not Found")?;
         cache.order = new_order;
 
+        cache.mark_order_clean();
+
         Ok(())
     }
 
@@ -96,20 +98,16 @@ impl LeaderBoardCache {
         game_id: i32,
     ) -> Result<Vec<LeaderBoardTeamInfo>, RbInternalError> {
         let teams = sqlx::query!(
-            "WITH team_solves AS (
-                SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at
-                FROM rb_submission WHERE saction = 1
-                GROUP BY team_id, puzzle_id
-            )
-            SELECT t.id, t.tname, t.bio, t.finish_at, MAX(ts.ctime_at) AS last_solved_at,
-                COUNT(ts.puzzle_id) AS \"solves!\"
+            "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
+                COUNT(tp.puzzle_id) AS \"solves!\"
             FROM rb_team t
-            LEFT JOIN team_solves ts ON ts.team_id = t.id
+            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1
             WHERE t.game_id = $1 AND t.tstate > 0
             GROUP BY t.id
-            ORDER BY CASE WHEN t.tstate = 2 THEN 10000000000 - EXTRACT(EPOCH FROM COALESCE(t.finish_at, NOW()))::int
-                ELSE COUNT(ts.puzzle_id) * 10000000 - EXTRACT(EPOCH FROM COALESCE(MAX(ts.ctime_at), NOW()))::int
-            END DESC;",
+            ORDER BY t.tstate DESC,
+                finish_at ASC NULLS LAST,
+                \"solves!\" DESC,
+                MAX(tp.solve_at) ASC NULLS LAST;",
             game_id
         )
         .fetch_all(db_pool)
@@ -120,7 +118,7 @@ impl LeaderBoardCache {
             FROM rb_team_member tm
             JOIN rb_user u ON u.id = tm.user_id
             WHERE tm.game_id = $1
-            ORDER BY tm.team_id, tm.is_captain DESC, u.id ASC;",
+            ORDER BY tm.is_captain DESC, tm.ctime_at ASC;",
             game_id
         )
         .fetch_all(db_pool)
@@ -176,20 +174,12 @@ impl LeaderBoardCache {
         team_id: i32,
     ) -> Result<(i32, LeaderBoardTeamInfo), RbInternalError> {
         let team = sqlx::query!(
-            "WITH team_solves AS (
-                SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at
-                FROM rb_submission WHERE saction = 1
-                GROUP BY team_id, puzzle_id
-            )
-            SELECT t.id, t.tname, t.bio, t.finish_at, MAX(ts.ctime_at) AS last_solved_at,
-                COUNT(ts.puzzle_id) AS \"solves!\", t.game_id
+            "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
+                COUNT(tp.puzzle_id) AS \"solves!\", t.game_id
             FROM rb_team t
-            LEFT JOIN team_solves ts ON ts.team_id = t.id
+            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1
             WHERE t.id = $1
-            GROUP BY t.id
-            ORDER BY CASE WHEN t.tstate = 2 THEN 10000000000 - EXTRACT(EPOCH FROM COALESCE(t.finish_at, NOW()))::int
-                ELSE COUNT(ts.puzzle_id) * 10000000 - EXTRACT(EPOCH FROM COALESCE(MAX(ts.ctime_at), NOW()))::int
-            END DESC;",
+            GROUP BY t.id;",
             team_id
         )
         .fetch_one(db_pool)
@@ -200,7 +190,7 @@ impl LeaderBoardCache {
             FROM rb_team_member tm
             JOIN rb_user u ON u.id = tm.user_id
             WHERE tm.team_id = $1
-            ORDER BY tm.is_captain DESC, u.id ASC;",
+            ORDER BY tm.is_captain DESC, tm.ctime_at ASC;",
             team_id
         )
         .fetch_all(db_pool)
@@ -232,6 +222,7 @@ impl LeaderBoardCache {
         Ok(())
     }
 
+    // TODO : use scheduled update (5-10s maybe)
     pub async fn get_info_str(
         &self,
         db_pool: &DbPool,
@@ -242,11 +233,9 @@ impl LeaderBoardCache {
             let guard = self.cache.read().await;
             match guard.get(&game_id) {
                 None => (true, false),
-                Some(leaderboard) => (false, leaderboard.order_dirty),
+                Some(cache) => (false, cache.order_dirty),
             }
         };
-
-        log::debug!("needs_all = {needs_all} ; needs_order = {needs_order}");
 
         if needs_all {
             self.update_all(db_pool, game_id).await?;
@@ -282,8 +271,8 @@ impl LeaderBoardCache {
         // update json cache (W LOCK)
         {
             let mut guard = self.cache.write().await;
-            if let Some(leaderboard) = guard.get_mut(&game_id) {
-                leaderboard.json_cache = Some(result.clone());
+            if let Some(cache) = guard.get_mut(&game_id) {
+                cache.json_cache = Some(result.clone());
             }
         }
 

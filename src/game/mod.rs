@@ -1,1 +1,1 @@
-pub mod puzzle;
+pub mod judge;

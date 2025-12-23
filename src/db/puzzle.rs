@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
@@ -10,9 +10,10 @@ use time::OffsetDateTime;
 use crate::{
     DbPool, KvPool, db,
     error::RbInternalError,
+    expr::{self, ast::GateExpr, types::PuzzleStates},
     game::{
         self,
-        puzzle::{JudgeResult, JudgeRule, normalize_answer},
+        judge::{JudgeResult, JudgeRule, normalize_answer},
     },
     model::game::{RbContentType, RbJudgeAction, RbPuzzleType, RbTeamPuzzleState},
 };
@@ -297,12 +298,55 @@ pub async fn get_judge_rules(
         return Ok(None);
     }
 
-    let rules = game::puzzle::parse_judge(&judge_json.unwrap())?;
+    let rules = game::judge::parse_judge(&judge_json.unwrap())?;
 
     let rules = Arc::new(rules);
     JUDGE_CACHE.insert(puzzle_id, rules.clone());
 
     Ok(Some(rules))
+}
+
+static UNLOCK_COND_CACHE: Lazy<DashMap<i32, Arc<Vec<(i32, GateExpr)>>>> = Lazy::new(DashMap::new);
+
+pub async fn get_unlock_conds_by_game(
+    pool: &DbPool,
+    game_id: i32,
+) -> Result<Arc<Vec<(i32, GateExpr)>>, RbInternalError> {
+    if let Some(c) = UNLOCK_COND_CACHE.get(&game_id) {
+        return Ok(c.clone());
+    }
+
+    let raw_exprs = sqlx::query!(
+        "SELECT p.id, p.unlock_cond
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        JOIN rb_game g ON g.id = r.game_id
+        WHERE g.id = $1;",
+        game_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let exprs: Vec<(i32, GateExpr)> = raw_exprs
+        .iter()
+        .filter_map(|r| {
+            if r.unlock_cond == "default" {
+                return None;
+            }
+            match expr::compile_gate_expr(&r.unlock_cond) {
+                Ok(expr) => Some((r.id, expr)),
+                Err(e) => {
+                    log::warn!("Failed to parse unlock_cond for puzzle {}: {}", r.id, e);
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let arc_expr = Arc::new(exprs);
+    UNLOCK_COND_CACHE.insert(game_id, arc_expr.clone());
+
+    Ok(arc_expr)
 }
 
 #[derive(FromRow, Serialize)]
@@ -411,7 +455,7 @@ pub async fn submit_answer(
     }
 
     let rules = judge.unwrap();
-    let result = game::puzzle::judge_by_rules(&rules, &norm_answer)?;
+    let result = game::judge::judge_by_rules(&rules, &norm_answer)?;
 
     let submit_count = sqlx::query_scalar!(
         "UPDATE rb_submission
@@ -435,17 +479,21 @@ pub async fn submit_answer(
 
     match result.action {
         RbJudgeAction::Correct => {
-            sqlx::query!(
-                "UPDATE rb_team_puzzle SET pstate = 1
-                WHERE team_id = $1 AND puzzle_id = $2",
+            let result = sqlx::query!(
+                "UPDATE rb_team_puzzle SET pstate = 1, solve_at = NOW()
+                WHERE team_id = $1 AND puzzle_id = $2 AND pstate = 0",
                 team_id,
                 puzzle_id
             )
             .execute(db_pool)
             .await?;
+
+            if result.rows_affected() > 0 {
+                unlock_new_puzzles(db_pool, team_id).await?
+            }
         }
         RbJudgeAction::StartGame => {
-            sqlx::query!(
+            let result = sqlx::query!(
                 "UPDATE rb_team SET tstate = 1
                 WHERE id = $1 AND tstate = 0",
                 team_id
@@ -453,17 +501,21 @@ pub async fn submit_answer(
             .execute(db_pool)
             .await?;
 
-            sqlx::query!(
-                "INSERT INTO rb_team_currency (team_id, currency_id)
-                SELECT t.id AS team_id, c.id AS currency_id
-                FROM rb_team t
-                JOIN rb_currency c ON c.game_id = t.game_id
-                WHERE t.id = $1
-                ON CONFLICT (team_id, currency_id) DO NOTHING;",
-                team_id
-            )
-            .execute(db_pool)
-            .await?;
+            if result.rows_affected() > 0 {
+                sqlx::query!(
+                    "INSERT INTO rb_team_currency (team_id, currency_id)
+                    SELECT t.id AS team_id, c.id AS currency_id
+                    FROM rb_team t
+                    JOIN rb_currency c ON c.game_id = t.game_id
+                    WHERE t.id = $1
+                    ON CONFLICT (team_id, currency_id) DO NOTHING;",
+                    team_id
+                )
+                .execute(db_pool)
+                .await?;
+
+                unlock_new_puzzles(db_pool, team_id).await?
+            }
         }
         _ => {}
     }
@@ -475,6 +527,81 @@ pub async fn submit_answer(
     }
 
     Ok(SubmitAnswerResult::Ok(result))
+}
+
+struct RbPuzzleStates {
+    unlocked: HashSet<i32>,
+    game_started: bool,
+}
+
+impl PuzzleStates for RbPuzzleStates {
+    fn is_completed(&self, id: expr::types::PuzzleId) -> bool {
+        self.unlocked.contains(&id.try_into().unwrap_or(i32::MAX))
+    }
+
+    fn completed_count(&self) -> expr::types::CountSize {
+        self.unlocked.len()
+    }
+
+    fn completed(&self) -> Vec<expr::types::PuzzleId> {
+        self.unlocked
+            .iter()
+            .map(|&x| x.try_into().unwrap_or(0))
+            .collect()
+    }
+
+    fn game_started(&self) -> bool {
+        self.game_started
+    }
+}
+
+pub async fn unlock_new_puzzles(db_pool: &DbPool, team_id: i32) -> Result<(), RbInternalError> {
+    let info = sqlx::query!(
+        "SELECT t.game_id, t.tstate, tp.puzzle_id AS \"puzzle_id?\"
+        FROM rb_team t
+        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate >= 1
+        WHERE t.id = $1;",
+        team_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    // dont know if possible but we just protect from it
+    if info.is_empty() {
+        return Ok(());
+    }
+
+    let unlocked = info.iter().filter_map(|r| r.puzzle_id).collect();
+    let state = RbPuzzleStates {
+        unlocked,
+        game_started: info[0].tstate > 0,
+    };
+
+    let conds = get_unlock_conds_by_game(db_pool, info[0].game_id).await?;
+
+    let mut unlocks: Vec<i32> = Vec::new();
+
+    for cond in conds.iter() {
+        if !state.is_completed(cond.0.try_into().unwrap_or(0))
+            && expr::ast::eval_compiled(&state, &cond.1)
+        {
+            unlocks.push(cond.0);
+        }
+    }
+
+    if !unlocks.is_empty() {
+        sqlx::query!(
+            "INSERT INTO rb_team_puzzle (team_id, puzzle_id, pstate)
+            SELECT $1, UNNEST($2::int[]), 0
+            ON CONFLICT DO NOTHING;",
+            team_id,
+            &unlocks
+        )
+        .execute(db_pool)
+        .await?;
+    }
+
+    Ok(())
 }
 
 #[derive(FromRow, Serialize)]

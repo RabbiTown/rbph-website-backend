@@ -137,6 +137,7 @@ CREATE TABLE rb_team_puzzle(
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     pstate          SMALLINT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    solve_at        TIMESTAMPTZ,
     PRIMARY KEY (team_id, puzzle_id)
 );
 
@@ -159,10 +160,6 @@ CREATE TABLE rb_submission(
 CREATE UNIQUE INDEX rb_idx_submission_team_puzzle_norm
 ON rb_submission(team_id, puzzle_id, norm_answer)
 WHERE ignored = FALSE;
-
-CREATE INDEX rb_idx_submission_team_action_puzzle_ctime
-ON rb_submission(team_id, saction, puzzle_id, ctime_at)
-WHERE saction = 1;
 
 -- currency
 

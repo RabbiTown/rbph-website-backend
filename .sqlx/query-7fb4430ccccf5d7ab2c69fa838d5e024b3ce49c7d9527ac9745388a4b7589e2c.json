@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id, p.unlock_cond\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_game g ON g.id = r.game_id\n        WHERE g.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "unlock_cond",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7fb4430ccccf5d7ab2c69fa838d5e024b3ce49c7d9527ac9745388a4b7589e2c"
+}

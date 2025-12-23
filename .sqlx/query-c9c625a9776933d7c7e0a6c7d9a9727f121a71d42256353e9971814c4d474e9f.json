@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH team_solves AS (\n                SELECT team_id, puzzle_id, MIN(ctime_at) AS ctime_at\n                FROM rb_submission WHERE saction = 1\n                GROUP BY team_id, puzzle_id\n            )\n            SELECT t.id, t.tname, t.bio, t.finish_at, MAX(ts.ctime_at) AS last_solved_at,\n                COUNT(ts.puzzle_id) AS \"solves!\", t.game_id\n            FROM rb_team t\n            LEFT JOIN team_solves ts ON ts.team_id = t.id\n            WHERE t.id = $1\n            GROUP BY t.id\n            ORDER BY CASE WHEN t.tstate = 2 THEN 10000000000 - EXTRACT(EPOCH FROM COALESCE(t.finish_at, NOW()))::int\n                ELSE COUNT(ts.puzzle_id) * 10000000 - EXTRACT(EPOCH FROM COALESCE(MAX(ts.ctime_at), NOW()))::int\n            END DESC;",
+  "query": "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,\n                COUNT(tp.puzzle_id) AS \"solves!\", t.game_id\n            FROM rb_team t\n            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1\n            WHERE t.id = $1\n            GROUP BY t.id;",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       false
     ]
   },
-  "hash": "c07fa1b8085b7176f8b62c926badd2682c028a1580ea0212381e669df7bf0200"
+  "hash": "c9c625a9776933d7c7e0a6c7d9a9727f121a71d42256353e9971814c4d474e9f"
 }

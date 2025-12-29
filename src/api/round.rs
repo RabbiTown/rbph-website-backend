@@ -9,7 +9,9 @@ use actix_web::{
 };
 use serde::Deserialize;
 
-use crate::{DbPool, KvPool, api::error_handler, db, error::RbError, extractor::auth::AuthUser};
+use crate::{
+    AppState, api::error_handler, db, error::RbError, extractor::auth::AuthUser,
+};
 
 #[derive(Deserialize)]
 struct RoundPathInfo {
@@ -19,14 +21,13 @@ struct RoundPathInfo {
 async fn get_round(
     info: web::Path<RoundPathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::round::get_info_for_team_str(
-        &db_pool,
-        &kv_pool,
+        &app.db,
+        &app.kv,
         info.round_id,
-        user.game.unwrap().team_id,
+        user.get_team_id().ok_or(RbError::forbid())?,
     )
     .await?;
     if result.is_none() {
@@ -55,10 +56,9 @@ async fn check_round_middleware(
         .flatten()
         .ok_or_else(RbError::not_found)?;
 
-    let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
-    let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();
+    let app = req.app_data::<web::Data<AppState>>().unwrap();
 
-    match db::round::get_round_user_info(db_pool, kv_pool, user_id, round_id).await? {
+    match db::round::get_round_user_info(&app.db, &app.kv, user_id, round_id).await? {
         Some(info) => {
             req.extensions_mut().insert(info);
         }

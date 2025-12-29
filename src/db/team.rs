@@ -1,9 +1,11 @@
 use deadpool_redis::redis::{AsyncCommands, RedisError};
 use serde::{Deserialize, Serialize};
+use sqlx::QueryBuilder;
 use time::OffsetDateTime;
+use validator::Validate;
 
 use crate::{
-    DbPool, KvPool,
+    DbPool, KvPool, db,
     error::RbInternalError,
     model::game::{RbTeam, RbTeamState},
 };
@@ -75,6 +77,28 @@ pub async fn update_user_team_cache(
     tokio::spawn(async move {
         let mut conn = kv_pool.get().await.unwrap();
         let _: Result<(), RedisError> = conn.set_ex(&key, team_id.unwrap_or(-1), 60 * 60).await;
+    });
+
+    Ok(())
+}
+
+pub async fn update_users_team_cache(
+    kv_pool: &KvPool,
+    user_ids: &[i32],
+    game_id: i32,
+    team_id: Option<i32>,
+) -> Result<(), RbInternalError> {
+    let keys: Vec<String> = user_ids
+        .iter()
+        .map(|x| format!("game:{game_id}:user:{x}:team_id"))
+        .collect();
+
+    let kv_pool = kv_pool.clone();
+    tokio::spawn(async move {
+        let mut conn = kv_pool.get().await.unwrap();
+        for key in keys {
+            let _: Result<(), RedisError> = conn.set_ex(&key, team_id.unwrap_or(-1), 60 * 60).await;
+        }
     });
 
     Ok(())
@@ -256,16 +280,137 @@ pub async fn leave(
     user_id: i32,
 ) -> Result<bool, RbInternalError> {
     let result = sqlx::query!(
-        "DELETE FROM rb_team_member
-        WHERE game_id = $1 AND user_id = $2 AND is_captain = FALSE",
+        "DELETE FROM rb_team_member tm
+        USING rb_team t
+        WHERE t.id = tm.team_id AND t.game_id = $1 AND t.tstate = 0
+            AND tm.user_id = $2 AND tm.is_captain = FALSE",
         game_id,
         user_id
     )
     .execute(db_pool)
     .await?;
 
-    update_user_team_cache(kv_pool, user_id, game_id, None).await?;
-    Ok(result.rows_affected() > 0)
+    if result.rows_affected() > 0 {
+        update_user_team_cache(kv_pool, user_id, game_id, None).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub async fn disband(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    game_id: i32,
+    user_id: i32,
+) -> Result<bool, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+
+    let info = sqlx::query!(
+        "SELECT team_id, user_id FROM rb_team_member
+        WHERE team_id = (
+            SELECT tm.team_id FROM rb_team_member tm
+            JOIN rb_team t ON t.id = tm.team_id
+            WHERE t.game_id = $1 AND t.tstate = 0
+                AND tm.user_id = $2 AND tm.is_captain
+        ) FOR UPDATE;",
+        game_id,
+        user_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if info.is_empty() {
+        return Ok(false);
+    }
+
+    let result = sqlx::query!(
+        "DELETE FROM rb_team
+        WHERE id = $1;",
+        info[0].team_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        tx.commit().await?;
+
+        let members: Vec<i32> = info.iter().map(|x| x.user_id).collect();
+        update_users_team_cache(kv_pool, &members, game_id, None).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+#[derive(Deserialize, Validate)]
+pub struct UserUpdateData {
+    #[validate(length(min = 1, max = 40))]
+    pub tname: Option<String>,
+    #[validate(length(min = 8, max = 32))]
+    pub pass: Option<String>,
+    #[validate(length(max = 200))]
+    pub bio: Option<String>,
+}
+
+pub async fn user_update(
+    db_pool: &DbPool,
+    game_id: i32,
+    user_id: i32,
+    data: &UserUpdateData,
+) -> Result<bool, RbInternalError> {
+    let mut qb = QueryBuilder::new("UPDATE rb_team SET ");
+
+    let mut first = true;
+
+    if let Some(tname) = &data.tname {
+        if !first {
+            qb.push(", ");
+        }
+        qb.push("tname = ").push_bind(tname);
+        first = false;
+    }
+
+    if let Some(pass) = &data.pass {
+        if !first {
+            qb.push(", ");
+        }
+        qb.push("pass = ").push_bind(pass);
+        first = false;
+    }
+
+    if let Some(bio) = &data.bio {
+        if !first {
+            qb.push(", ");
+        }
+        qb.push("bio = ").push_bind(bio);
+        first = false;
+    }
+
+    if first {
+        return Ok(false);
+    }
+
+    qb.push(
+        " WHERE id = (SELECT team_id FROM rb_team_member tm
+            WHERE user_id = ",
+    )
+    .push_bind(user_id)
+    .push(" AND game_id = ")
+    .push_bind(game_id)
+    .push(" AND is_captain) RETURNING id;");
+
+    let result = qb
+        .build_query_scalar::<i32>()
+        .fetch_optional(db_pool)
+        .await?;
+
+    if let Some(team_id) = result {
+        db::cache::invalidate_team_info(db_pool, team_id).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[derive(Serialize)]

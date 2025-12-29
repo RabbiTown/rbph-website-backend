@@ -1,18 +1,20 @@
+use actix_session::SessionExt;
 use actix_web::{
-    HttpMessage, HttpResponse, Result,
+    HttpMessage, HttpRequest, HttpResponse, Result,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
     http::header::ContentType,
     middleware::{self, Next},
-    web,
+    web::{self, Payload},
 };
 use serde::Deserialize;
 
 use crate::{
-    DbPool,
+    AppState,
     api::{error_handler, team},
     db,
     error::RbError,
+    extractor::auth::AuthUser,
     middleware::privilege::PrivilegeMiddleware,
     model::user::RbUserRole,
 };
@@ -22,8 +24,8 @@ struct PathInfo {
     game_id: i32,
 }
 
-async fn get_info(info: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
-    let result = db::game::get_by_id(&db_pool, info.game_id).await?;
+async fn get_info(info: web::Path<PathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let result = db::game::get_by_id(&app.db, info.game_id).await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
@@ -31,22 +33,31 @@ async fn get_info(info: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Resu
     Ok(HttpResponse::Ok().json(result))
 }
 
-async fn list_online(db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
-    let result = db::game::list_all(&db_pool, true, true).await?;
+async fn list_online(app: web::Data<AppState>) -> Result<HttpResponse> {
+    let result = db::game::list_all(&app.db, true, true).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }
 
-async fn get_anmts(info: web::Path<PathInfo>, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().json(db::anmt::list_all(&db_pool, true, Some(info.game_id)).await?))
+async fn get_anmts(
+    info: web::Path<PathInfo>,
+    user: Option<AuthUser>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.and_then(|x| x.get_team_id());
+    if let Some(team_id) = team_id {
+        Ok(HttpResponse::Ok().json(db::anmt::list_all_for_team(&app.db, team_id).await?))
+    } else {
+        Ok(HttpResponse::Ok().json(db::anmt::list_all_for_public(&app.db, info.game_id).await?))
+    }
 }
 
 async fn get_leaderboard(
     info: web::Path<PathInfo>,
-    db_pool: web::Data<DbPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::board::LEADER_BOARD_CACHE
-        .get_info_str(&db_pool, info.game_id)
+        .get_info_str(&app.db, info.game_id)
         .await?;
 
     Ok(HttpResponse::Ok()
@@ -54,8 +65,18 @@ async fn get_leaderboard(
         .body(result))
 }
 
-// as games' visibilities don't change a lot, we ignore TOCTOU issues here
-async fn check_game_id_middleware(
+async fn sync_ws(
+    req: HttpRequest,
+    stream: Payload,
+    info: web::Path<PathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    //
+    Ok(HttpResponse::ImATeapot().finish())
+}
+
+async fn check_game_middleware(
     req: ServiceRequest,
     next: Next<impl MessageBody>,
 ) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
@@ -65,12 +86,21 @@ async fn check_game_id_middleware(
         .and_then(|s| s.parse().ok())
         .ok_or_else(RbError::not_found)?;
 
-    let user_role = *req.extensions().get().unwrap_or(&RbUserRole::Banned);
+    let user_id = req.get_session().get::<i32>("user_id").ok().flatten();
 
-    let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
+    let app = req.app_data::<web::Data<AppState>>().unwrap();
 
-    if !db::game::exists(db_pool, game_id, user_role).await? {
-        RbError::not_found().err()?
+    if let Some(user_id) = user_id {
+        match db::game::get_game_user_info(&app.db, &app.kv, user_id, game_id).await? {
+            Some(info) => {
+                req.extensions_mut().insert(info);
+            }
+            None => {
+                RbError::not_found().err()?;
+            }
+        };
+    } else if !db::game::exists(&app.db, game_id, RbUserRole::User).await? {
+        RbError::not_found().err()?;
     }
 
     next.call(req).await
@@ -80,10 +110,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.route("/online", web::get().to(list_online));
     cfg.service(
         web::scope("/{game_id}")
-            .wrap(middleware::from_fn(check_game_id_middleware))
+            .wrap(middleware::from_fn(check_game_middleware))
             .route("", web::get().to(get_info))
+            .route("/sync", web::get().to(sync_ws))
             .route("/announcements", web::get().to(get_anmts))
-            .route("/leaderboard", web::get().to(get_leaderboard))
             .service(
                 web::scope("")
                     .wrap(PrivilegeMiddleware::new(RbUserRole::User))
@@ -92,6 +122,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                             .configure(team::games_config)
                             .default_service(web::route().to(error_handler)),
                     )
+                    .route("/leaderboard", web::get().to(get_leaderboard))
                     .default_service(web::route().to(error_handler)),
             )
             .default_service(web::route().to(error_handler)),

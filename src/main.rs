@@ -10,14 +10,24 @@ mod model;
 mod module;
 mod serde_helpers;
 
+use actix::{Actor, Addr};
 use actix_session::{SessionMiddleware, storage::RedisSessionStore};
 use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
 use sqlx::PgPool;
 
+use crate::{config::Settings, module::sync::SyncHub};
+
 pub type DbPool = PgPool;
 pub type KvPool = deadpool_redis::Pool;
+
+pub struct AppState {
+    pub db: DbPool,
+    pub kv: KvPool,
+    pub settings: Settings,
+    pub sync_hub: Addr<SyncHub>,
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -27,7 +37,7 @@ async fn main() -> std::io::Result<()> {
 
     let settings = config::Settings::read_from_file("config.toml");
     if settings.is_err() {
-        log::error!("failed to read config : {}", settings.err().unwrap());
+        log::error!("Failed to read config : {}", settings.err().unwrap());
         std::process::exit(1);
     }
 
@@ -35,24 +45,28 @@ async fn main() -> std::io::Result<()> {
     let config = settings.app.clone();
 
     let db_pool = db::create_pool(&config.db_addr).await.unwrap();
-    let db_pool_data = web::Data::new(db_pool);
 
     let kv_pool = deadpool_redis::Config::from_url(&config.kv_addr)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .unwrap();
-    let kv_pool_data = web::Data::new(kv_pool);
 
     let session_store = RedisSessionStore::new(&config.kv_addr).await.unwrap();
     let secret_key = Key::from(&config.get_secret_key());
 
-    let settings_data = web::Data::new(settings);
+    let sync_hub = SyncHub::default().start();
+
+    let app_state = AppState {
+        db: db_pool,
+        kv: kv_pool,
+        settings,
+        sync_hub,
+    };
+    let app_state_data = web::Data::new(app_state);
 
     let (host, port) = (&config.bind_addr.0, config.bind_addr.1);
     let server = HttpServer::new(move || {
         App::new()
-            .app_data(db_pool_data.clone())
-            .app_data(kv_pool_data.clone())
-            .app_data(settings_data.clone())
+            .app_data(app_state_data.clone())
             .wrap(Logger::default())
             .wrap(
                 SessionMiddleware::builder(session_store.clone(), secret_key.clone())

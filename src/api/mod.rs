@@ -15,7 +15,7 @@ use actix_web::{
 use crate::{middleware::privilege::PrivilegeMiddleware, model::user::RbUserRole};
 
 async fn error_handler() -> Result<HttpResponse> {
-    Err(error::ErrorForbidden("forbidden"))
+    Err(error::ErrorForbidden("rbph-website"))
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {

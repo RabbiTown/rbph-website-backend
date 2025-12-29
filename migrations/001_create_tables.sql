@@ -90,18 +90,6 @@ BEFORE INSERT ON rb_team_member
 FOR EACH ROW
 EXECUTE FUNCTION rb_team_member_set_game_id();
 
--- announcement
-
-CREATE TABLE rb_announcement (
-    id              SERIAL PRIMARY KEY,
-    title           VARCHAR(120) NOT NULL,
-    content         TEXT NOT NULL,
-    is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
-    is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
-    game_id         INT REFERENCES rb_game(id),
-    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 -- round
 
 CREATE TABLE rb_round (
@@ -202,4 +190,19 @@ CREATE TABLE rb_team_hint (
     unlocked        BOOLEAN NOT NULL DEFAULT TRUE,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (team_id, hint_id)
+);
+
+-- announcement
+
+CREATE TABLE rb_announcement (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(120) NOT NULL,
+    content         TEXT NOT NULL,
+    content_type    SMALLINT NOT NULL DEFAULT 0,
+    is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
+    game_id         INT REFERENCES rb_game(id) ON DELETE CASCADE,
+    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

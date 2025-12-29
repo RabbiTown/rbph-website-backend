@@ -1,4 +1,4 @@
-use crate::{DbPool, KvPool, config::Settings, db, error::RbError, module::session};
+use crate::{AppState, db, error::RbError, module::session};
 use actix_session::Session;
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
@@ -15,7 +15,7 @@ static PWD_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[!-~]{8,64}$").unwrap
 #[derive(Serialize)]
 struct UserPreLoginResponse {}
 
-async fn pre_auth(cfg: web::Data<Settings>) -> Result<HttpResponse> {
+async fn pre_auth(app: web::Data<AppState>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(UserPreLoginResponse {}))
 }
 
@@ -43,9 +43,7 @@ enum UserLoginResult {
 async fn login(
     req: web::Json<UserLoginRequest>,
     sess: Session,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
-    settings: web::Data<Settings>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let trimmed_email = req.email.trim().to_lowercase();
     if !EMAIL_REGEX.is_match(&trimmed_email) {
@@ -61,7 +59,7 @@ async fn login(
             .err()?
     }
 
-    let user = db::user::get_by_email(&db_pool, &trimmed_email).await?;
+    let user = db::user::get_by_email(&app.db, &trimmed_email).await?;
     if user.is_none() {
         RbError::unauth()
             .code(UserLoginResult::NotExists.into())
@@ -77,7 +75,7 @@ async fn login(
         Err(e) => RbError::internal(e).err()?,
     }
 
-    session::append(&kv_pool, &sess, user.id, settings.auth.max_session).await?;
+    session::append(&app.kv, &sess, user.id, app.settings.auth.max_session).await?;
     sess.renew();
 
     Ok(HttpResponse::Ok().json(UserLoginResponse {
@@ -112,8 +110,7 @@ enum UserRegisterResult {
 
 async fn register(
     req: web::Json<UserRegisterRequest>,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let trimmed_email = req.email.trim().to_lowercase();
     if !EMAIL_REGEX.is_match(&trimmed_email) {
@@ -125,11 +122,11 @@ async fn register(
         RbError::bad_req(UserRegisterResult::InvalidPassword.into()).err()?
     }
 
-    if db::user::exists(&db_pool, &trimmed_email).await? {
+    if db::user::exists(&app.db, &trimmed_email).await? {
         RbError::conflict(UserRegisterResult::UserExists.into()).err()?
     }
 
-    let token = db::user::put_pending(&kv_pool, &trimmed_email, trimmed_pwd).await?;
+    let token = db::user::put_pending(&app.kv, &trimmed_email, trimmed_pwd).await?;
 
     log::debug!("register : {} ({})", trimmed_email, token);
 
@@ -161,10 +158,9 @@ enum UserVerifyResult {
 
 async fn verify(
     req: web::Query<UserVerifyQuery>,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let result = db::user::verify_pending(&db_pool, &kv_pool, &req.token).await?;
+    let result = db::user::verify_pending(&app.db, &app.kv, &req.token).await?;
     if result.is_none() {
         RbError::bad_req(UserVerifyResult::Invalid.into()).err()?
     }
@@ -185,8 +181,8 @@ enum UserLogoutResult {
     Ok = 0,
 }
 
-async fn logout(sess: Session, kv_pool: web::Data<KvPool>) -> Result<HttpResponse> {
-    session::invalidate(&kv_pool, &sess).await?;
+async fn logout(sess: Session, app: web::Data<AppState>) -> Result<HttpResponse> {
+    session::invalidate(&app.kv, &sess).await?;
     sess.purge();
 
     Ok(HttpResponse::Ok().json(UserLogoutResponse {

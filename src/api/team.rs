@@ -5,9 +5,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
+use validator::Validate;
 
 use crate::{
-    DbPool, KvPool,
+    AppState,
     db::{
         self,
         team::{RbCurrencyShowData, RbTeamPutData},
@@ -54,8 +55,7 @@ async fn create_self(
     user: AuthUser,
     path: web::Path<GamePathInfo>,
     req: web::Json<TeamCreateRequest>,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let req = req.into_inner();
 
@@ -73,7 +73,7 @@ async fn create_self(
         game_id: path.game_id,
     };
 
-    let team_id = db::team::user_create(&db_pool, &kv_pool, user.uid, &data).await?;
+    let team_id = db::team::user_create(&app.db, &app.kv, user.uid, &data).await?;
     if team_id.is_none() {
         RbError::conflict(TeamCreateResult::ToMany.into()).err()?
     }
@@ -84,14 +84,39 @@ async fn create_self(
     }))
 }
 
+#[derive(Serialize)]
+struct TeamUpdateResponse {
+    code: TeamUpdateResult,
+}
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+enum TeamUpdateResult {
+    Invalid = -2,
+    Bad = -1,
+    Ok = 0,
+}
+
 async fn update_self(
+    req: web::Json<db::team::UserUpdateData>,
     user: AuthUser,
     path: web::Path<GamePathInfo>,
-    req: web::Json<TeamCreateRequest>,
-    db_pool: web::Data<DbPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    // TODO
-    Ok(HttpResponse::Ok().finish())
+    if let Err(e) = req.validate() {
+        RbError::bad_req(TeamUpdateResult::Invalid.into())
+            .msg(e.to_string())
+            .err()?;
+    }
+
+    let result = db::team::user_update(&app.db, path.game_id, user.uid, &req).await?;
+    if !result {
+        RbError::conflict(TeamUpdateResult::Bad.into()).err()?;
+    }
+
+    Ok(HttpResponse::Ok().json(TeamUpdateResponse {
+        code: TeamUpdateResult::Ok,
+    }))
 }
 
 #[derive(Serialize)]
@@ -109,10 +134,24 @@ enum TeamLeaveResult {
 async fn leave_self(
     user: AuthUser,
     path: web::Path<GamePathInfo>,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let result = db::team::leave(&db_pool, &kv_pool, path.game_id, user.uid).await?;
+    let result = db::team::leave(&app.db, &app.kv, path.game_id, user.uid).await?;
+    if !result {
+        RbError::conflict(TeamLeaveResult::Bad.into()).err()?;
+    }
+
+    Ok(HttpResponse::Ok().json(TeamLeaveResponse {
+        code: TeamLeaveResult::Ok,
+    }))
+}
+
+async fn disband_self(
+    user: AuthUser,
+    path: web::Path<GamePathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let result = db::team::disband(&app.db, &app.kv, path.game_id, user.uid).await?;
     if !result {
         RbError::conflict(TeamLeaveResult::Bad.into()).err()?;
     }
@@ -147,10 +186,9 @@ async fn join(
     path: web::Path<TeamPathInfo>,
     req: web::Json<TeamJoinRequest>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let data = db::team::get_by_id_verify(&db_pool, path.team_id).await?;
+    let data = db::team::get_by_id_verify(&app.db, path.team_id).await?;
     if data.is_none() {
         RbError::not_found().err()?
     }
@@ -172,7 +210,7 @@ async fn join(
             .err()?
     }
 
-    let result = db::team::join(&db_pool, &kv_pool, path.team_id, user.uid, false).await?;
+    let result = db::team::join(&app.db, &app.kv, path.team_id, user.uid, false).await?;
 
     Ok(HttpResponse::Ok().json(TeamJoinResponse {
         code: if result {
@@ -186,9 +224,9 @@ async fn join(
 async fn get_self(
     path: web::Path<GamePathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let result = db::team::get_by_user_game(&db_pool, user.uid, path.game_id).await?;
+    let result = db::team::get_by_user_game(&app.db, user.uid, path.game_id).await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
@@ -203,18 +241,13 @@ struct TeamCurrencyResponse {
     data: Vec<RbCurrencyShowData>,
 }
 
-async fn get_self_currency(
-    req: web::Path<GamePathInfo>,
-    user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
-) -> Result<HttpResponse> {
-    let team_id = db::team::get_id_by_user_game(&db_pool, &kv_pool, user.uid, req.game_id).await?;
+async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let team_id = user.get_team_id();
     if team_id.is_none() {
         RbError::not_found().err()?
     }
 
-    let result = db::team::get_currency_info(&db_pool, &kv_pool, team_id.unwrap()).await?;
+    let result = db::team::get_currency_info(&app.db, &app.kv, team_id.unwrap()).await?;
 
     Ok(HttpResponse::Ok().json(TeamCurrencyResponse {
         server_time: OffsetDateTime::now_utc(),
@@ -223,15 +256,12 @@ async fn get_self_currency(
 }
 
 // TODO : add paging
-async fn list_all(user: AuthUser, db_pool: web::Data<DbPool>) -> Result<HttpResponse> {
+async fn list_all(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().finish())
 }
 
-async fn get_info(
-    req: web::Path<TeamPathInfo>,
-    db_pool: web::Data<DbPool>,
-) -> Result<HttpResponse> {
-    let result = db::team::get_by_id_show(&db_pool, req.team_id).await?;
+async fn get_info(req: web::Path<TeamPathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let result = db::team::get_by_id_show(&app.db, req.team_id).await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
@@ -246,6 +276,7 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
         .route("/self", web::post().to(create_self))
         .route("/self", web::patch().to(update_self))
         .route("/self/leave", web::post().to(leave_self))
+        .route("/self/disband", web::post().to(disband_self))
         .route("/self/currency", web::get().to(get_self_currency));
 }
 

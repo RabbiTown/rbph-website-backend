@@ -2,12 +2,18 @@ use actix_session::SessionExt;
 use actix_web::{Error, FromRequest, HttpMessage, HttpRequest, dev::Payload};
 use futures_util::future::{Ready, ready};
 
-use crate::{db::puzzle::GameUserInfo, error::RbError, model::user::RbUserRole};
+use crate::{db::game::GameUserInfo, error::RbError, model::user::RbUserRole};
 
 pub struct AuthUser {
     pub uid: i32,
     pub role: RbUserRole,
     pub game: Option<GameUserInfo>,
+}
+
+impl AuthUser {
+    pub fn get_team_id(&self) -> Option<i32> {
+        self.game.as_ref().and_then(|x| x.team_id)
+    }
 }
 
 impl FromRequest for AuthUser {

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_repr::Serialize_repr;
 
 use crate::{
-    DbPool, KvPool,
+    AppState,
     api::error_handler,
     db::{self},
     error::RbError,
@@ -32,13 +32,12 @@ struct HintPathInfo {
 async fn get_puzzle(
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_puzzle_show_str_for_team(
-        &db_pool,
-        &kv_pool,
-        user.game.unwrap().team_id,
+        &app.db,
+        &app.kv,
+        user.get_team_id().ok_or(RbError::forbid())?,
         info.puzzle_id,
     )
     .await?;
@@ -67,14 +66,13 @@ async fn judge_puzzle(
     req: web::Json<PuzzleJudgeRequest>,
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let submit_result = db::puzzle::submit_answer(
-        &db_pool,
-        &kv_pool,
+        &app.db,
+        &app.kv,
         user.uid,
-        user.game.unwrap().team_id,
+        user.get_team_id().ok_or(RbError::forbid())?,
         info.puzzle_id,
         &req.answer,
     )
@@ -101,13 +99,12 @@ pub struct SubmissionQuery {
 async fn get_puzzle_hints(
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_hints_show_str_for_team(
-        &db_pool,
-        &kv_pool,
-        user.game.unwrap().team_id,
+        &app.db,
+        &app.kv,
+        user.get_team_id().ok_or(RbError::forbid())?,
         info.puzzle_id,
     )
     .await?;
@@ -128,11 +125,10 @@ pub enum PurchaseHintResult {
 async fn purchase_hint(
     info: web::Path<HintPathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
-    kv_pool: web::Data<KvPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let purchase_result =
-        db::puzzle::purchase_hint(&db_pool, &kv_pool, user.uid, info.hint_id).await?;
+        db::puzzle::purchase_hint(&app.db, &app.kv, user.uid, info.hint_id).await?;
 
     match purchase_result {
         db::puzzle::PurchaseHintResult::Unavailable => {
@@ -149,11 +145,11 @@ async fn get_puzzle_submissions(
     req: web::Query<SubmissionQuery>,
     info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
-    db_pool: web::Data<DbPool>,
+    app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_team_submissions(
-        &db_pool,
-        user.game.unwrap().team_id,
+        &app.db,
+        user.get_team_id().ok_or(RbError::forbid())?,
         info.puzzle_id,
         req.page.unwrap_or(0),
         req.only_ok.unwrap_or(false),
@@ -180,10 +176,9 @@ async fn check_puzzle_middleware(
         .flatten()
         .ok_or_else(RbError::not_found)?;
 
-    let db_pool = req.app_data::<web::Data<DbPool>>().unwrap();
-    let kv_pool = req.app_data::<web::Data<KvPool>>().unwrap();
+    let app = req.app_data::<web::Data<AppState>>().unwrap();
 
-    match db::puzzle::get_puzzle_user_info(db_pool, kv_pool, user_id, puzzle_id).await? {
+    match db::puzzle::get_puzzle_user_info(&app.db, &app.kv, user_id, puzzle_id).await? {
         Some(info) => {
             req.extensions_mut().insert(info);
         }

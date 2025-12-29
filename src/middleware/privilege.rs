@@ -12,7 +12,9 @@ use actix_web::{
 };
 use futures_util::future::LocalBoxFuture;
 
-use crate::{DbPool, KvPool, db, error::RbError, model::user::RbUserRole, module::session};
+use crate::{
+    AppState, db, error::RbError, model::user::RbUserRole, module::session,
+};
 
 pub struct PrivilegeMiddleware {
     required: RbUserRole,
@@ -65,36 +67,12 @@ where
         let srv = self.service.clone();
         let required = self.required;
 
-        let kv_pool = match req.app_data::<web::Data<KvPool>>() {
-            Some(data) => data.clone(),
-            None => {
-                return Box::pin(async {
-                    Ok(req.into_response(
-                        RbError::internal("redis pool not found")
-                            .resp()
-                            .map_into_right_body(),
-                    ))
-                });
-            }
-        };
-
-        let db_pool = match req.app_data::<web::Data<DbPool>>() {
-            Some(data) => data.clone(),
-            None => {
-                return Box::pin(async {
-                    Ok(req.into_response(
-                        RbError::internal("sql pool not found")
-                            .resp()
-                            .map_into_right_body(),
-                    ))
-                });
-            }
-        };
-
         let sess = req.get_session();
 
         Box::pin(async move {
-            match session::verify(&kv_pool, &sess).await {
+            let app = req.app_data::<web::Data<AppState>>().unwrap();
+
+            match session::verify(&app.kv, &sess).await {
                 Ok(true) => {}
                 Ok(false) => {
                     sess.purge();
@@ -108,7 +86,7 @@ where
             let user_id = sess.get::<i32>("user_id").ok().flatten();
 
             if let Some(uid) = user_id {
-                match db::user::get_role_by_id(&db_pool, uid).await {
+                match db::user::get_role_by_id(&app.db, uid).await {
                     Ok(Some(role)) => {
                         if role >= required {
                             req.extensions_mut().insert(role);

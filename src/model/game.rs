@@ -1,6 +1,8 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
-use sqlx::{prelude::FromRow, types::time::OffsetDateTime};
+use sqlx::{
+    Decode, Postgres, Type, postgres::PgValueRef, prelude::FromRow, types::time::OffsetDateTime,
+};
 
 #[derive(FromRow, Serialize)]
 pub struct RbGame {
@@ -80,6 +82,18 @@ pub enum RbContentType {
 
     #[num_enum(catch_all)]
     Invalid(i16),
+}
+
+impl Type<sqlx::Postgres> for RbContentType {
+    fn type_info() -> <sqlx::Postgres as sqlx::Database>::TypeInfo {
+        <i16 as Type<sqlx::Postgres>>::type_info()
+    }
+}
+
+impl<'r> Decode<'r, Postgres> for RbContentType {
+    fn decode(value: PgValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(<i16 as Decode<Postgres>>::decode(value)?.into())
+    }
 }
 
 #[derive(FromRow, Serialize)]

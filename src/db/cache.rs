@@ -58,6 +58,14 @@ macro_rules! invalidate_cache {
     }};
 }
 
+pub async fn invalidate_team_info(db_pool: &DbPool, team_id: i32) -> Result<(), RbInternalError> {
+    db::board::LEADER_BOARD_CACHE
+        .update_team(db_pool, team_id, false)
+        .await?;
+
+    Ok(())
+}
+
 pub async fn invalidate_team_puzzle(
     db_pool: &DbPool,
     kv_pool: &KvPool,
@@ -74,7 +82,7 @@ pub async fn invalidate_team_puzzle(
     );
 
     db::board::LEADER_BOARD_CACHE
-        .update_team(db_pool, team_id)
+        .update_team(db_pool, team_id, true)
         .await?;
 
     Ok(())

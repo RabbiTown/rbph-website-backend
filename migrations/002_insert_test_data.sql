@@ -9,15 +9,15 @@ SELECT setval('rb_game_id_seq', 100);
 -- round
 
 INSERT INTO rb_round (id, title, content, content_type, game_id)
-VALUES (1, '序幕', '序幕', 0, 1);
+VALUES (1, '序幕', '提交「START」开始游戏。', 0, 1);
 
 SELECT setval('rb_round_id_seq', 100);
 
 -- puzzle
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
-VALUES (1, '序幕', 1, '提交「START」以开始游戏。', 0,
-        '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"EGG","action":"easter_egg"}]',
+VALUES (1, '序幕', 1, '请提交「START」以开始游戏。\n\n**注意：**开始游戏后，不再能退出、解散队伍。', 0,
+        '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"bili20fans","action":"easter_egg","result":"我的 B 站 20 粉丝啦，哇！"}]',
         'default', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
@@ -77,10 +77,18 @@ INSERT INTO rb_team (id, tname, tstate, pass, bio, game_id, finish_at)
 VALUES (2, '4S', 2, '1', '', 1, '2025-12-23 12:11');
 
 INSERT INTO rb_team_puzzle (team_id, puzzle_id, pstate)
-VALUES (2, 1, 0);
+VALUES (2, 1, 0), (2, 2, 1), (2, 3, 1);
 
-INSERT INTO rb_team_puzzle (team_id, puzzle_id, pstate)
-VALUES (2, 2, 1);
+-- annoucement
 
-INSERT INTO rb_team_puzzle (team_id, puzzle_id, pstate)
-VALUES (2, 3, 1);
+INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
+VALUES ('全站测试公告', '这是一条全站测试公告。', 0, TRUE, TRUE, NULL, NULL);
+
+INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
+VALUES ('比赛公告', '这是一条比赛公告。', 0, TRUE, TRUE, 1, NULL);
+
+INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
+VALUES ('「命名毋以讹传之」题目更正', '请将 XXX 改为 XXX。', 0, FALSE, TRUE, 1, 2);
+
+INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
+VALUES ('「只说明书」题目更正', '请将 XXX 改为 XXX。', 0, FALSE, TRUE, 1, 3);

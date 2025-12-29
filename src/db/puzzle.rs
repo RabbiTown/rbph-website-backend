@@ -8,7 +8,8 @@ use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool, KvPool, db,
+    DbPool, KvPool,
+    db::{self, game::GameUserInfo},
     error::RbInternalError,
     expr::{self, ast::GateExpr, types::PuzzleStates},
     game::{
@@ -70,22 +71,17 @@ pub async fn get_puzzle_state(
         puzzle_id
     )
     .fetch_optional(db_pool)
-    .await?
-    .unwrap_or(-1);
+    .await?;
 
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
-    });
+    if let Some(result) = result {
+        let kv_pool = kv_pool.clone();
+        tokio::spawn(async move {
+            let mut conn = kv_pool.get().await.unwrap();
+            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
+        });
+    }
 
-    Ok(result.into())
-}
-
-#[derive(Clone)]
-pub struct GameUserInfo {
-    pub game_id: i32,
-    pub team_id: i32,
+    Ok(result.unwrap_or(-1).into())
 }
 
 pub async fn get_puzzle_user_info(
@@ -113,7 +109,10 @@ pub async fn get_puzzle_user_info(
         .accessible();
 
     match access {
-        true => Ok(Some(GameUserInfo { game_id, team_id })),
+        true => Ok(Some(GameUserInfo {
+            game_id,
+            team_id: Some(team_id),
+        })),
         false => Ok(None),
     }
 }
@@ -125,6 +124,16 @@ pub struct RbPuzzleShowRoundData {
 }
 
 #[derive(FromRow, Serialize)]
+pub struct RbPuzzleShowAnnouncementData {
+    pub id: i32,
+    pub title: String,
+    pub content: String,
+    pub content_type: RbContentType,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub utime_at: OffsetDateTime,
+}
+
+#[derive(FromRow, Serialize)]
 pub struct RbPuzzleShowData {
     pub id: i32,
     pub title: String,
@@ -133,6 +142,7 @@ pub struct RbPuzzleShowData {
     pub content_type: RbContentType,
     pub round: RbPuzzleShowRoundData,
     pub game_id: i32,
+    pub announcements: Vec<RbPuzzleShowAnnouncementData>,
 }
 
 pub async fn get_puzzle_show(
@@ -150,6 +160,16 @@ pub async fn get_puzzle_show(
     .fetch_optional(db_pool)
     .await?;
 
+    let anmts = sqlx::query_as!(
+        RbPuzzleShowAnnouncementData,
+        "SELECT id, title, content, content_type, utime_at
+        FROM rb_announcement
+        WHERE puzzle_id = $1;",
+        puzzle_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
     Ok(result.map(|x| RbPuzzleShowData {
         id: x.id,
         title: x.title,
@@ -161,6 +181,7 @@ pub async fn get_puzzle_show(
             title: x.round_title,
         },
         game_id: x.game_id,
+        announcements: anmts,
     }))
 }
 

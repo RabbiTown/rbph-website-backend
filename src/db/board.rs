@@ -42,6 +42,10 @@ impl LeaderBoard {
     fn mark_order_clean(&mut self) {
         self.order_dirty = false;
     }
+
+    fn mark_json_dirty(&mut self) {
+        self.json_cache = None;
+    }
 }
 
 pub struct LeaderBoardCache {
@@ -210,12 +214,21 @@ impl LeaderBoardCache {
         ))
     }
 
-    pub async fn update_team(&self, db_pool: &DbPool, team_id: i32) -> Result<(), RbInternalError> {
+    pub async fn update_team(
+        &self,
+        db_pool: &DbPool,
+        team_id: i32,
+        affact_order: bool,
+    ) -> Result<(), RbInternalError> {
         let (game_id, team) = self.fetch_team(db_pool, team_id).await?;
 
         let mut guard = self.cache.write().await;
         if let Some(cache) = guard.get_mut(&game_id) {
-            cache.mark_order_dirty();
+            if affact_order {
+                cache.mark_order_dirty();
+            } else {
+                cache.mark_json_dirty();
+            }
             cache.teams.insert(team.id, team);
         }
 

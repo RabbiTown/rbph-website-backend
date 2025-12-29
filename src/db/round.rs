@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::{
     DbPool, KvPool,
-    db::{self, puzzle::GameUserInfo},
+    db::{self, game::GameUserInfo},
     error::RbInternalError,
     model::game::{RbContentType, RbTeamPuzzleState},
 };
@@ -95,7 +95,10 @@ pub async fn get_round_user_info(
     let access = get_round_state(db_pool, kv_pool, team_id, round_id).await?;
 
     match access {
-        true => Ok(Some(GameUserInfo { game_id, team_id })),
+        true => Ok(Some(GameUserInfo {
+            game_id,
+            team_id: Some(team_id),
+        })),
         false => Ok(None),
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT * FROM rb_announcement WHERE id = $1;",
+  "query": "SELECT id, title, content, content_type, utime_at\n        FROM rb_announcement\n        WHERE puzzle_id = $1;",
   "describe": {
     "columns": [
       {
@@ -25,31 +25,6 @@
       },
       {
         "ordinal": 4,
-        "name": "is_pinned",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 5,
-        "name": "is_shown",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 6,
-        "name": "game_id",
-        "type_info": "Int4"
-      },
-      {
-        "ordinal": 7,
-        "name": "puzzle_id",
-        "type_info": "Int4"
-      },
-      {
-        "ordinal": 8,
-        "name": "ctime_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 9,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -64,13 +39,8 @@
       false,
       false,
       false,
-      false,
-      false,
-      true,
-      true,
-      false,
       false
     ]
   },
-  "hash": "752c6f3423588cba59898a3348439527eb27561b986118558213634ba28fae97"
+  "hash": "878b04af1a9dab2a9aaf85bee34d044f2895508c33096e10064b429dec9b154b"
 }

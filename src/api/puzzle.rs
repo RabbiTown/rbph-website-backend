@@ -87,7 +87,11 @@ async fn judge_puzzle(
         db::puzzle::SubmitAnswerResult::Invalid => {
             RbError::bad_req(PuzzleJudgeResult::Invalid.into()).http_err()
         }
-        db::puzzle::SubmitAnswerResult::Ok(result) => {
+        db::puzzle::SubmitAnswerResult::Ok {
+            result,
+            solved,
+            unlocks,
+        } => {
             tokio::spawn(async move {
                 let row = sqlx::query!(
                     "SELECT
@@ -99,8 +103,15 @@ async fn judge_puzzle(
                 .fetch_one(&app.db)
                 .await;
 
+                let unlock_rows = sqlx::query!(
+                    "SELECT id, title, round_id FROM rb_puzzle WHERE id = ANY($1)",
+                    &unlocks
+                )
+                .fetch_one(&app.db)
+                .await;
+
                 if let Ok(row) = row {
-                    let sync = json!({
+                    let mut sync = json!({
                         "user": {
                             "id": user.uid,
                             "name": row.u_n,
@@ -112,6 +123,21 @@ async fn judge_puzzle(
                         "answer": req.answer,
                         "action": result.action,
                     });
+                    if solved {
+                        sync["solved"] = json!(true);
+                        sync["unlocks"] = json!(
+                            unlock_rows
+                                .into_iter()
+                                .map(|r| {
+                                    json!({
+                                        "id": r.id,
+                                        "title": r.title,
+                                        "round_id": r.round_id,
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        );
+                    }
                     let _ = app
                         .sync_hub
                         .do_push_team(

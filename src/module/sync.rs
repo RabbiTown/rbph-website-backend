@@ -183,7 +183,6 @@ pub enum SyncMessageType {
     TeamGameFinished = 206,
 
     // 300 - puzzle
-    PuzzleUnlocked = 301,
-    PuzzleSubmitted = 302,
-    PuzzleHintUnlocked = 303,
+    PuzzleSubmitted = 301,
+    PuzzleHintUnlocked = 302,
 }

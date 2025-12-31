@@ -4,7 +4,6 @@ use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use serde_json::json;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
@@ -18,7 +17,6 @@ use crate::{
         judge::{JudgeResult, JudgeRule, normalize_answer},
     },
     model::game::{RbContentType, RbJudgeAction, RbPuzzleType, RbTeamPuzzleState},
-    module::sync::SyncMessageType,
 };
 
 static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap::new);
@@ -458,7 +456,11 @@ pub async fn get_team_submissions(
 }
 
 pub enum SubmitAnswerResult {
-    Ok(JudgeResult),
+    Ok {
+        result: JudgeResult,
+        solved: bool,
+        unlocks: Vec<i32>,
+    },
     Duplicate,
     Invalid,
     NotFound,
@@ -525,9 +527,12 @@ pub async fn submit_answer(
     .await?
     .unwrap();
 
+    let mut solved = false;
+    let mut unlocks: Vec<i32> = Vec::new();
+
     match result.action {
         RbJudgeAction::Correct => {
-            let result = sqlx::query!(
+            let update = sqlx::query!(
                 "UPDATE rb_team_puzzle SET pstate = 1, solve_at = NOW()
                 WHERE team_id = $1 AND puzzle_id = $2 AND pstate = 0",
                 team_id,
@@ -536,8 +541,9 @@ pub async fn submit_answer(
             .execute(&app.db)
             .await?;
 
-            if result.rows_affected() > 0 {
-                unlock_new_puzzles(app, team_id).await?
+            if update.rows_affected() > 0 {
+                solved = true;
+                unlocks.extend(unlock_new_puzzles(app, team_id).await?);
             }
         }
         RbJudgeAction::StartGame => {
@@ -562,7 +568,7 @@ pub async fn submit_answer(
                 .execute(&app.db)
                 .await?;
 
-                unlock_new_puzzles(app, team_id).await?
+                unlocks.extend(unlock_new_puzzles(app, team_id).await?);
             }
         }
         _ => {}
@@ -574,7 +580,11 @@ pub async fn submit_answer(
         db::cache::invalidate_team_puzzle(&app.db, &app.kv, team_id, puzzle_id).await?;
     }
 
-    Ok(SubmitAnswerResult::Ok(result))
+    Ok(SubmitAnswerResult::Ok {
+        result,
+        solved,
+        unlocks,
+    })
 }
 
 struct RbPuzzleStates {
@@ -603,7 +613,7 @@ impl PuzzleStates for RbPuzzleStates {
     }
 }
 
-pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<(), RbInternalError> {
+pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
     let info = sqlx::query!(
         "SELECT t.game_id, t.tstate, tp.puzzle_id AS \"puzzle_id?\"
         FROM rb_team t
@@ -616,7 +626,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<(), RbIn
 
     // dont know if possible but we just protect from it
     if info.is_empty() {
-        return Ok(());
+        return Ok(vec![]);
     }
 
     let unlocked = info.iter().filter_map(|r| r.puzzle_id).collect();
@@ -647,35 +657,9 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<(), RbIn
         )
         .execute(&app.db)
         .await?;
-
-        let db_clone = app.db.clone();
-        let sync_clone = app.sync_hub.clone();
-        tokio::spawn(async move {
-            let rows = sqlx::query!(
-                "SELECT id, title, round_id FROM rb_puzzle WHERE id = ANY($1)",
-                &unlocks
-            )
-            .fetch_all(&db_clone)
-            .await;
-
-            if let Ok(rows) = rows {
-                let sync = json!({
-                    "puzzles": rows.into_iter().map(|r| {
-                        json!({
-                            "id": r.id,
-                            "title": r.title,
-                            "round_id": r.round_id,
-                        })
-                    }).collect::<Vec<_>>()
-                });
-                let _ = sync_clone
-                    .do_push_team(&db_clone, team_id, SyncMessageType::PuzzleUnlocked, sync)
-                    .await;
-            }
-        });
     }
 
-    Ok(())
+    Ok(unlocks)
 }
 
 #[derive(FromRow, Serialize)]

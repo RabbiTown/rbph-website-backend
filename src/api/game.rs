@@ -1,11 +1,11 @@
 use actix_session::SessionExt;
 use actix_web::{
-    HttpMessage, HttpRequest, HttpResponse, Result,
+    HttpMessage, HttpResponse, Result,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
     http::header::ContentType,
     middleware::{self, Next},
-    web::{self, Payload},
+    web::{self},
 };
 use serde::Deserialize;
 
@@ -65,17 +65,6 @@ async fn get_leaderboard(
         .body(result))
 }
 
-async fn sync_ws(
-    req: HttpRequest,
-    stream: Payload,
-    info: web::Path<PathInfo>,
-    user: AuthUser,
-    app: web::Data<AppState>,
-) -> Result<HttpResponse> {
-    //
-    Ok(HttpResponse::ImATeapot().finish())
-}
-
 async fn check_game_middleware(
     req: ServiceRequest,
     next: Next<impl MessageBody>,
@@ -112,7 +101,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("/{game_id}")
             .wrap(middleware::from_fn(check_game_middleware))
             .route("", web::get().to(get_info))
-            .route("/sync", web::get().to(sync_ws))
             .route("/announcements", web::get().to(get_anmts))
             .service(
                 web::scope("")

@@ -2,11 +2,10 @@ use actix_session::SessionExt;
 use actix_web::{Error, FromRequest, HttpMessage, HttpRequest, dev::Payload};
 use futures_util::future::{Ready, ready};
 
-use crate::{db::game::GameUserInfo, error::RbError, model::user::RbUserRole};
+use crate::{db::game::GameUserInfo, error::RbError};
 
 pub struct AuthUser {
     pub uid: i32,
-    pub role: RbUserRole,
     pub game: Option<GameUserInfo>,
 }
 
@@ -26,10 +25,6 @@ impl FromRequest for AuthUser {
         match sess.get::<i32>("user_id") {
             Ok(Some(uid)) => ready(Ok(AuthUser {
                 uid,
-                role: *req
-                    .extensions()
-                    .get::<RbUserRole>()
-                    .unwrap_or(&RbUserRole::Banned),
                 game: req.extensions().get::<GameUserInfo>().cloned(),
             })),
             Ok(None) | Err(_) => {

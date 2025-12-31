@@ -10,12 +10,14 @@ mod model;
 mod module;
 mod serde_helpers;
 
-use actix::{Actor, Addr};
+use std::{sync::Arc, time::Duration};
+
 use actix_session::{SessionMiddleware, storage::RedisSessionStore};
 use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
 use sqlx::PgPool;
+use tokio::time;
 
 use crate::{config::Settings, module::sync::SyncHub};
 
@@ -26,7 +28,7 @@ pub struct AppState {
     pub db: DbPool,
     pub kv: KvPool,
     pub settings: Settings,
-    pub sync_hub: Addr<SyncHub>,
+    pub sync_hub: Arc<SyncHub>,
 }
 
 #[actix_web::main]
@@ -53,13 +55,13 @@ async fn main() -> std::io::Result<()> {
     let session_store = RedisSessionStore::new(&config.kv_addr).await.unwrap();
     let secret_key = Key::from(&config.get_secret_key());
 
-    let sync_hub = SyncHub::default().start();
+    let sync_hub = Arc::new(SyncHub::default());
 
     let app_state = AppState {
         db: db_pool,
         kv: kv_pool,
         settings,
-        sync_hub,
+        sync_hub: sync_hub.clone(),
     };
     let app_state_data = web::Data::new(app_state);
 
@@ -80,6 +82,18 @@ async fn main() -> std::io::Result<()> {
     })
     .bind((host.as_str(), port))?
     .run();
+
+    {
+        let hub = sync_hub.clone();
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(30));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                hub.cleanup();
+            }
+        });
+    }
 
     log::info!(
         "Running on http://{}:{} ({})",

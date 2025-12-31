@@ -15,7 +15,6 @@ use crate::{
     },
     error::RbError,
     extractor::auth::AuthUser,
-    model::game::RbTeamState,
 };
 
 #[derive(Deserialize)]
@@ -195,9 +194,9 @@ async fn join(
 
     let data = data.unwrap();
 
-    if data.tstate == RbTeamState::InGame {
-        RbError::conflict(TeamJoinResult::Locked.into()).err()?
-    }
+    // if data.tstate == RbTeamState::InGame {
+    //     RbError::conflict(TeamJoinResult::Locked.into()).err()?
+    // }
 
     // TODO : make max count configurable
     if data.member_count.unwrap_or_default() >= 6 {

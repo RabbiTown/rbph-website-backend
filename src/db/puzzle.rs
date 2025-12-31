@@ -4,11 +4,12 @@ use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
 use once_cell::sync::Lazy;
 use serde::Serialize;
+use serde_json::json;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool, KvPool,
+    AppState, DbPool, KvPool,
     db::{self, game::GameUserInfo},
     error::RbInternalError,
     expr::{self, ast::GateExpr, types::PuzzleStates},
@@ -17,6 +18,7 @@ use crate::{
         judge::{JudgeResult, JudgeRule, normalize_answer},
     },
     model::game::{RbContentType, RbJudgeAction, RbPuzzleType, RbTeamPuzzleState},
+    module::sync::SyncMessageType,
 };
 
 static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap::new);
@@ -47,6 +49,18 @@ pub async fn get_puzzle_game(
         let mut conn = kv_pool.get().await.unwrap();
         let _: Result<(), RedisError> = conn.set_ex(&key, result.unwrap_or(-1), 60 * 60).await;
     });
+
+    Ok(result)
+}
+
+pub async fn get_hint_puzzle(
+    db_pool: &DbPool,
+    _kv_pool: &KvPool,
+    hint_id: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    let result = sqlx::query_scalar!("SELECT puzzle_id FROM rb_hint WHERE id = $1;", hint_id)
+        .fetch_optional(db_pool)
+        .await?;
 
     Ok(result)
 }
@@ -115,6 +129,20 @@ pub async fn get_puzzle_user_info(
         })),
         false => Ok(None),
     }
+}
+
+pub async fn get_hint_user_info(
+    db_pool: &DbPool,
+    kv_pool: &KvPool,
+    user_id: i32,
+    hint_id: i32,
+) -> Result<Option<GameUserInfo>, RbInternalError> {
+    let puzzle_id = get_hint_puzzle(db_pool, kv_pool, hint_id).await?;
+    if puzzle_id.is_none() {
+        return Ok(None);
+    }
+
+    get_puzzle_user_info(db_pool, kv_pool, user_id, puzzle_id.unwrap()).await
 }
 
 #[derive(FromRow, Serialize)]
@@ -437,8 +465,7 @@ pub enum SubmitAnswerResult {
 }
 
 pub async fn submit_answer(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
+    app: &AppState,
     user_id: i32,
     team_id: i32,
     puzzle_id: i32,
@@ -449,7 +476,7 @@ pub async fn submit_answer(
         return Ok(SubmitAnswerResult::Invalid);
     }
 
-    let mut tx = db_pool.begin().await?;
+    let mut tx = app.db.begin().await?;
 
     let submit_id = sqlx::query_scalar!(
         "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
@@ -470,7 +497,7 @@ pub async fn submit_answer(
     }
     let submit_id = submit_id.unwrap();
 
-    let judge = get_judge_rules(db_pool, puzzle_id).await?;
+    let judge = get_judge_rules(&app.db, puzzle_id).await?;
     if judge.is_none() {
         return Ok(SubmitAnswerResult::NotFound);
     }
@@ -506,11 +533,11 @@ pub async fn submit_answer(
                 team_id,
                 puzzle_id
             )
-            .execute(db_pool)
+            .execute(&app.db)
             .await?;
 
             if result.rows_affected() > 0 {
-                unlock_new_puzzles(db_pool, team_id).await?
+                unlock_new_puzzles(app, team_id).await?
             }
         }
         RbJudgeAction::StartGame => {
@@ -519,7 +546,7 @@ pub async fn submit_answer(
                 WHERE id = $1 AND tstate = 0",
                 team_id
             )
-            .execute(db_pool)
+            .execute(&app.db)
             .await?;
 
             if result.rows_affected() > 0 {
@@ -532,10 +559,10 @@ pub async fn submit_answer(
                     ON CONFLICT (team_id, currency_id) DO NOTHING;",
                     team_id
                 )
-                .execute(db_pool)
+                .execute(&app.db)
                 .await?;
 
-                unlock_new_puzzles(db_pool, team_id).await?
+                unlock_new_puzzles(app, team_id).await?
             }
         }
         _ => {}
@@ -544,7 +571,7 @@ pub async fn submit_answer(
     tx.commit().await?;
 
     if result.action.side_effect() {
-        db::cache::invalidate_team_puzzle(db_pool, kv_pool, team_id, puzzle_id).await?;
+        db::cache::invalidate_team_puzzle(&app.db, &app.kv, team_id, puzzle_id).await?;
     }
 
     Ok(SubmitAnswerResult::Ok(result))
@@ -576,7 +603,7 @@ impl PuzzleStates for RbPuzzleStates {
     }
 }
 
-pub async fn unlock_new_puzzles(db_pool: &DbPool, team_id: i32) -> Result<(), RbInternalError> {
+pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<(), RbInternalError> {
     let info = sqlx::query!(
         "SELECT t.game_id, t.tstate, tp.puzzle_id AS \"puzzle_id?\"
         FROM rb_team t
@@ -584,7 +611,7 @@ pub async fn unlock_new_puzzles(db_pool: &DbPool, team_id: i32) -> Result<(), Rb
         WHERE t.id = $1;",
         team_id
     )
-    .fetch_all(db_pool)
+    .fetch_all(&app.db)
     .await?;
 
     // dont know if possible but we just protect from it
@@ -598,7 +625,7 @@ pub async fn unlock_new_puzzles(db_pool: &DbPool, team_id: i32) -> Result<(), Rb
         game_started: info[0].tstate > 0,
     };
 
-    let conds = get_unlock_conds_by_game(db_pool, info[0].game_id).await?;
+    let conds = get_unlock_conds_by_game(&app.db, info[0].game_id).await?;
 
     let mut unlocks: Vec<i32> = Vec::new();
 
@@ -618,8 +645,34 @@ pub async fn unlock_new_puzzles(db_pool: &DbPool, team_id: i32) -> Result<(), Rb
             team_id,
             &unlocks
         )
-        .execute(db_pool)
+        .execute(&app.db)
         .await?;
+
+        let db_clone = app.db.clone();
+        let sync_clone = app.sync_hub.clone();
+        tokio::spawn(async move {
+            let rows = sqlx::query!(
+                "SELECT id, title, round_id FROM rb_puzzle WHERE id = ANY($1)",
+                &unlocks
+            )
+            .fetch_all(&db_clone)
+            .await;
+
+            if let Ok(rows) = rows {
+                let sync = json!({
+                    "puzzles": rows.into_iter().map(|r| {
+                        json!({
+                            "id": r.id,
+                            "title": r.title,
+                            "round_id": r.round_id,
+                        })
+                    }).collect::<Vec<_>>()
+                });
+                let _ = sync_clone
+                    .do_push_team(&db_clone, team_id, SyncMessageType::PuzzleUnlocked, sync)
+                    .await;
+            }
+        });
     }
 
     Ok(())

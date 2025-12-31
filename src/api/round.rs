@@ -9,9 +9,7 @@ use actix_web::{
 };
 use serde::Deserialize;
 
-use crate::{
-    AppState, api::error_handler, db, error::RbError, extractor::auth::AuthUser,
-};
+use crate::{AppState, api::error_handler, db, error::RbError, extractor::auth::AuthUser};
 
 #[derive(Deserialize)]
 struct RoundPathInfo {

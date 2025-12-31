@@ -494,3 +494,16 @@ pub async fn get_currency_info(
 
     Ok(result)
 }
+
+pub async fn get_member_id(db_pool: &DbPool, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "SELECT user_id
+        FROM rb_team_member
+        WHERE team_id = $1;",
+        team_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    Ok(result)
+}

@@ -12,9 +12,7 @@ use actix_web::{
 };
 use futures_util::future::LocalBoxFuture;
 
-use crate::{
-    AppState, db, error::RbError, model::user::RbUserRole, module::session,
-};
+use crate::{AppState, db, error::RbError, model::user::RbUserRole, module::session};
 
 pub struct PrivilegeMiddleware {
     required: RbUserRole,

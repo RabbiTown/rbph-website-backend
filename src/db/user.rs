@@ -3,11 +3,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::{
-    DbPool, KvPool,
-    error::RbInternalError,
-    model::user::{RbUser, RbUserRole},
-};
+use crate::{DbPool, KvPool, error::RbInternalError, model::user::RbUserRole};
 
 pub async fn register(pool: &DbPool, email: &str, pass: &str) -> Result<i32, RbInternalError> {
     let result = sqlx::query_scalar!(
@@ -53,10 +49,23 @@ pub async fn exists(pool: &DbPool, email: &str) -> Result<bool, RbInternalError>
     Ok(result.unwrap_or(false))
 }
 
-pub async fn get_by_email(pool: &DbPool, email: &str) -> Result<Option<RbUser>, RbInternalError> {
-    let result = sqlx::query_as!(RbUser, "SELECT * FROM rb_user WHERE email = $1;", email)
-        .fetch_optional(pool)
-        .await?;
+#[derive(Deserialize)]
+pub struct UserVerifyData {
+    pub id: i32,
+    pub pass: String,
+}
+
+pub async fn get_verify_by_email(
+    pool: &DbPool,
+    email: &str,
+) -> Result<Option<UserVerifyData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        UserVerifyData,
+        "SELECT id, pass FROM rb_user WHERE email = $1;",
+        email
+    )
+    .fetch_optional(pool)
+    .await?;
 
     Ok(result)
 }

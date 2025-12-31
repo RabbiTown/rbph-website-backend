@@ -14,7 +14,7 @@ use crate::{
         team::{RbCurrencyShowData, RbTeamPutData},
     },
     error::RbError,
-    extractor::auth::AuthUser,
+    extractor::auth::AuthUser, model::game::RbTeamState,
 };
 
 #[derive(Deserialize)]
@@ -194,9 +194,9 @@ async fn join(
 
     let data = data.unwrap();
 
-    // if data.tstate == RbTeamState::InGame {
-    //     RbError::conflict(TeamJoinResult::Locked.into()).err()?
-    // }
+    if data.tstate == RbTeamState::Banned {
+        RbError::conflict(TeamJoinResult::Locked.into()).err()?
+    }
 
     // TODO : make max count configurable
     if data.member_count.unwrap_or_default() >= 6 {
@@ -255,7 +255,7 @@ async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<H
 }
 
 // TODO : add paging
-async fn list_all(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
+async fn list_all() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().finish())
 }
 

@@ -18,22 +18,6 @@ pub struct RbTeamPutData {
     pub game_id: i32,
 }
 
-pub async fn append(pool: &DbPool, data: &RbTeamPutData) -> Result<i32, RbInternalError> {
-    let result = sqlx::query_scalar!(
-        "INSERT INTO rb_team (tname, pass, bio, game_id)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id;",
-        data.tname,
-        data.pass,
-        data.bio,
-        data.game_id
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(result)
-}
-
 pub async fn get_id_by_user_game(
     db_pool: &DbPool,
     kv_pool: &KvPool,

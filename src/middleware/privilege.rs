@@ -68,6 +68,17 @@ where
         let sess = req.get_session();
 
         Box::pin(async move {
+            // quick check if previously used
+            // TODO : split out an auth middleware
+            let role_cache = req.extensions().get::<RbUserRole>().copied();
+            if let Some(role) = role_cache {
+                if role >= required {
+                    return Ok(srv.call(req).await?.map_into_left_body());
+                } else {
+                    return Ok(req.into_response(RbError::forbid().resp().map_into_right_body()));
+                }
+            }
+
             let app = req.app_data::<web::Data<AppState>>().unwrap();
 
             match session::verify(&app.kv, &sess).await {

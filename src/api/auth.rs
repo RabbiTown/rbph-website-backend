@@ -15,7 +15,7 @@ static PWD_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[!-~]{8,64}$").unwrap
 #[derive(Serialize)]
 struct UserPreLoginResponse {}
 
-async fn pre_auth(app: web::Data<AppState>) -> Result<HttpResponse> {
+async fn pre_auth(_app: web::Data<AppState>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(UserPreLoginResponse {}))
 }
 
@@ -23,7 +23,6 @@ async fn pre_auth(app: web::Data<AppState>) -> Result<HttpResponse> {
 struct UserLoginRequest {
     email: String,
     password: String,
-    captcha: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -59,7 +58,7 @@ async fn login(
             .err()?
     }
 
-    let user = db::user::get_by_email(&app.db, &trimmed_email).await?;
+    let user = db::user::get_verify_by_email(&app.db, &trimmed_email).await?;
     if user.is_none() {
         RbError::unauth()
             .code(UserLoginResult::NotExists.into())
@@ -88,7 +87,6 @@ async fn login(
 struct UserRegisterRequest {
     email: String,
     password: String,
-    captcha: Option<String>,
 }
 
 #[derive(Serialize)]

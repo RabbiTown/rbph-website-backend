@@ -113,6 +113,8 @@ CREATE TABLE rb_puzzle (
     content_type    SMALLINT NOT NULL DEFAULT 0,
     judge           TEXT NOT NULL,
     unlock_cond     TEXT NOT NULL,
+    penalty_type    SMALLINT NOT NULL DEFAULT 0,
+    penalty_value   INT NOT NULL DEFAULT 0,
     round_id        INT NOT NULL REFERENCES rb_round(id),
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -126,6 +128,7 @@ CREATE TABLE rb_team_puzzle(
     pstate          SMALLINT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     solve_at        TIMESTAMPTZ,
+    penalty_at      TIMESTAMPTZ,
     PRIMARY KEY (team_id, puzzle_id)
 );
 
@@ -205,4 +208,28 @@ CREATE TABLE rb_announcement (
     puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ticket
+
+CREATE TABLE rb_ticket (
+    id              SERIAL PRIMARY KEY,
+    tstate          SMALLINT NOT NULL,
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE
+);
+
+CREATE TABLE rb_message (
+    id              SERIAL PRIMARY KEY,
+    content         TEXT NOT NULL,
+    content_type    SMALLINT NOT NULL DEFAULT 0,
+    sender          INT NOT NULL REFERENCES rb_user(id) ON DELETE CASCADE,
+    sender_type     SMALLINT NOT NULL,
+    cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
+    cost_amount     INT NOT NULL DEFAULT 0,
+    unlocked        BOOLEAN NOT NULL DEFAULT TRUE,
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    ticket_id       INT REFERENCES rb_ticket(id) ON DELETE CASCADE,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    utime_at        TIMESTAMPTZ
 );

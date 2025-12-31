@@ -5,52 +5,8 @@ use time::OffsetDateTime;
 use crate::{
     DbPool,
     error::RbInternalError,
-    model::{anmt::RbAnnouncement, game::RbContentType},
+    model::game::RbContentType,
 };
-
-pub struct RbAnnouncementPutData<'a> {
-    pub title: &'a str,
-    pub content: &'a str,
-    pub is_pinned: bool,
-    pub is_shown: bool,
-    pub game_id: Option<i32>,
-}
-
-pub async fn append(
-    pool: &DbPool,
-    data: &RbAnnouncementPutData<'_>,
-) -> Result<i32, RbInternalError> {
-    let result = sqlx::query_scalar!(
-        "INSERT INTO rb_announcement (title, content, is_pinned, is_shown, game_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id;",
-        data.title,
-        data.content,
-        data.is_pinned,
-        data.is_shown,
-        data.game_id
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(result)
-}
-
-pub async fn get(pool: &DbPool, id: i32) -> Result<Option<RbAnnouncement>, RbInternalError> {
-    let ret = sqlx::query_as!(
-        RbAnnouncement,
-        "SELECT * FROM rb_announcement WHERE id = $1;",
-        id
-    )
-    .fetch_one(pool)
-    .await;
-
-    match ret {
-        Ok(result) => Ok(Some(result)),
-        Err(sqlx::Error::RowNotFound) => Ok(None),
-        Err(err) => Err(RbInternalError::Sql(err)),
-    }
-}
 
 #[derive(FromRow, Serialize)]
 pub struct RbAnnouncementShowData {

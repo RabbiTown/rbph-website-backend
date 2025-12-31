@@ -5,7 +5,7 @@ use std::{
 
 use actix::{Actor, Addr, Handler, Message};
 use actix_web::{HttpRequest, HttpResponse, web::Payload};
-use actix_web_actors::ws::{self, ProtocolError, WsResponseBuilder};
+use actix_web_actors::ws::{self, CloseCode, ProtocolError, WsResponseBuilder};
 use dashmap::DashMap;
 use num_enum::IntoPrimitive;
 use serde::Serialize;
@@ -72,13 +72,19 @@ impl SyncHub {
     pub fn cleanup(&self) {
         self.users.retain(|_, addrs| {
             addrs.retain(|addr| addr.connected());
-
             for addr in addrs.iter() {
-                let _ = addr.try_send(CheckAlive);
+                let _ = addr.try_send(WsCheckAlive);
             }
-
             !addrs.is_empty()
         });
+    }
+
+    pub async fn invalidate(&self, user_id: i32) {
+        if let Some((_, addrs)) = self.users.remove(&user_id) {
+            for addr in addrs.iter() {
+                let _ = addr.try_send(WsClose);
+            }
+        }
     }
 }
 
@@ -149,15 +155,27 @@ impl Handler<WsPush> for WsSession {
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct CheckAlive;
+pub struct WsCheckAlive;
 
-impl Handler<CheckAlive> for WsSession {
+impl Handler<WsCheckAlive> for WsSession {
     type Result = ();
 
-    fn handle(&mut self, _msg: CheckAlive, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, _: WsCheckAlive, ctx: &mut Self::Context) -> Self::Result {
         if self.last_heartbeat.elapsed() > Self::CLIENT_TIMEOUT {
-            ctx.close(None);
+            ctx.close(Some(CloseCode::Normal.into()));
         }
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct WsClose;
+
+impl Handler<WsClose> for WsSession {
+    type Result = ();
+
+    fn handle(&mut self, _: WsClose, ctx: &mut Self::Context) -> Self::Result {
+        ctx.close(Some(CloseCode::Normal.into()));
     }
 }
 

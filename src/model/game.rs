@@ -23,18 +23,6 @@ pub struct RbGame {
     pub ctime_at: OffsetDateTime,
 }
 
-impl RbGame {
-    pub fn is_started(&self) -> bool {
-        let now = OffsetDateTime::now_utc();
-        now >= self.start_at
-    }
-
-    pub fn is_ended(&self) -> bool {
-        let now = OffsetDateTime::now_utc();
-        now >= self.end_at
-    }
-}
-
 #[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
 #[repr(i16)]
 #[serde(into = "i16")]
@@ -96,20 +84,6 @@ impl<'r> Decode<'r, Postgres> for RbContentType {
     }
 }
 
-#[derive(FromRow, Serialize)]
-pub struct RbPuzzle {
-    pub id: i32,
-    pub title: String,
-    pub ptype: RbPuzzleType,
-    pub content: String,
-    pub content_type: RbContentType,
-    pub judge: String,
-    pub unlock_cond: String,
-    pub round_id: i32,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub ctime_at: OffsetDateTime,
-}
-
 #[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
 #[repr(i16)]
 #[serde(into = "i16")]
@@ -129,15 +103,6 @@ impl RbTeamPuzzleState {
             RbTeamPuzzleState::Unlocked | RbTeamPuzzleState::Solved
         )
     }
-}
-
-#[derive(FromRow, Serialize)]
-pub struct RbTeamPuzzle {
-    pub team_id: i32,
-    pub puzzle_id: i32,
-    pub pstate: RbTeamPuzzleState,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub ctime_at: OffsetDateTime,
 }
 
 #[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
@@ -189,66 +154,4 @@ impl From<Option<String>> for RbJudgeAction {
             None => RbJudgeAction::Error,
         }
     }
-}
-
-#[derive(FromRow, Serialize)]
-pub struct RbSubmission {
-    pub id: i32,
-    pub team_id: i32,
-    pub user_id: i32,
-    pub puzzle_id: i32,
-    pub user_answer: String,
-    pub norm_answer: String,
-    pub saction: RbJudgeAction,
-    pub sresult: Option<String>,
-    pub real_answer: Option<String>,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub ctime_at: OffsetDateTime,
-}
-
-#[derive(FromRow, Serialize)]
-pub struct RbRound {
-    pub id: i32,
-    pub title: String,
-    pub content: String,
-    pub content_type: RbContentType,
-    pub cover: Option<String>,
-    pub game_id: i32,
-    pub puzzle: Option<i32>,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub ctime_at: OffsetDateTime,
-}
-
-#[derive(FromRow, Serialize)]
-pub struct RbCurrency {
-    pub id: i32,
-    pub cname: String,
-    pub growth: i32,
-    pub max_amount: i32,
-    pub prec: i32,
-    pub game_id: i32,
-}
-
-#[derive(FromRow, Serialize)]
-pub struct RbTeamCurrency {
-    pub team_id: i32,
-    pub currency_id: i32,
-    pub amount: i32,
-    pub growth: i32,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub utime_at: OffsetDateTime,
-}
-
-#[derive(FromRow, Serialize)]
-pub struct RbHint {
-    pub id: i32,
-    pub title: String,
-    pub content: String,
-    pub content_type: RbContentType,
-    pub cooldown: i32,
-    pub cost_id: Option<i32>,
-    pub cost_amount: i32,
-    pub puzzle_id: i32,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub ctime_at: OffsetDateTime,
 }

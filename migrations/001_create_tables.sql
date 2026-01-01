@@ -2,7 +2,7 @@
 
 CREATE TABLE rb_user (
     id              SERIAL PRIMARY KEY,
-    email           VARCHAR(60) UNIQUE NOT NULL,
+    email           VARCHAR(255) UNIQUE NOT NULL,
     pass            VARCHAR(72) NOT NULL,
     urole           SMALLINT NOT NULL DEFAULT 1,
     nickname        VARCHAR(60) NOT NULL DEFAULT '',
@@ -111,10 +111,10 @@ CREATE TABLE rb_puzzle (
     ptype           SMALLINT NOT NULL DEFAULT 0,
     content         TEXT NOT NULL,
     content_type    SMALLINT NOT NULL DEFAULT 0,
-    judge           TEXT NOT NULL,
+    judge           JSONB NOT NULL DEFAULT '{}',
+    penalty         JSONB NOT NULL DEFAULT '{"type":0}',
+    max_submit      INT,
     unlock_cond     TEXT NOT NULL,
-    penalty_type    SMALLINT NOT NULL DEFAULT 0,
-    penalty_value   INT NOT NULL DEFAULT 0,
     round_id        INT NOT NULL REFERENCES rb_round(id),
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -126,9 +126,10 @@ CREATE TABLE rb_team_puzzle(
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     pstate          SMALLINT NOT NULL DEFAULT 0,
+    max_submit      INT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     solve_at        TIMESTAMPTZ,
-    penalty_at      TIMESTAMPTZ,
+    cooldown_till   TIMESTAMPTZ,
     PRIMARY KEY (team_id, puzzle_id)
 );
 

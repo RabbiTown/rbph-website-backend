@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::{
     DbPool, KvPool,
-    db::{self, game::GameUserInfo},
+    db::{self, game::GameUserInfo, puzzle::RbPuzzleTeamStateShowData},
     error::RbInternalError,
     model::game::{RbContentType, RbTeamPuzzleState},
 };
@@ -168,12 +168,20 @@ pub struct RbPuzzleSimpleData {
     pub answer: Option<String>,
 }
 
-pub async fn get_puzzles_for_team(
+#[derive(Serialize)]
+pub struct RbRoundTeamStateShowData {
+    pub puzzles: Vec<RbPuzzleSimpleData>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub puzzle: Option<RbPuzzleTeamStateShowData>,
+}
+
+pub async fn get_state_for_team(
     db_pool: &DbPool,
     team_id: i32,
     round_id: i32,
-) -> Result<Vec<RbPuzzleSimpleData>, RbInternalError> {
-    let result = sqlx::query_as!(
+) -> Result<RbRoundTeamStateShowData, RbInternalError> {
+    let puzzles = sqlx::query_as!(
         RbPuzzleSimpleData,
         "SELECT p.id, p.title, tp.pstate AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
@@ -192,23 +200,52 @@ pub async fn get_puzzles_for_team(
     .fetch_all(db_pool)
     .await?;
 
-    Ok(result)
+    let row = sqlx::query!(
+        "SELECT tp.ctime_at AS utime_at, tp.pstate, tp.cooldown_till,
+                tp.max_submit + p.max_submit AS max_submit,
+                ARRAY_AGG(s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
+        FROM rb_team_puzzle tp
+        JOIN rb_round r ON r.id = $2
+        JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        LEFT JOIN rb_submission s ON s.puzzle_id = tp.puzzle_id
+            AND s.team_id = tp.team_id
+            AND s.saction = 1
+        WHERE tp.team_id = $1 AND tp.puzzle_id = r.puzzle
+        GROUP BY tp.ctime_at, tp.pstate, tp.max_submit, tp.cooldown_till, p.max_submit;",
+        team_id,
+        round_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    Ok(RbRoundTeamStateShowData {
+        puzzles,
+        puzzle: row.and_then(|r| {
+            Some(RbPuzzleTeamStateShowData {
+                state: r.pstate.into(),
+                max_submit: r.max_submit,
+                answers: r.answers.unwrap_or_default(),
+                utime_at: r.utime_at,
+                cooldown_till: r.cooldown_till,
+            })
+        }),
+    })
 }
 
-pub async fn get_puzzles_for_team_str(
+pub async fn get_state_for_team_str(
     db_pool: &DbPool,
     kv_pool: &KvPool,
     team_id: i32,
     round_id: i32,
 ) -> Result<String, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("round:{round_id}:team:{team_id}:puzzles");
+    let key = format!("round:{round_id}:team:{team_id}:full_state");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(cache);
     }
 
-    let result = get_puzzles_for_team(db_pool, team_id, round_id).await?;
+    let result = get_state_for_team(db_pool, team_id, round_id).await?;
     let result = serde_json::to_string(&result)?;
 
     let kv_pool = kv_pool.clone();
@@ -228,9 +265,9 @@ pub async fn get_info_for_team_str(
     team_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     if let Some(show_str) = get_info_show_str(db_pool, kv_pool, round_id).await? {
-        let puzzles_str = get_puzzles_for_team_str(db_pool, kv_pool, team_id, round_id).await?;
+        let puzzles_str = get_state_for_team_str(db_pool, kv_pool, team_id, round_id).await?;
         Ok(Some(format!(
-            "{{\"data\":{show_str},\"puzzles\":{puzzles_str}}}"
+            "{{\"data\":{show_str},\"state\":{puzzles_str}}}"
         )))
     } else {
         Ok(None)

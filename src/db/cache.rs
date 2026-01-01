@@ -1,6 +1,6 @@
 use deadpool_redis::redis::{self, AsyncCommands, RedisError};
 
-use crate::{DbPool, KvPool, db, error::RbInternalError};
+use crate::{AppState, KvPool, db, error::RbInternalError};
 
 pub async fn del_pattern(kv_pool: &KvPool, pattern: &str) -> Result<(), RbInternalError> {
     let mut conn = kv_pool.get().await?;
@@ -58,43 +58,68 @@ macro_rules! invalidate_cache {
     }};
 }
 
-pub async fn invalidate_team_info(db_pool: &DbPool, team_id: i32) -> Result<(), RbInternalError> {
+pub async fn invalidate_team_info(app: &AppState, team_id: i32) -> Result<(), RbInternalError> {
     db::board::LEADER_BOARD_CACHE
-        .update_team(db_pool, team_id, false)
+        .update_team(&app.db, team_id, false)
         .await?;
 
     Ok(())
 }
 
 pub async fn invalidate_team_puzzle(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
+    app: &AppState,
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<(), RbInternalError> {
     invalidate_cache!(
-        kv_pool,
+        app.kv,
+        keys = [format!("puzzle:{puzzle_id}:team:{team_id}:full_state")]
+    );
+
+    Ok(())
+}
+
+pub async fn invalidate_team_round(
+    app: &AppState,
+    team_id: i32,
+    round_id: i32,
+) -> Result<(), RbInternalError> {
+    invalidate_cache!(
+        app.kv,
+        keys = [format!("round:{round_id}:team:{team_id}:full_state")]
+    );
+
+    Ok(())
+}
+
+pub async fn invalidate_team_puzzle_solved(
+    app: &AppState,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<(), RbInternalError> {
+    invalidate_cache!(
+        app.kv,
         keys = [
             format!("puzzle:{puzzle_id}:team:{team_id}:state"),
             format!("puzzle:{puzzle_id}:team:{team_id}:full_state")
         ],
-        patterns = [format!("round:*:team:{team_id}:puzzles")]
+        patterns = [format!("round:*:team:{team_id}:full_state")]
     );
 
     db::board::LEADER_BOARD_CACHE
-        .update_team(db_pool, team_id, true)
+        .update_team(&app.db, team_id, true)
         .await?;
 
     Ok(())
 }
 
 pub async fn invalidate_team_hints(
-    kv_pool: &KvPool,
+    app: &AppState,
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<(), RbInternalError> {
     invalidate_cache!(
-        kv_pool,
+        app.kv,
         keys = [format!("puzzle:{puzzle_id}:team:{team_id}:hints")]
     );
 

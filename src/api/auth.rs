@@ -2,15 +2,23 @@ use crate::{AppState, db, error::RbError, module::session};
 use actix_session::Session;
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
-use once_cell::sync::Lazy;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
+use validator::{Validate, ValidationError};
 
-static EMAIL_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\w+(-+.\w+)*@\w+(-.\w+)*.\w+(-.\w+)*$").unwrap());
+fn validate_printable(s: &str) -> Result<(), ValidationError> {
+    if !s.is_ascii() {
+        return Err(ValidationError::new("ascii"));
+    }
 
-static PWD_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[!-~]{8,64}$").unwrap());
+    if !s.bytes().all(|b| (b'!'..=b'~').contains(&b)) {
+        return Err(ValidationError::new("printable_ascii"));
+    }
+
+    Ok(())
+}
+
+// -- pre-login --
 
 #[derive(Serialize)]
 struct UserPreLoginResponse {}
@@ -19,10 +27,23 @@ async fn pre_auth(_app: web::Data<AppState>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(UserPreLoginResponse {}))
 }
 
-#[derive(Deserialize)]
+// -- login --
+
+#[derive(Deserialize, Validate)]
 struct UserLoginRequest {
+    #[validate(email)]
     email: String,
+    #[validate(custom(function = validate_printable), length(min = 8, max = 64))]
     password: String,
+}
+
+impl UserLoginRequest {
+    fn normalized(&self) -> Self {
+        Self {
+            email: self.email.trim().to_lowercase(),
+            password: self.password.trim().to_string(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -44,21 +65,15 @@ async fn login(
     sess: Session,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let trimmed_email = req.email.trim().to_lowercase();
-    if !EMAIL_REGEX.is_match(&trimmed_email) {
+    let req = req.normalized();
+    if let Err(e) = req.validate() {
         RbError::unauth()
             .code(UserLoginResult::WrongPwd.into())
-            .err()?
+            .msg(e.to_string())
+            .err()?;
     }
 
-    let trimmed_pwd = req.password.trim();
-    if !PWD_REGEX.is_match(trimmed_pwd) {
-        RbError::unauth()
-            .code(UserLoginResult::WrongPwd.into())
-            .err()?
-    }
-
-    let user = db::user::get_verify_by_email(&app.db, &trimmed_email).await?;
+    let user = db::user::get_verify_by_email(&app.db, &req.email).await?;
     if user.is_none() {
         RbError::unauth()
             .code(UserLoginResult::NotExists.into())
@@ -66,7 +81,7 @@ async fn login(
     }
 
     let user = user.unwrap();
-    match bcrypt::verify(trimmed_pwd, &user.pass) {
+    match bcrypt::verify(&req.password, &user.pass) {
         Ok(true) => {}
         Ok(false) => RbError::unauth()
             .code(UserLoginResult::WrongPwd.into())
@@ -83,10 +98,23 @@ async fn login(
     }))
 }
 
-#[derive(Deserialize)]
+// -- register --
+
+#[derive(Deserialize, Validate)]
 struct UserRegisterRequest {
+    #[validate(email)]
     email: String,
+    #[validate(custom(function = validate_printable), length(min = 8, max = 64))]
     password: String,
+}
+
+impl UserRegisterRequest {
+    fn normalized(&self) -> Self {
+        Self {
+            email: self.email.trim().to_lowercase(),
+            password: self.password.trim().to_string(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -99,8 +127,7 @@ struct UserRegisterResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum UserRegisterResult {
-    InvalidPassword = -3,
-    InvalidEmail = -2,
+    Invalid = -2,
     UserExists = -1,
     Ok = 0,
     EmailSent = 1,
@@ -110,23 +137,21 @@ async fn register(
     req: web::Json<UserRegisterRequest>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let trimmed_email = req.email.trim().to_lowercase();
-    if !EMAIL_REGEX.is_match(&trimmed_email) {
-        RbError::bad_req(UserRegisterResult::InvalidEmail.into()).err()?
+    let req = req.normalized();
+    if let Err(e) = req.validate() {
+        RbError::unauth()
+            .code(UserRegisterResult::Invalid.into())
+            .msg(e.to_string())
+            .err()?;
     }
 
-    let trimmed_pwd = req.password.trim();
-    if !PWD_REGEX.is_match(trimmed_pwd) {
-        RbError::bad_req(UserRegisterResult::InvalidPassword.into()).err()?
-    }
-
-    if db::user::exists(&app.db, &trimmed_email).await? {
+    if db::user::exists(&app.db, &req.email).await? {
         RbError::conflict(UserRegisterResult::UserExists.into()).err()?
     }
 
-    let token = db::user::put_pending(&app.kv, &trimmed_email, trimmed_pwd).await?;
+    let token = db::user::put_pending(&app.kv, &req.email, &req.password).await?;
 
-    log::debug!("register : {} ({})", trimmed_email, token);
+    log::debug!("register : {} ({})", req.email, token);
 
     // TODO : email configuration
 
@@ -135,6 +160,8 @@ async fn register(
         uid: None,
     }))
 }
+
+// -- verify --
 
 #[derive(Deserialize)]
 pub struct UserVerifyQuery {
@@ -167,6 +194,8 @@ async fn verify(
         uid: result.unwrap(),
     }))
 }
+
+// -- logout --
 
 #[derive(Serialize)]
 struct UserLogoutResponse {

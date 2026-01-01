@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_submission\n        SET saction = $1, sresult = $2, real_answer = $3, ignored = $5\n        WHERE id = $4;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Text",
+        "Text",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1abd1f86fe12b1b1eaca378d76795038ca90811cafff7c5aa57321ea3c019db9"
+}

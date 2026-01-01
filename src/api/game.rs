@@ -7,12 +7,17 @@ use actix_web::{
     middleware::{self, Next},
     web::{self},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{
     AppState,
     api::{error_handler, team},
-    db,
+    db::{
+        self,
+        game::RbGameShowData,
+        team::{RbCurrencyShowData, RbTeamFullData},
+    },
     error::RbError,
     extractor::auth::AuthUser,
     middleware::privilege::PrivilegeMiddleware,
@@ -31,6 +36,42 @@ async fn get_info(info: web::Path<PathInfo>, app: web::Data<AppState>) -> Result
     }
 
     Ok(HttpResponse::Ok().json(result))
+}
+
+#[derive(Serialize)]
+struct GameAggreInfo {
+    game: RbGameShowData,
+    team: Option<RbTeamFullData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    currency: Option<Vec<RbCurrencyShowData>>,
+
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    server_time: OffsetDateTime,
+}
+
+async fn get_aggre_info(
+    info: web::Path<PathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let game = db::game::get_by_id(&app.db, info.game_id).await?;
+    if game.is_none() {
+        RbError::not_found().err()?;
+    }
+
+    let team = db::team::get_by_user_game(&app.db, user.uid, info.game_id).await?;
+
+    let currency = match user.get_team_id() {
+        Some(team_id) => Some(db::team::get_currency_info(&app.db, &app.kv, team_id).await?),
+        None => None,
+    };
+
+    Ok(HttpResponse::Ok().json(GameAggreInfo {
+        game: game.unwrap(),
+        team,
+        currency,
+        server_time: OffsetDateTime::now_utc(),
+    }))
 }
 
 async fn list_online(app: web::Data<AppState>) -> Result<HttpResponse> {
@@ -110,6 +151,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                             .configure(team::games_config)
                             .default_service(web::route().to(error_handler)),
                     )
+                    .route("/info", web::get().to(get_aggre_info))
                     .route("/leaderboard", web::get().to(get_leaderboard))
                     .default_service(web::route().to(error_handler)),
             )

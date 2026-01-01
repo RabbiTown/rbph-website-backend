@@ -8,9 +8,10 @@ use actix_web::{
     web,
 };
 use num_enum::IntoPrimitive;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_repr::Serialize_repr;
+use time::OffsetDateTime;
 
 use crate::{
     AppState,
@@ -18,7 +19,9 @@ use crate::{
     db::{self},
     error::RbError,
     extractor::auth::AuthUser,
+    game::judge::JudgeResult,
     module::sync::SyncMessageType,
+    serde_helpers::serialize_option_offset_datetime,
 };
 
 #[derive(Deserialize)]
@@ -60,8 +63,16 @@ struct PuzzleJudgeRequest {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum PuzzleJudgeResult {
+    Locked = -3,
     Duplicate = -2,
     Invalid = -1,
+}
+
+#[derive(Serialize)]
+struct JudgePuzzleResponse {
+    result: JudgeResult,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    cooldown_till: Option<OffsetDateTime>,
 }
 
 async fn judge_puzzle(
@@ -70,14 +81,7 @@ async fn judge_puzzle(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let submit_result = db::puzzle::submit_answer(
-        &app,
-        user.uid,
-        user.get_team_id().ok_or(RbError::forbid())?,
-        info.puzzle_id,
-        &req.answer,
-    )
-    .await?;
+    let submit_result = db::puzzle::submit_answer(&app, &user, info.puzzle_id, &req.answer).await?;
 
     match submit_result {
         db::puzzle::SubmitAnswerResult::NotFound => RbError::not_found().http_err(),
@@ -87,10 +91,14 @@ async fn judge_puzzle(
         db::puzzle::SubmitAnswerResult::Invalid => {
             RbError::bad_req(PuzzleJudgeResult::Invalid.into()).http_err()
         }
+        db::puzzle::SubmitAnswerResult::Locked => {
+            RbError::bad_req(PuzzleJudgeResult::Locked.into()).http_err()
+        }
         db::puzzle::SubmitAnswerResult::Ok {
             result,
             solved,
             unlocks,
+            cooldown_till,
         } => {
             tokio::spawn(async move {
                 let row = sqlx::query!(
@@ -123,6 +131,14 @@ async fn judge_puzzle(
                         "answer": req.answer,
                         "action": result.action,
                     });
+                    if cooldown_till.is_some() {
+                        if let Ok(x) = serialize_option_offset_datetime::serialize(
+                            &cooldown_till,
+                            serde_json::value::Serializer,
+                        ) {
+                            sync["cooldown_till"] = x;
+                        }
+                    }
                     if solved {
                         sync["solved"] = json!(true);
                         sync["unlocks"] = json!(
@@ -150,7 +166,10 @@ async fn judge_puzzle(
                 }
             });
 
-            Ok(HttpResponse::Ok().json(result))
+            Ok(HttpResponse::Ok().json(JudgePuzzleResponse {
+                result,
+                cooldown_till,
+            }))
         }
     }
 }
@@ -192,8 +211,7 @@ async fn purchase_hint(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let purchase_result =
-        db::puzzle::purchase_hint(&app.db, &app.kv, user.uid, info.hint_id).await?;
+    let purchase_result = db::puzzle::purchase_hint(&app, user.uid, info.hint_id).await?;
 
     match purchase_result {
         db::puzzle::PurchaseHintResult::Unavailable => {

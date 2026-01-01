@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
@@ -12,11 +12,14 @@ use crate::{
     db::{self, game::GameUserInfo},
     error::RbInternalError,
     expr::{self, ast::GateExpr, types::PuzzleStates},
+    extractor::auth::AuthUser,
     game::{
         self,
         judge::{JudgeResult, JudgeRule, normalize_answer},
     },
-    model::game::{RbContentType, RbJudgeAction, RbPuzzleType, RbTeamPuzzleState},
+    model::game::{
+        RbContentType, RbJudgeAction, RbPuzzlePenaltyType, RbPuzzleType, RbTeamPuzzleState,
+    },
 };
 
 static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap::new);
@@ -243,9 +246,12 @@ pub async fn get_puzzle_show_str(
 #[derive(FromRow, Serialize)]
 pub struct RbPuzzleTeamStateShowData {
     pub state: RbTeamPuzzleState,
+    pub max_submit: Option<i32>,
     pub answers: Vec<String>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub utime_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub cooldown_till: Option<OffsetDateTime>,
 }
 
 pub async fn get_puzzle_team_state(
@@ -253,32 +259,34 @@ pub async fn get_puzzle_team_state(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleTeamStateShowData>, RbInternalError> {
-    let rows = sqlx::query!(
-        "SELECT tp.ctime_at AS utime_at, tp.pstate, s.real_answer
+    let row = sqlx::query!(
+        "SELECT tp.ctime_at AS utime_at, tp.pstate, tp.cooldown_till,
+                tp.max_submit + p.max_submit AS max_submit,
+                ARRAY_AGG(s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
+        JOIN rb_puzzle p ON p.id = tp.puzzle_id
         LEFT JOIN rb_submission s ON s.puzzle_id = tp.puzzle_id
             AND s.team_id = tp.team_id
             AND s.saction = 1
-            AND s.real_answer IS NOT NULL
-        WHERE tp.team_id = $1 AND tp.puzzle_id = $2;",
+        WHERE tp.team_id = $1 AND tp.puzzle_id = $2
+        GROUP BY tp.ctime_at, tp.pstate, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         puzzle_id
     )
-    .fetch_all(db_pool)
+    .fetch_optional(db_pool)
     .await?;
 
-    if rows.is_empty() {
+    if row.is_none() {
         return Ok(None);
     }
-
-    let utime_at = rows.first().unwrap().utime_at;
-    let state = rows.first().unwrap().pstate;
-    let answers = rows.into_iter().filter_map(|r| r.real_answer).collect();
+    let row = row.unwrap();
 
     Ok(Some(RbPuzzleTeamStateShowData {
-        utime_at,
-        state: state.into(),
-        answers,
+        state: row.pstate.into(),
+        max_submit: row.max_submit,
+        answers: row.answers.unwrap_or_default(),
+        utime_at: row.utime_at,
+        cooldown_till: row.cooldown_till,
     }))
 }
 
@@ -337,15 +345,15 @@ pub async fn get_judge_rules(
         return Ok(Some(c.clone()));
     }
 
-    let judge_json = sqlx::query_scalar!("SELECT judge FROM rb_puzzle WHERE id = $1;", puzzle_id)
+    let judge = sqlx::query_scalar!("SELECT judge FROM rb_puzzle WHERE id = $1;", puzzle_id)
         .fetch_optional(pool)
         .await?;
 
-    if judge_json.is_none() {
+    if judge.is_none() {
         return Ok(None);
     }
 
-    let rules = game::judge::parse_judge(&judge_json.unwrap())?;
+    let rules = game::judge::value_to_judge(judge.unwrap())?;
 
     let rules = Arc::new(rules);
     JUDGE_CACHE.insert(puzzle_id, rules.clone());
@@ -460,16 +468,24 @@ pub enum SubmitAnswerResult {
         result: JudgeResult,
         solved: bool,
         unlocks: Vec<i32>,
+        cooldown_till: Option<OffsetDateTime>,
     },
+    Locked,
     Duplicate,
     Invalid,
     NotFound,
 }
 
+#[derive(Deserialize)]
+struct PenaltyRule {
+    #[serde(rename = "type")]
+    rtype: RbPuzzlePenaltyType,
+    args: Vec<i32>,
+}
+
 pub async fn submit_answer(
     app: &AppState,
-    user_id: i32,
-    team_id: i32,
+    user: &AuthUser,
     puzzle_id: i32,
     answer: &str,
 ) -> Result<SubmitAnswerResult, RbInternalError> {
@@ -480,13 +496,44 @@ pub async fn submit_answer(
 
     let mut tx = app.db.begin().await?;
 
+    let team_id = user.get_team_id().ok_or("Require team_id")?;
+
+    sqlx::query_scalar!(
+        "SELECT 1 FROM rb_team_puzzle tp
+        WHERE tp.team_id = $1 AND tp.puzzle_id = $2
+        FOR UPDATE;",
+        team_id,
+        puzzle_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let allowed = sqlx::query_scalar!(
+        "SELECT tp.cooldown_till IS NULL OR tp.cooldown_till <= NOW()
+            AND (p.max_submit IS NULL OR COUNT(s.id) < p.max_submit + tp.max_submit)
+        FROM rb_team_puzzle tp
+        JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        LEFT JOIN rb_submission s ON s.saction = 0
+            AND s.team_id = tp.team_id AND s.puzzle_id = tp.puzzle_id
+        WHERE tp.team_id = $1 AND tp.puzzle_id = $2
+        GROUP BY tp.cooldown_till, p.max_submit, tp.max_submit;",
+        team_id,
+        puzzle_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !allowed.unwrap_or(false) {
+        return Ok(SubmitAnswerResult::Locked);
+    }
+
     let submit_id = sqlx::query_scalar!(
         "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT DO NOTHING
         RETURNING id",
         team_id,
-        user_id,
+        user.uid,
         puzzle_id,
         answer,
         norm_answer
@@ -507,28 +554,22 @@ pub async fn submit_answer(
     let rules = judge.unwrap();
     let result = game::judge::judge_by_rules(&rules, &norm_answer)?;
 
-    let submit_count = sqlx::query_scalar!(
+    sqlx::query!(
         "UPDATE rb_submission
-        SET saction = $1, sresult = $2, real_answer = $3, ignored = $7
-        WHERE id = $4
-        RETURNING (
-            SELECT COUNT(*) FROM rb_submission
-            WHERE team_id = $5 AND puzzle_id = $6
-        );",
+        SET saction = $1, sresult = $2, real_answer = $3, ignored = $5
+        WHERE id = $4;",
         i16::from(result.action),
         result.result,
         result.answer,
         submit_id,
-        team_id,
-        puzzle_id,
         result.action == RbJudgeAction::Error
     )
-    .fetch_one(&mut *tx)
-    .await?
-    .unwrap();
+    .execute(&mut *tx)
+    .await?;
 
     let mut solved = false;
-    let mut unlocks: Vec<i32> = Vec::new();
+    let mut cooldown_till: Option<OffsetDateTime> = None;
+    let mut do_unlock = false;
 
     match result.action {
         RbJudgeAction::Correct => {
@@ -538,21 +579,21 @@ pub async fn submit_answer(
                 team_id,
                 puzzle_id
             )
-            .execute(&app.db)
+            .execute(&mut *tx)
             .await?;
 
             if update.rows_affected() > 0 {
                 solved = true;
-                unlocks.extend(unlock_new_puzzles(app, team_id).await?);
+                do_unlock = true;
             }
         }
         RbJudgeAction::StartGame => {
             let result = sqlx::query!(
                 "UPDATE rb_team SET tstate = 1
-                WHERE id = $1 AND tstate = 0",
+                WHERE id = $1 AND tstate = 0;",
                 team_id
             )
-            .execute(&app.db)
+            .execute(&mut *tx)
             .await?;
 
             if result.rows_affected() > 0 {
@@ -565,10 +606,86 @@ pub async fn submit_answer(
                     ON CONFLICT (team_id, currency_id) DO NOTHING;",
                     team_id
                 )
-                .execute(&app.db)
+                .execute(&mut *tx)
                 .await?;
 
-                unlocks.extend(unlock_new_puzzles(app, team_id).await?);
+                do_unlock = true;
+            }
+        }
+        RbJudgeAction::Fail => {
+            let info = sqlx::query!(
+                "SELECT
+                    (SELECT COUNT(*) FROM rb_submission
+                        WHERE team_id = $1 AND puzzle_id = $2 AND saction = 0)
+                        AS failure_count,
+                    p.penalty,
+                    ARRAY_AGG(r.id) FILTER (WHERE r.id IS NOT NULL) AS round_ids
+                FROM rb_puzzle p
+                LEFT JOIN rb_round r ON r.puzzle = p.id
+                WHERE p.id = $2
+                GROUP BY p.id, p.penalty;",
+                team_id,
+                puzzle_id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+
+            let failure_count = info.failure_count.unwrap_or(0) as i32;
+            let mut cooldown_time: Option<i32> = None;
+            let rules: Vec<PenaltyRule> = serde_json::from_value(info.penalty)?;
+            for rule in rules {
+                match rule.rtype {
+                    RbPuzzlePenaltyType::FixedTime => {
+                        if let Some(x) = rule.args.get(0) {
+                            cooldown_time = Some(*x);
+                        }
+                    }
+                    RbPuzzlePenaltyType::LinearTime => {
+                        if let Some(x) = rule.args.get(0) {
+                            cooldown_time = Some((*x).saturating_mul(failure_count));
+                        }
+                    }
+                    RbPuzzlePenaltyType::Currency => {
+                        if let Some(currency_id) = rule.args.get(0)
+                            && let Some(amount) = rule.args.get(1)
+                        {
+                            sqlx::query!(
+                                "UPDATE rb_team_currency
+                                SET amount = amount - $1
+                                WHERE team_id = $2 AND currency_id = $3;",
+                                amount,
+                                team_id,
+                                currency_id
+                            )
+                            .execute(&mut *tx)
+                            .await?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(time) = cooldown_time {
+                cooldown_till = sqlx::query_scalar!(
+                    "UPDATE rb_team_puzzle
+                    SET cooldown_till = NOW() + ($1 * INTERVAL '1 second')
+                    WHERE team_id = $2 AND puzzle_id = $3
+                    RETURNING cooldown_till;",
+                    time as i64,
+                    team_id,
+                    puzzle_id
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+
+                if let Some(round_ids) = info.round_ids
+                    && !round_ids.is_empty()
+                {
+                    for round_id in round_ids {
+                        db::cache::invalidate_team_round(app, team_id, round_id).await?;
+                    }
+                } else {
+                    db::cache::invalidate_team_puzzle(app, team_id, puzzle_id).await?;
+                }
             }
         }
         _ => {}
@@ -577,13 +694,20 @@ pub async fn submit_answer(
     tx.commit().await?;
 
     if result.action.side_effect() {
-        db::cache::invalidate_team_puzzle(&app.db, &app.kv, team_id, puzzle_id).await?;
+        db::cache::invalidate_team_puzzle_solved(app, team_id, puzzle_id).await?;
     }
+
+    let unlocks = if do_unlock {
+        unlock_new_puzzles(app, team_id).await?
+    } else {
+        vec![]
+    };
 
     Ok(SubmitAnswerResult::Ok {
         result,
         solved,
         unlocks,
+        cooldown_till,
     })
 }
 
@@ -786,8 +910,7 @@ pub enum PurchaseHintResult {
 }
 
 pub async fn purchase_hint(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
+    app: &AppState,
     user_id: i32,
     hint_id: i32,
 ) -> Result<PurchaseHintResult, RbInternalError> {
@@ -805,7 +928,7 @@ pub async fn purchase_hint(
         user_id,
         hint_id
     )
-    .fetch_optional(db_pool)
+    .fetch_optional(&app.db)
     .await?;
 
     if info.is_none() {
@@ -813,7 +936,7 @@ pub async fn purchase_hint(
     }
     let info = info.unwrap();
 
-    let mut tx = db_pool.begin().await?;
+    let mut tx = app.db.begin().await?;
 
     if info.cost_id.is_some() {
         let result = sqlx::query!(
@@ -824,10 +947,10 @@ pub async fn purchase_hint(
             ) - $3
             FROM rb_currency c
             WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
-                AND LEAST(
+                AND ($3 <= 0 OR LEAST(
                     tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
                     c.max_amount
-                ) >= $3;",
+                ) >= $3);",
             info.team_id, info.cost_id, info.cost_amount
         )
         .execute(&mut *tx)
@@ -854,10 +977,10 @@ pub async fn purchase_hint(
         info.team_id,
         hint_id
     )
-    .fetch_one(db_pool)
+    .fetch_one(&app.db)
     .await?;
 
-    db::cache::invalidate_team_hints(kv_pool, info.team_id, info.puzzle_id).await?;
+    db::cache::invalidate_team_hints(app, info.team_id, info.puzzle_id).await?;
 
     tx.commit().await?;
     Ok(PurchaseHintResult::Ok(result))

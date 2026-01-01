@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 use validator::Validate;
 
 use crate::{
-    DbPool, KvPool, db,
+    AppState, DbPool, KvPool, db,
     error::RbInternalError,
     model::game::{RbTeam, RbTeamState},
 };
@@ -338,7 +338,7 @@ pub struct UserUpdateData {
 }
 
 pub async fn user_update(
-    db_pool: &DbPool,
+    app: &AppState,
     game_id: i32,
     user_id: i32,
     data: &UserUpdateData,
@@ -386,11 +386,11 @@ pub async fn user_update(
 
     let result = qb
         .build_query_scalar::<i32>()
-        .fetch_optional(db_pool)
+        .fetch_optional(&app.db)
         .await?;
 
     if let Some(team_id) = result {
-        db::cache::invalidate_team_info(db_pool, team_id).await?;
+        db::cache::invalidate_team_info(&app, team_id).await?;
         Ok(true)
     } else {
         Ok(false)

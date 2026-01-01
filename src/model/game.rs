@@ -1,5 +1,6 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use sqlx::{
     Decode, Postgres, Type, postgres::PgValueRef, prelude::FromRow, types::time::OffsetDateTime,
 };
@@ -154,4 +155,14 @@ impl From<Option<String>> for RbJudgeAction {
             None => RbJudgeAction::Error,
         }
     }
+}
+
+#[derive(Serialize_repr, Deserialize_repr, Clone, Copy, Eq, PartialEq)]
+#[repr(i16)]
+#[serde(into = "i16")]
+pub enum RbPuzzlePenaltyType {
+    No = 0,
+    FixedTime = 1,
+    LinearTime = 2,
+    Currency = 3,
 }

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{error::RbInternalError, model::game::RbJudgeAction};
 
@@ -26,8 +27,8 @@ pub struct JudgeResult {
     pub answer: Option<String>,
 }
 
-pub fn parse_judge(s: &str) -> Result<Vec<JudgeRule>, RbInternalError> {
-    let rules: Vec<JudgeRule> = serde_json::from_str(s)?;
+pub fn value_to_judge(v: Value) -> Result<Vec<JudgeRule>, RbInternalError> {
+    let rules: Vec<JudgeRule> = serde_json::from_value(v)?;
 
     let rules = rules
         .into_iter()
@@ -41,10 +42,6 @@ pub fn parse_judge(s: &str) -> Result<Vec<JudgeRule>, RbInternalError> {
         .collect();
 
     Ok(rules)
-}
-
-pub fn judge_by_json(s: &str, answer: &str) -> Result<JudgeResult, RbInternalError> {
-    judge_by_rules(&parse_judge(s)?, answer)
 }
 
 pub fn judge_by_rules(rules: &[JudgeRule], answer: &str) -> Result<JudgeResult, RbInternalError> {

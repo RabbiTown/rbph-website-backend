@@ -15,20 +15,20 @@ SELECT setval('rb_round_id_seq', 100);
 
 -- puzzle
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
 VALUES (1, '序幕', 1, '请提交「START」以开始游戏。\n\n**注意：**开始游戏后，不再能退出、解散队伍。', 0,
         '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"bili20fans","action":"easter_egg","result":"我的 B 站 20 粉丝啦，哇！"}]',
-        'default', 1);
+        '[{"type":1,"args":[30]}]', NULL, 'default', 1);
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
 VALUES (2, '命名毋以讹传之', 1, E'<div class="text-center">\n\n*只有起错的名字，没有叫错的外号。*\n\n</div>\n\n![](https://info.pkupuzzle.art/assets/images/image_1-34a27cc0b5fab8a33eac4f01db91ee5d.webp)', 0,
         '[{"type":"exact","text":"ACRE CAMP","action":"milestone"},{"type":"exact","text":"ORME SHOE","action":"correct"},{"type":"exact","text":"ORME SHOE","action":"correct"}]',
-        '(game-started)', 1);
+        '[{"type":2,"args":[60]}]', NULL, '(game-started)', 1);
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
 VALUES (3, '只说明书', 1, E'<div class="text-center">\n\n*不讲暗话，只说明书。*\n\n</div><hr>\n\n题目内容略。', 0,
         '[{"type":"exact","text":"UTOPIAHYMN","action":"milestone"},{"type":"exact","text":"LEISHMANIA","action":"milestone"},{"type":"exact","text":"MEMBERLESS","action":"milestone"},{"type":"exact","text":"DRAWSTRING","action":"milestone"},{"type":"exact","text":"THEREAFTER","action":"milestone"},{"type":"exact","text":"GLUTENFREE","action":"milestone"},{"type":"exact","text":"1099","action":"milestone","result":"本小题答案是【GLUTENFREE】"},{"type":"exact","text":"FLIPS","action":"milestone","result":"请将“填字游戏”当前图片沿长边翻转后，回到第 1 步重新完成题目。"},{"type":"exact","text":"WHIRL","action":"milestone","result":"时间在流逝……请将“填字游戏”当前图片按箭头方向旋转 90° 后，回到第 1 步重新完成题目。"},{"type":"exact","text":"BRUSH","action":"correct"}]',
-        '(countge (set 2) 1)', 1);
+        '[{"type":1,"args":[10]},{"type":3,"args":[1,10]}]', 20, '(countge (set 2) 1)', 1);
 
 SELECT setval('rb_puzzle_id_seq', 100);
 

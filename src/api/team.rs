@@ -4,17 +4,17 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
-use time::OffsetDateTime;
 use validator::Validate;
 
 use crate::{
     AppState,
     db::{
         self,
-        team::{RbCurrencyShowData, RbTeamPutData},
+        team::RbTeamPutData,
     },
     error::RbError,
-    extractor::auth::AuthUser, model::game::RbTeamState,
+    extractor::auth::AuthUser,
+    model::game::RbTeamState,
 };
 
 #[derive(Deserialize)]
@@ -108,7 +108,7 @@ async fn update_self(
             .err()?;
     }
 
-    let result = db::team::user_update(&app.db, path.game_id, user.uid, &req).await?;
+    let result = db::team::user_update(&app, path.game_id, user.uid, &req).await?;
     if !result {
         RbError::conflict(TeamUpdateResult::Bad.into()).err()?;
     }
@@ -233,13 +233,6 @@ async fn get_self(
     Ok(HttpResponse::Ok().json(result))
 }
 
-#[derive(Serialize)]
-struct TeamCurrencyResponse {
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    server_time: OffsetDateTime,
-    data: Vec<RbCurrencyShowData>,
-}
-
 async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
     let team_id = user.get_team_id();
     if team_id.is_none() {
@@ -248,10 +241,7 @@ async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<H
 
     let result = db::team::get_currency_info(&app.db, &app.kv, team_id.unwrap()).await?;
 
-    Ok(HttpResponse::Ok().json(TeamCurrencyResponse {
-        server_time: OffsetDateTime::now_utc(),
-        data: result,
-    }))
+    Ok(HttpResponse::Ok().json(result))
 }
 
 // TODO : add paging

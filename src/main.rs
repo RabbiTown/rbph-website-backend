@@ -19,7 +19,10 @@ use env_logger::Env;
 use sqlx::PgPool;
 use tokio::time;
 
-use crate::{config::Settings, module::sync::SyncHub};
+use crate::{
+    config::Settings,
+    module::{email::EmailService, sync::SyncHub},
+};
 
 pub type DbPool = PgPool;
 pub type KvPool = deadpool_redis::Pool;
@@ -29,6 +32,7 @@ pub struct AppState {
     pub kv: KvPool,
     pub settings: Settings,
     pub sync_hub: Arc<SyncHub>,
+    pub email: Option<Arc<EmailService>>,
 }
 
 #[actix_web::main]
@@ -57,11 +61,26 @@ async fn main() -> std::io::Result<()> {
 
     let sync_hub = Arc::new(SyncHub::default());
 
+    let email_service = if settings.auth.email.enabled {
+        Some(Arc::new(
+            EmailService::new(
+                &settings.auth.email.smtp,
+                &settings.auth.email.smtp_user,
+                &settings.auth.email.smtp_pass,
+                &settings.auth.email.sender,
+            )
+            .unwrap(),
+        ))
+    } else {
+        None
+    };
+
     let app_state = AppState {
         db: db_pool,
         kv: kv_pool,
         settings,
         sync_hub: sync_hub.clone(),
+        email: email_service.clone(),
     };
     let app_state_data = web::Data::new(app_state);
 

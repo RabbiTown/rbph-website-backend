@@ -129,6 +129,9 @@ pub enum RbInternalError {
     RedisPool(deadpool::managed::PoolError<RedisError>),
     Json(serde_json::Error),
     Session(SessionInsertError),
+    Askama(askama::Error),
+    Lettre(lettre::error::Error),
+    LettreAddress(lettre::address::AddressError),
     Other(String),
 }
 
@@ -141,6 +144,9 @@ impl ResponseError for RbInternalError {
             RbInternalError::Redis(err) => RbError::internal(err).resp(),
             RbInternalError::Json(err) => RbError::internal(err).resp(),
             RbInternalError::Session(err) => RbError::internal(err).resp(),
+            RbInternalError::Askama(err) => RbError::internal(err).resp(),
+            RbInternalError::Lettre(err) => RbError::internal(err).resp(),
+            RbInternalError::LettreAddress(err) => RbError::internal(err).resp(),
             RbInternalError::Other(err) => RbError::internal(err).resp(),
         }
     }
@@ -179,6 +185,24 @@ impl From<serde_json::Error> for RbInternalError {
 impl From<SessionInsertError> for RbInternalError {
     fn from(value: SessionInsertError) -> Self {
         RbInternalError::Session(value)
+    }
+}
+
+impl From<askama::Error> for RbInternalError {
+    fn from(value: askama::Error) -> Self {
+        RbInternalError::Askama(value)
+    }
+}
+
+impl From<lettre::error::Error> for RbInternalError {
+    fn from(value: lettre::error::Error) -> Self {
+        RbInternalError::Lettre(value)
+    }
+}
+
+impl From<lettre::address::AddressError> for RbInternalError {
+    fn from(value: lettre::address::AddressError) -> Self {
+        RbInternalError::LettreAddress(value)
     }
 }
 

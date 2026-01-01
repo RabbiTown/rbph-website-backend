@@ -76,6 +76,14 @@ struct PendingUser {
     pass: String,
 }
 
+pub async fn pending_exists(pool: &KvPool, email: &str) -> Result<bool, RbInternalError> {
+    let mut conn = pool.get().await?;
+
+    let key = format!("pending_email:{email}");
+    let exists: Option<String> = conn.get(&key).await?;
+    Ok(exists.is_some())
+}
+
 pub async fn put_pending(
     pool: &KvPool,
     email: &str,
@@ -98,6 +106,9 @@ pub async fn put_pending(
     )
     .await?;
 
+    conn.set_ex::<_, _, ()>(format!("pending_email:{email}"), token.clone(), 15 * 60)
+        .await?;
+
     Ok(token)
 }
 
@@ -115,6 +126,8 @@ pub async fn verify_pending(
 
     let user: PendingUser = serde_json::from_str(&data.unwrap())?;
     let result = register_pass_hashed(db_pool, &user.email, &user.pass).await?;
+
+    let _: () = conn.del(format!("pending_email:{}", user.email)).await?;
 
     Ok(Some(result))
 }

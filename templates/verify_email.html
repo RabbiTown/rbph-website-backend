@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta content="text/html; charset=utf-8" http-equiv="Content-Type" />
+    <title>RBPH - 账号注册验证</title>
+  </head>
+  <body style="font-family: Arial, sans-serif; background-color: #f9f9f9; margin: 0; padding: 20px; color: #333333">
+    <div style="max-width: 600px; margin: 0 auto">
+      <h1 style="font-size: 24px; font-weight: bold; color: #e91e63; margin-bottom: 20px">RBPH - 账号注册验证</h1>
+      <p style="font-size: 16px; line-height: 1.5">{{ email }}：</p>
+      <p style="font-size: 16px; line-height: 1.5">欢迎参加本次比赛！请点击验证账号：</p>
+      <p style="text-align: center; margin: 20px 0">
+        <a href="{{ verify_url }}" style="display: inline-block; padding: 8px 20px; background-color: #e91e63; color: #ffffff; text-decoration: none; border-radius: 5px; font-weight: bold"> 验证账号 </a>
+      </p>
+      <p style="font-size: 14px; line-height: 1.5">
+        如果按钮无法点击，请复制以下链接到浏览器：<br />
+        <span style="font-size: 14px; word-break: break-all; color: #e91e63"> {{ verify_url }} </span>
+      </p>
+      <p style="font-size: 12px; color: #999999; text-align: left; margin-top: 30px">
+        验证在 60 分钟内有效。<br />
+        如果您没有注册，请忽略此邮件。<br /><br />
+        rbph-website @ {{ time }}
+      </p>
+    </div>
+  </body>
+</html>

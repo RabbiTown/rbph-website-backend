@@ -9,3 +9,13 @@ secret_key = "cmJwaDIwMjZAZGV2"
 max_session = 3
 
 [auth.captcha]
+
+[auth.email]
+enabled = false
+sender = "RBPH <bot@rabbi.town>"
+smtp = ""
+smtp_user = ""
+smtp_pass = ""
+
+[auth.email.url]
+verify = "http://localhost/verify?token={}"

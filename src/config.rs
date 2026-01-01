@@ -35,6 +35,7 @@ impl AppConfig {
 pub struct AuthConfig {
     pub max_session: usize,
     pub captcha: CaptchaConfig,
+    pub email: EmailConfig,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +45,21 @@ pub struct CaptchaConfig {}
 pub struct Settings {
     pub app: AppConfig,
     pub auth: AuthConfig,
+}
+
+#[derive(Deserialize)]
+pub struct EmailConfig {
+    pub enabled: bool,
+    pub sender: String,
+    pub smtp: String,
+    pub smtp_user: String,
+    pub smtp_pass: String,
+    pub url: UrlConfig,
+}
+
+#[derive(Deserialize)]
+pub struct UrlConfig {
+    pub verify: String,
 }
 
 impl Settings {

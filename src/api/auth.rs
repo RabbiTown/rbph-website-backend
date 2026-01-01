@@ -131,6 +131,7 @@ enum UserRegisterResult {
     UserExists = -1,
     Ok = 0,
     EmailSent = 1,
+    EmailAlreadySent = 2,
 }
 
 async fn register(
@@ -139,8 +140,7 @@ async fn register(
 ) -> Result<HttpResponse> {
     let req = req.normalized();
     if let Err(e) = req.validate() {
-        RbError::unauth()
-            .code(UserRegisterResult::Invalid.into())
+        RbError::bad_req(UserRegisterResult::Invalid.into())
             .msg(e.to_string())
             .err()?;
     }
@@ -149,16 +149,38 @@ async fn register(
         RbError::conflict(UserRegisterResult::UserExists.into()).err()?
     }
 
-    let token = db::user::put_pending(&app.kv, &req.email, &req.password).await?;
+    if app.settings.auth.email.enabled
+        && let Some(email) = &app.email
+    {
+        if db::user::pending_exists(&app.kv, &req.email).await? {
+            return Ok(HttpResponse::Ok().json(UserRegisterResponse {
+                code: UserRegisterResult::EmailAlreadySent,
+                uid: None,
+            }));
+        }
 
-    log::debug!("register : {} ({})", req.email, token);
+        let token = db::user::put_pending(&app.kv, &req.email, &req.password).await?;
 
-    // TODO : email configuration
+        log::debug!("register : {} ({})", req.email, token);
 
-    Ok(HttpResponse::Ok().json(UserRegisterResponse {
-        code: UserRegisterResult::EmailSent,
-        uid: None,
-    }))
+        email
+            .send_verify_email(
+                &req.email,
+                &app.settings.auth.email.url.verify.replace("{}", &token),
+            )
+            .await?;
+
+        Ok(HttpResponse::Ok().json(UserRegisterResponse {
+            code: UserRegisterResult::EmailSent,
+            uid: None,
+        }))
+    } else {
+        let uid = db::user::register(&app.db, &req.email, &req.password).await?;
+        Ok(HttpResponse::Ok().json(UserRegisterResponse {
+            code: UserRegisterResult::Ok,
+            uid: Some(uid),
+        }))
+    }
 }
 
 // -- verify --

@@ -390,7 +390,7 @@ pub async fn user_update(
         .await?;
 
     if let Some(team_id) = result {
-        db::cache::invalidate_team_info(&app, team_id).await?;
+        db::cache::invalidate_team_info(app, team_id).await?;
         Ok(true)
     } else {
         Ok(false)

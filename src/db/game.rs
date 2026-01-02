@@ -9,14 +9,6 @@ use crate::{
     model::{game::RbGame, user::RbUserRole},
 };
 
-pub struct RbGamePutData {
-    pub title: String,
-    pub reg_open_at: Option<OffsetDateTime>,
-    pub pre_open_at: Option<OffsetDateTime>,
-    pub start_at: OffsetDateTime,
-    pub end_at: OffsetDateTime,
-}
-
 // TODO : add kv cache
 pub async fn exists(
     pool: &DbPool,
@@ -65,23 +57,6 @@ pub async fn get_by_id(
         game_id
     )
     .fetch_optional(pool)
-    .await?;
-
-    Ok(result)
-}
-
-pub async fn append(pool: &DbPool, data: &RbGamePutData) -> Result<i32, RbInternalError> {
-    let result = sqlx::query_scalar!(
-        "INSERT INTO rb_game (title, reg_open_at, pre_open_at, start_at, end_at)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id;",
-        data.title,
-        data.reg_open_at,
-        data.pre_open_at,
-        data.start_at,
-        data.end_at
-    )
-    .fetch_one(pool)
     .await?;
 
     Ok(result)

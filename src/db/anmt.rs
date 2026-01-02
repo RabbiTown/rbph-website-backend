@@ -2,11 +2,7 @@ use serde::Serialize;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
-use crate::{
-    DbPool,
-    error::RbInternalError,
-    model::game::RbContentType,
-};
+use crate::{DbPool, error::RbInternalError, model::game::RbContentType};
 
 #[derive(FromRow, Serialize)]
 pub struct RbAnnouncementShowData {

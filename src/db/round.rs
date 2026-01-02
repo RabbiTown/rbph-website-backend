@@ -220,14 +220,12 @@ pub async fn get_state_for_team(
 
     Ok(RbRoundTeamStateShowData {
         puzzles,
-        puzzle: row.and_then(|r| {
-            Some(RbPuzzleTeamStateShowData {
-                state: r.pstate.into(),
-                max_submit: r.max_submit,
-                answers: r.answers.unwrap_or_default(),
-                utime_at: r.utime_at,
-                cooldown_till: r.cooldown_till,
-            })
+        puzzle: row.map(|r| RbPuzzleTeamStateShowData {
+            state: r.pstate.into(),
+            max_submit: r.max_submit,
+            answers: r.answers.unwrap_or_default(),
+            utime_at: r.utime_at,
+            cooldown_till: r.cooldown_till,
         }),
     })
 }

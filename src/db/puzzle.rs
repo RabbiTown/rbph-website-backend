@@ -636,17 +636,17 @@ pub async fn submit_answer(
             for rule in rules {
                 match rule.rtype {
                     RbPuzzlePenaltyType::FixedTime => {
-                        if let Some(x) = rule.args.get(0) {
+                        if let Some(x) = rule.args.first() {
                             cooldown_time = Some(*x);
                         }
                     }
                     RbPuzzlePenaltyType::LinearTime => {
-                        if let Some(x) = rule.args.get(0) {
+                        if let Some(x) = rule.args.first() {
                             cooldown_time = Some((*x).saturating_mul(failure_count));
                         }
                     }
                     RbPuzzlePenaltyType::Currency => {
-                        if let Some(currency_id) = rule.args.get(0)
+                        if let Some(currency_id) = rule.args.first()
                             && let Some(amount) = rule.args.get(1)
                         {
                             sqlx::query!(

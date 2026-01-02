@@ -8,10 +8,7 @@ use validator::Validate;
 
 use crate::{
     AppState,
-    db::{
-        self,
-        team::RbTeamPutData,
-    },
+    db::{self, team::RbTeamPutData},
     error::RbError,
     extractor::auth::AuthUser,
     model::game::RbTeamState,

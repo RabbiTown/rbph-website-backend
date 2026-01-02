@@ -131,13 +131,13 @@ async fn judge_puzzle(
                         "answer": req.answer,
                         "action": result.action,
                     });
-                    if cooldown_till.is_some() {
-                        if let Ok(x) = serialize_option_offset_datetime::serialize(
+                    if cooldown_till.is_some()
+                        && let Ok(x) = serialize_option_offset_datetime::serialize(
                             &cooldown_till,
                             serde_json::value::Serializer,
-                        ) {
-                            sync["cooldown_till"] = x;
-                        }
+                        )
+                    {
+                        sync["cooldown_till"] = x;
                     }
                     if solved {
                         sync["solved"] = json!(true);

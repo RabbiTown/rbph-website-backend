@@ -176,7 +176,7 @@ impl LeaderBoardCache {
         &self,
         db_pool: &DbPool,
         team_id: i32,
-    ) -> Result<(i32, LeaderBoardTeamInfo), RbInternalError> {
+    ) -> Result<Option<(i32, LeaderBoardTeamInfo)>, RbInternalError> {
         let team = sqlx::query!(
             "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
                 COUNT(tp.puzzle_id) AS \"solves!\", t.game_id
@@ -186,8 +186,13 @@ impl LeaderBoardCache {
             GROUP BY t.id;",
             team_id
         )
-        .fetch_one(db_pool)
+        .fetch_optional(db_pool)
         .await?;
+
+        if team.is_none() {
+            return Ok(None);
+        }
+        let team = team.unwrap();
 
         let members = sqlx::query_scalar!(
             "SELECT u.nickname
@@ -200,7 +205,7 @@ impl LeaderBoardCache {
         .fetch_all(db_pool)
         .await?;
 
-        Ok((
+        Ok(Some((
             team.game_id,
             LeaderBoardTeamInfo {
                 id: team.id,
@@ -211,7 +216,7 @@ impl LeaderBoardCache {
                 solves: team.solves,
                 members,
             },
-        ))
+        )))
     }
 
     pub async fn update_team(
@@ -220,16 +225,29 @@ impl LeaderBoardCache {
         team_id: i32,
         affact_order: bool,
     ) -> Result<(), RbInternalError> {
-        let (game_id, team) = self.fetch_team(db_pool, team_id).await?;
+        if let Some((game_id, team)) = self.fetch_team(db_pool, team_id).await? {
+            let mut guard = self.cache.write().await;
+            if let Some(cache) = guard.get_mut(&game_id) {
+                if affact_order {
+                    cache.mark_order_dirty();
+                } else {
+                    cache.mark_json_dirty();
+                }
+                cache.teams.insert(team.id, team);
+            }
+        }
 
+        Ok(())
+    }
+
+    pub async fn remove_team(&self, game_id: i32, team_id: i32) -> Result<(), RbInternalError> {
         let mut guard = self.cache.write().await;
         if let Some(cache) = guard.get_mut(&game_id) {
-            if affact_order {
+            if cache.teams.remove(&team_id).is_some() {
                 cache.mark_order_dirty();
             } else {
                 cache.mark_json_dirty();
             }
-            cache.teams.insert(team.id, team);
         }
 
         Ok(())

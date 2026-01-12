@@ -1,4 +1,11 @@
-use actix_web::{HttpResponse, Result, web};
+use actix_session::SessionExt;
+use actix_web::{
+    HttpResponse, Result,
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    middleware::{self, Next},
+    web,
+};
 use num_enum::IntoPrimitive;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -8,10 +15,12 @@ use validator::Validate;
 
 use crate::{
     AppState,
-    db::{self, team::RbTeamPutData},
+    db::{
+        self,
+        team::{RbTeamPutData, TeamJoinResult},
+    },
     error::RbError,
     extractor::auth::AuthUser,
-    model::game::RbTeamState,
 };
 
 #[derive(Deserialize)]
@@ -69,7 +78,7 @@ async fn create_self(
         game_id: path.game_id,
     };
 
-    let team_id = db::team::user_create(&app.db, &app.kv, user.uid, &data).await?;
+    let team_id = db::team::user_create(&app.db, user.uid, &data).await?;
     if team_id.is_none() {
         RbError::conflict(TeamCreateResult::ToMany.into()).err()?
     }
@@ -127,12 +136,12 @@ enum TeamLeaveResult {
     Ok = 0,
 }
 
-async fn leave_self(
-    user: AuthUser,
-    path: web::Path<GamePathInfo>,
-    app: web::Data<AppState>,
-) -> Result<HttpResponse> {
-    let result = db::team::leave(&app.db, &app.kv, path.game_id, user.uid).await?;
+async fn leave_self(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let team_id = user
+        .get_team_id()
+        .ok_or(RbError::conflict(TeamLeaveResult::Bad.into()))?;
+
+    let result = db::team::leave(&app, team_id, user.uid).await?;
     if !result {
         RbError::conflict(TeamLeaveResult::Bad.into()).err()?;
     }
@@ -142,12 +151,10 @@ async fn leave_self(
     }))
 }
 
-async fn disband_self(
-    user: AuthUser,
-    path: web::Path<GamePathInfo>,
-    app: web::Data<AppState>,
-) -> Result<HttpResponse> {
-    let result = db::team::disband(&app.db, &app.kv, path.game_id, user.uid).await?;
+async fn disband_self(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let team_id = user.get_team_id().ok_or(RbError::forbid())?;
+
+    let result = db::team::disband(&app, team_id).await?;
     if !result {
         RbError::conflict(TeamLeaveResult::Bad.into()).err()?;
     }
@@ -162,59 +169,23 @@ struct TeamJoinRequest {
     password: String,
 }
 
-#[repr(i32)]
-#[derive(IntoPrimitive, Serialize_repr)]
-enum TeamJoinResult {
-    WrongPwd = -4,
-    TeamFull = -3,
-    Locked = -2,
-    ToMany = -1,
-    Ok = 0,
-}
-
 #[derive(Serialize)]
 struct TeamJoinResponse {
     code: TeamJoinResult,
 }
 
-// FIXME : TOCTOU
 async fn join(
     path: web::Path<TeamPathInfo>,
     req: web::Json<TeamJoinRequest>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let data = db::team::get_by_id_verify(&app.db, path.team_id).await?;
-    if data.is_none() {
+    let result = db::team::join(&app, path.team_id, user.uid, &req.password).await?;
+    if matches!(result, TeamJoinResult::NotFound) {
         RbError::not_found().err()?
     }
 
-    let data = data.unwrap();
-
-    if data.tstate == RbTeamState::Banned {
-        RbError::conflict(TeamJoinResult::Locked.into()).err()?
-    }
-
-    // TODO : make max count configurable
-    if data.member_count.unwrap_or_default() >= 6 {
-        RbError::conflict(TeamJoinResult::TeamFull.into()).err()?
-    }
-
-    if data.pass != req.password {
-        RbError::unauth()
-            .code(TeamJoinResult::WrongPwd.into())
-            .err()?
-    }
-
-    let result = db::team::join(&app.db, &app.kv, path.team_id, user.uid, false).await?;
-
-    Ok(HttpResponse::Ok().json(TeamJoinResponse {
-        code: if result {
-            TeamJoinResult::Ok
-        } else {
-            TeamJoinResult::ToMany
-        },
-    }))
+    Ok(HttpResponse::Ok().json(TeamJoinResponse { code: result }))
 }
 
 async fn get_self(
@@ -241,6 +212,70 @@ async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<H
     Ok(HttpResponse::Ok().json(result))
 }
 
+// -- kick --
+
+#[derive(Deserialize)]
+struct TeamTargetRequest {
+    target: i32,
+}
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+enum TeamTargetResult {
+    TargetSelf = -2,
+    NotFound = -1,
+    Ok = 0,
+}
+
+#[derive(Serialize)]
+struct TeamTargetResponse {
+    code: TeamTargetResult,
+}
+
+async fn kick_self(
+    req: web::Json<TeamTargetRequest>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if req.target == user.uid {
+        RbError::conflict(TeamTargetResult::TargetSelf.into()).err()?;
+    }
+
+    let team_id = user.get_team_id().ok_or(RbError::forbid())?;
+
+    let result = db::team::kick_member(&app, team_id, req.target).await?;
+    if !result {
+        RbError::conflict(TeamTargetResult::NotFound.into()).err()?;
+    }
+
+    Ok(HttpResponse::Ok().json(TeamTargetResponse {
+        code: TeamTargetResult::Ok,
+    }))
+}
+
+// -- promote --
+
+async fn promote_self(
+    req: web::Json<TeamTargetRequest>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if req.target == user.uid {
+        RbError::conflict(TeamTargetResult::TargetSelf.into()).err()?;
+    }
+
+    let team_id = user.get_team_id().ok_or(RbError::forbid())?;
+
+    let result = db::team::promote_member(&app, team_id, req.target).await?;
+    if !result {
+        RbError::conflict(TeamTargetResult::NotFound.into()).err()?;
+    }
+
+    Ok(HttpResponse::Ok().json(TeamTargetResponse {
+        code: TeamTargetResult::Ok,
+    }))
+}
+
 // TODO : add paging
 async fn list_all() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().finish())
@@ -255,15 +290,45 @@ async fn get_info(req: web::Path<TeamPathInfo>, app: web::Data<AppState>) -> Res
     Ok(HttpResponse::Ok().json(result))
 }
 
+async fn check_leader_middleware(
+    req: ServiceRequest,
+    next: Next<impl MessageBody>,
+) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
+    let game_id: i32 = req
+        .match_info()
+        .get("game_id")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(RbError::not_found)?;
+
+    let user_id = req.get_session().get::<i32>("user_id").ok().flatten();
+
+    let app = req.app_data::<web::Data<AppState>>().unwrap();
+
+    if let Some(user_id) = user_id
+        && db::team::is_leader_in_game(app, game_id, user_id).await?
+    {
+    } else {
+        RbError::forbid().err()?;
+    }
+
+    next.call(req).await
+}
+
 // /games/{game_id}/teams/...
 pub fn games_config(cfg: &mut web::ServiceConfig) {
     cfg.route("", web::get().to(list_all))
         .route("/self", web::get().to(get_self))
         .route("/self", web::post().to(create_self))
-        .route("/self", web::patch().to(update_self))
         .route("/self/leave", web::post().to(leave_self))
-        .route("/self/disband", web::post().to(disband_self))
-        .route("/self/currency", web::get().to(get_self_currency));
+        .route("/self/currency", web::get().to(get_self_currency))
+        .service(
+            web::scope("/self")
+                .wrap(middleware::from_fn(check_leader_middleware))
+                .route("", web::patch().to(update_self))
+                .route("/disband", web::post().to(disband_self))
+                .route("/promote", web::post().to(promote_self))
+                .route("/kick", web::post().to(kick_self)),
+        );
 }
 
 // /teams/...

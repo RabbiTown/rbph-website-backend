@@ -3,7 +3,7 @@ use sqlx::{QueryBuilder, prelude::FromRow};
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool, KvPool,
+    DbPool,
     db::{self},
     error::RbInternalError,
     model::{game::RbGame, user::RbUserRole},
@@ -90,13 +90,12 @@ pub struct GameUserInfo {
 
 pub async fn get_game_user_info(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     user_id: i32,
     game_id: i32,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
     // TODO : check game is online & in progress
     if exists(db_pool, game_id, RbUserRole::User).await? {
-        let team_id = db::team::get_id_by_user_game(db_pool, kv_pool, user_id, game_id).await?;
+        let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
         Ok(Some(GameUserInfo { game_id, team_id }))
     } else {
         Ok(None)

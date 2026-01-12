@@ -143,7 +143,7 @@ async fn check_game_middleware(
     let app = req.app_data::<web::Data<AppState>>().unwrap();
 
     if let Some(user_id) = user_id {
-        match db::game::get_game_user_info(&app.db, &app.kv, user_id, game_id).await? {
+        match db::game::get_game_user_info(&app.db, user_id, game_id).await? {
             Some(info) => {
                 req.extensions_mut().insert(info);
             }

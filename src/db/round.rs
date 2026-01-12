@@ -86,7 +86,7 @@ pub async fn get_round_user_info(
 
     // TODO : check game is online & in progress
 
-    let team_id = db::team::get_id_by_user_game(db_pool, kv_pool, user_id, game_id).await?;
+    let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
     if team_id.is_none() {
         return Ok(None);
     }

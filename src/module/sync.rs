@@ -43,12 +43,12 @@ impl SyncHub {
         }
     }
 
-    pub fn do_push_all<T: Serialize>(&self, users: Vec<i32>, msg_type: SyncMessageType, data: T) {
+    pub fn do_push_all<T: Serialize>(&self, users: &[i32], msg_type: SyncMessageType, data: T) {
         let envelope = WsEnvelope { msg_type, data };
         if let Ok(json) = serde_json::to_string(&envelope) {
             let arc_json = Arc::new(json);
             for user_id in users {
-                if let Some(addrs) = self.users.get(&user_id) {
+                if let Some(addrs) = self.users.get(user_id) {
                     for addr in addrs.iter() {
                         addr.do_send(WsPush(arc_json.clone()));
                     }
@@ -65,7 +65,7 @@ impl SyncHub {
         data: T,
     ) -> Result<(), RbInternalError> {
         let members = db::team::get_member_id(db_pool, team_id).await?;
-        self.do_push_all(members, msg_type, data);
+        self.do_push_all(&members, msg_type, data);
         Ok(())
     }
 
@@ -193,12 +193,10 @@ pub enum SyncMessageType {
     GameNewAnnouncement = 101,
 
     // 200 - team
-    TeamMemberJoined = 201,
-    TeamMemberLeft = 202,
-    TeamDisbanded = 203,
-    TeamInfoUpdated = 204,
-    TeamGameStarted = 205,
-    TeamGameFinished = 206,
+    TeamInfoUpdated = 201,
+    TeamDisbanded = 202,
+    TeamSelfKicked = 203,
+    TeamSelfPromoted = 204,
 
     // 300 - puzzle
     PuzzleSubmitted = 301,

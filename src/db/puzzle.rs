@@ -113,7 +113,7 @@ pub async fn get_puzzle_user_info(
 
     // TODO : check game is online & in progress
 
-    let team_id = db::team::get_id_by_user_game(db_pool, kv_pool, user_id, game_id).await?;
+    let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
     if team_id.is_none() {
         return Ok(None);
     }
@@ -361,7 +361,8 @@ pub async fn get_judge_rules(
     Ok(Some(rules))
 }
 
-static UNLOCK_COND_CACHE: Lazy<DashMap<i32, Arc<Vec<(i32, GateExpr)>>>> = Lazy::new(DashMap::new);
+type UnlockCondMap = DashMap<i32, Arc<Vec<(i32, GateExpr)>>>;
+static UNLOCK_COND_CACHE: Lazy<UnlockCondMap> = Lazy::new(DashMap::new);
 
 pub async fn get_unlock_conds_by_game(
     pool: &DbPool,

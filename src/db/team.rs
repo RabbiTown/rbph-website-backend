@@ -1,13 +1,15 @@
-use deadpool_redis::redis::{AsyncCommands, RedisError};
+use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
+use serde_repr::Serialize_repr;
 use sqlx::QueryBuilder;
 use time::OffsetDateTime;
 use validator::Validate;
 
 use crate::{
-    AppState, DbPool, KvPool, db,
+    AppState, DbPool, db,
     error::RbInternalError,
     model::game::{RbTeam, RbTeamState},
+    module::sync::SyncMessageType,
 };
 
 #[derive(Deserialize)]
@@ -20,17 +22,9 @@ pub struct RbTeamPutData {
 
 pub async fn get_id_by_user_game(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     user_id: i32,
     game_id: i32,
 ) -> Result<Option<i32>, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("game:{game_id}:user:{user_id}:team_id");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok((cache != -1).then_some(cache));
-    }
-
     let result = sqlx::query_scalar!(
         "SELECT team_id FROM rb_team_member
         WHERE user_id = $1 AND game_id = $2;",
@@ -40,52 +34,7 @@ pub async fn get_id_by_user_game(
     .fetch_optional(db_pool)
     .await?;
 
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result.unwrap_or(-1), 60 * 60).await;
-    });
-
     Ok(result)
-}
-
-pub async fn update_user_team_cache(
-    kv_pool: &KvPool,
-    user_id: i32,
-    game_id: i32,
-    team_id: Option<i32>,
-) -> Result<(), RbInternalError> {
-    let key = format!("game:{game_id}:user:{user_id}:team_id");
-
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, team_id.unwrap_or(-1), 60 * 60).await;
-    });
-
-    Ok(())
-}
-
-pub async fn update_users_team_cache(
-    kv_pool: &KvPool,
-    user_ids: &[i32],
-    game_id: i32,
-    team_id: Option<i32>,
-) -> Result<(), RbInternalError> {
-    let keys: Vec<String> = user_ids
-        .iter()
-        .map(|x| format!("game:{game_id}:user:{x}:team_id"))
-        .collect();
-
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        for key in keys {
-            let _: Result<(), RedisError> = conn.set_ex(&key, team_id.unwrap_or(-1), 60 * 60).await;
-        }
-    });
-
-    Ok(())
 }
 
 #[derive(Serialize)]
@@ -153,62 +102,83 @@ pub async fn get_by_user_game(
     }))
 }
 
-#[derive(Serialize)]
-pub struct RbTeamVerifyData {
-    pub tstate: RbTeamState,
-    pub pass: String,
-    pub game_id: i32,
-    pub member_count: Option<i64>,
-}
-
-pub async fn get_by_id_verify(
-    pool: &DbPool,
-    team_id: i32,
-) -> Result<Option<RbTeamVerifyData>, RbInternalError> {
-    let result = sqlx::query_as!(
-        RbTeamVerifyData,
-        "SELECT t.tstate, t.pass, t.game_id, COUNT(m.user_id) AS member_count
-        FROM rb_team t
-        LEFT JOIN rb_team_member m ON m.team_id = t.id
-        WHERE t.id = $1
-        GROUP BY t.id",
-        team_id
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(result)
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+pub enum TeamJoinResult {
+    NotFound = -104,
+    WrongPwd = -4,
+    TeamFull = -3,
+    Locked = -2,
+    ToMany = -1,
+    Ok = 0,
 }
 
 pub async fn join(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
+    app: &AppState,
     team_id: i32,
     user_id: i32,
-    is_captain: bool,
-) -> Result<bool, RbInternalError> {
-    let result = sqlx::query_scalar!(
-        "INSERT INTO rb_team_member (team_id, user_id, is_captain)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (team_id, user_id) DO NOTHING
-        RETURNING game_id;",
-        team_id,
-        user_id,
-        is_captain
+    password: &str,
+) -> Result<TeamJoinResult, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+
+    let verify = sqlx::query!(
+        "SELECT tstate, pass FROM rb_team
+        WHERE id = $1
+        FOR UPDATE;",
+        team_id
     )
-    .fetch_optional(db_pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    if let Some(game_id) = result {
-        update_user_team_cache(kv_pool, user_id, game_id, Some(team_id)).await?;
+    if verify.is_none() {
+        return Ok(TeamJoinResult::NotFound);
+    }
+    let verify = verify.unwrap();
+
+    if verify.tstate == i16::from(RbTeamState::Banned) {
+        return Ok(TeamJoinResult::Locked);
     }
 
-    Ok(result.is_some())
+    if verify.pass != password {
+        return Ok(TeamJoinResult::WrongPwd);
+    }
+
+    let member_count = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM rb_team_member
+        WHERE team_id = $1;",
+        team_id
+    )
+    .fetch_one(&mut *tx)
+    .await?
+    .unwrap_or(0);
+
+    if member_count >= 6 {
+        return Ok(TeamJoinResult::TeamFull);
+    }
+
+    let result = sqlx::query!(
+        "INSERT INTO rb_team_member (team_id, user_id, is_captain)
+        VALUES ($1, $2, FALSE)",
+        team_id,
+        user_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        tx.commit().await?;
+
+        // all member => TeamInfoUpdated
+        db::cache::invalidate_team_info(app, team_id).await?;
+
+        Ok(TeamJoinResult::Ok)
+    } else {
+        Ok(TeamJoinResult::ToMany)
+    }
 }
 
 pub async fn user_create(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     user_id: i32,
     data: &RbTeamPutData,
 ) -> Result<Option<i32>, RbInternalError> {
@@ -253,74 +223,58 @@ pub async fn user_create(
     .await?;
 
     tx.commit().await?;
-    update_user_team_cache(kv_pool, user_id, data.game_id, Some(team_id)).await?;
     Ok(Some(team_id))
 }
 
-pub async fn leave(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    game_id: i32,
-    user_id: i32,
-) -> Result<bool, RbInternalError> {
+pub async fn leave(app: &AppState, team_id: i32, user_id: i32) -> Result<bool, RbInternalError> {
     let result = sqlx::query!(
         "DELETE FROM rb_team_member tm
-        USING rb_team t
-        WHERE t.id = tm.team_id AND t.game_id = $1 AND t.tstate = 0
-            AND tm.user_id = $2 AND tm.is_captain = FALSE",
-        game_id,
+        WHERE team_id = $1 AND user_id = $2;",
+        team_id,
         user_id
     )
-    .execute(db_pool)
+    .execute(&app.db)
     .await?;
 
     if result.rows_affected() > 0 {
-        update_user_team_cache(kv_pool, user_id, game_id, None).await?;
+        // other member => TeamInfoUpdated
+        db::cache::invalidate_team_info(app, team_id).await?;
+
         Ok(true)
     } else {
         Ok(false)
     }
 }
 
-pub async fn disband(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    game_id: i32,
-    user_id: i32,
-) -> Result<bool, RbInternalError> {
-    let mut tx = db_pool.begin().await?;
+pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalError> {
+    let mut tx = app.db.begin().await?;
 
-    let info = sqlx::query!(
-        "SELECT team_id, user_id FROM rb_team_member
-        WHERE team_id = (
-            SELECT tm.team_id FROM rb_team_member tm
-            JOIN rb_team t ON t.id = tm.team_id
-            WHERE t.game_id = $1 AND t.tstate = 0
-                AND tm.user_id = $2 AND tm.is_captain
-        ) FOR UPDATE;",
-        game_id,
-        user_id
+    let members = sqlx::query_scalar!(
+        "SELECT user_id FROM rb_team_member
+        WHERE team_id = $1;",
+        team_id
     )
     .fetch_all(&mut *tx)
     .await?;
 
-    if info.is_empty() {
-        return Ok(false);
-    }
-
-    let result = sqlx::query!(
+    let result = sqlx::query_scalar!(
         "DELETE FROM rb_team
-        WHERE id = $1;",
-        info[0].team_id
+        WHERE id = $1
+        RETURNING game_id;",
+        team_id
     )
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    if result.rows_affected() > 0 {
+    if let Some(game_id) = result {
         tx.commit().await?;
 
-        let members: Vec<i32> = info.iter().map(|x| x.user_id).collect();
-        update_users_team_cache(kv_pool, &members, game_id, None).await?;
+        db::cache::remove_team_info(game_id, team_id).await?;
+
+        app
+            .sync_hub
+            .do_push_all(&members, SyncMessageType::TeamDisbanded, ());
+
         Ok(true)
     } else {
         Ok(false)
@@ -390,6 +344,7 @@ pub async fn user_update(
         .await?;
 
     if let Some(team_id) = result {
+        // all member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
         Ok(true)
     } else {
@@ -489,4 +444,85 @@ pub async fn get_member_id(db_pool: &DbPool, team_id: i32) -> Result<Vec<i32>, R
     .await?;
 
     Ok(result)
+}
+
+pub async fn is_leader_in_game(
+    app: &AppState,
+    game_id: i32,
+    user_id: i32,
+) -> Result<bool, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "SELECT is_captain FROM rb_team_member
+        WHERE game_id = $1 AND user_id = $2;",
+        game_id,
+        user_id
+    )
+    .fetch_optional(&app.db)
+    .await?
+    .unwrap_or(false);
+
+    Ok(result)
+}
+
+pub async fn kick_member(
+    app: &AppState,
+    team_id: i32,
+    user_id: i32,
+) -> Result<bool, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "DELETE FROM rb_team_member
+        WHERE team_id = $1 AND user_id = $2;",
+        team_id,
+        user_id
+    )
+    .execute(&app.db)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        // kicked member => TeamSelfKicked
+        // other member => TeamInfoUpdated
+        db::cache::invalidate_team_info(app, team_id).await?;
+
+        app
+            .sync_hub
+            .do_push(user_id, SyncMessageType::TeamSelfKicked, ());
+
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub async fn promote_member(
+    app: &AppState,
+    team_id: i32,
+    user_id: i32,
+) -> Result<bool, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "UPDATE rb_team_member
+        SET is_captain = (user_id = $2)
+        WHERE team_id = $1
+            AND EXISTS (
+                SELECT 1 FROM rb_team_member
+                WHERE team_id = $1 AND user_id = $2
+            );",
+        team_id,
+        user_id
+    )
+    .execute(&app.db)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        // all member => TeamInfoUpdated
+        // target member => TeamSelfPromoted
+        db::cache::invalidate_team_info(app, team_id).await?;
+
+        app
+            .sync_hub
+            .do_push(user_id, SyncMessageType::TeamSelfPromoted, ());
+
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }

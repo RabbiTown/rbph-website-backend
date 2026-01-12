@@ -70,10 +70,6 @@ CREATE TABLE rb_team_member (
     UNIQUE (user_id, game_id)
 );
 
-CREATE UNIQUE INDEX rb_idx_team_captain_unique
-ON rb_team_member (team_id)
-WHERE is_captain = TRUE;
-
 CREATE INDEX rb_idx_team_member_team_captain
 ON rb_team_member(team_id, is_captain, user_id);
 

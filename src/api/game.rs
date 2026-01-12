@@ -16,6 +16,7 @@ use crate::{
     db::{
         self,
         game::RbGameShowData,
+        round::RbRoundSimpleData,
         team::{RbCurrencyShowData, RbTeamFullData},
     },
     error::RbError,
@@ -44,6 +45,8 @@ struct GameAggreInfo {
     team: Option<RbTeamFullData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     currency: Option<Vec<RbCurrencyShowData>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rounds: Option<Vec<RbRoundSimpleData>>,
 
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     server_time: OffsetDateTime,
@@ -61,15 +64,19 @@ async fn get_aggre_info(
 
     let team = db::team::get_by_user_game(&app.db, user.uid, info.game_id).await?;
 
-    let currency = match user.get_team_id() {
-        Some(team_id) => Some(db::team::get_currency_info(&app.db, &app.kv, team_id).await?),
-        None => None,
+    let (currency, rounds) = match user.get_team_id() {
+        Some(team_id) => (
+            Some(db::team::get_currency_info(&app.db, team_id).await?),
+            Some(db::round::get_simple_list_for_team(&app, info.game_id, team_id).await?),
+        ),
+        None => (None, None),
     };
 
     Ok(HttpResponse::Ok().json(GameAggreInfo {
         game: game.unwrap(),
         team,
         currency,
+        rounds,
         server_time: OffsetDateTime::now_utc(),
     }))
 }
@@ -91,6 +98,21 @@ async fn get_anmts(
     } else {
         Ok(HttpResponse::Ok().json(db::anmt::list_all_for_public(&app.db, info.game_id).await?))
     }
+}
+
+async fn get_rounds(
+    info: web::Path<PathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.get_team_id();
+    if team_id.is_none() {
+        RbError::forbid().err()?;
+    }
+    let team_id = team_id.unwrap();
+
+    let result = db::round::get_simple_list_for_team(&app, info.game_id, team_id).await?;
+    Ok(HttpResponse::Ok().json(result))
 }
 
 async fn get_leaderboard(
@@ -152,6 +174,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                             .default_service(web::route().to(error_handler)),
                     )
                     .route("/info", web::get().to(get_aggre_info))
+                    .route("/rounds", web::get().to(get_rounds))
                     .route("/leaderboard", web::get().to(get_leaderboard))
                     .default_service(web::route().to(error_handler)),
             )

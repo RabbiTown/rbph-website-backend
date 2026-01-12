@@ -461,7 +461,6 @@ pub struct RbCurrencyShowData {
 
 pub async fn get_currency_info(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     team_id: i32,
 ) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
     let result = sqlx::query_as!(

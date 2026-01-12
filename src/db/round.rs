@@ -2,7 +2,7 @@ use deadpool_redis::redis::{AsyncCommands, RedisError};
 use serde::Serialize;
 
 use crate::{
-    DbPool, KvPool,
+    AppState, DbPool, KvPool,
     db::{self, game::GameUserInfo, puzzle::RbPuzzleTeamStateShowData},
     error::RbInternalError,
     model::game::{RbContentType, RbTeamPuzzleState},
@@ -270,4 +270,35 @@ pub async fn get_info_for_team_str(
     } else {
         Ok(None)
     }
+}
+
+#[derive(Serialize)]
+pub struct RbRoundSimpleData {
+    pub id: i32,
+    pub title: String,
+}
+
+pub async fn get_simple_list_for_team(
+    app: &AppState,
+    game_id: i32,
+    team_id: i32,
+) -> Result<Vec<RbRoundSimpleData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbRoundSimpleData,
+        "SELECT r.id, r.title
+        FROM rb_round r
+        WHERE r.game_id = $1
+        AND EXISTS (
+            SELECT 1 FROM rb_puzzle p
+            JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
+                AND tp.team_id = $2 AND tp.pstate >= 0
+            WHERE p.round_id = r.id
+        );",
+        game_id,
+        team_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    Ok(result)
 }

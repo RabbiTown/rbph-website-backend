@@ -236,7 +236,7 @@ async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<H
         RbError::not_found().err()?
     }
 
-    let result = db::team::get_currency_info(&app.db, &app.kv, team_id.unwrap()).await?;
+    let result = db::team::get_currency_info(&app.db, team_id.unwrap()).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

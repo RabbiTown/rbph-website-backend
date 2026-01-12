@@ -29,14 +29,6 @@ pub struct RbError {
 }
 
 impl RbError {
-    pub fn new(code: i32, message: &str, status_code: StatusCode) -> Self {
-        Self {
-            code,
-            message: Some(message.to_string()),
-            status_code,
-        }
-    }
-
     pub fn msg(mut self, msg: impl Into<String>) -> Self {
         self.message = Some(msg.into());
         self

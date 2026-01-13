@@ -16,6 +16,9 @@ This project is in the very early stages of development. Version migrations are 
 
 Before committing, make sure to run:
 
-- `cargo sqlx prepare`
-- `cargo clippy --fix --allow-dirty`
-- `cargo fmt --all`
+```shell
+sqlx database reset
+cargo sqlx prepare
+cargo clippy --fix --allow-dirty
+cargo fmt --all
+```

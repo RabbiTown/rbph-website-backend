@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tstate, pass FROM rb_team\n        WHERE id = $1\n        FOR UPDATE;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tstate",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "pass",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "34050557a5f5b66fc8b3f853d5721fb2f71aff972e812636de4c585fc01cc1d9"
+}

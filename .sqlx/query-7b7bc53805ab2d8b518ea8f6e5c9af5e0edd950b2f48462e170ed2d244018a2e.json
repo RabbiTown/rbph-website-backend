@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_member\n        SET is_captain = (user_id = $2)\n        WHERE team_id = $1\n            AND EXISTS (\n                SELECT 1 FROM rb_team_member\n                WHERE team_id = $1 AND user_id = $2\n            );",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b7bc53805ab2d8b518ea8f6e5c9af5e0edd950b2f48462e170ed2d244018a2e"
+}

@@ -84,6 +84,7 @@ pub async fn list_all(
 
 #[derive(Clone)]
 pub struct GameUserInfo {
+    #[allow(dead_code)]
     pub game_id: i32,
     pub team_id: Option<i32>,
 }

@@ -67,6 +67,7 @@ pub mod serialize_option_offset_datetime {
         }
     }
 
+    #[allow(dead_code)]
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<OffsetDateTime>, D::Error>
     where
         D: Deserializer<'de>,

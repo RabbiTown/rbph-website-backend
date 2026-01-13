@@ -68,6 +68,7 @@ pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInterna
     }
 }
 
+#[allow(dead_code)]
 pub async fn invalidate_others(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();

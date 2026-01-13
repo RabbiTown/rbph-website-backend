@@ -110,6 +110,6 @@ mod test {
         let state = TestState {};
         let expr = "(countge (range 4 40) 1)";
         let result = eval(&state, expr);
-        assert_eq!(result, false);
+        assert!(!result);
     }
 }

@@ -26,16 +26,8 @@ static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap:
 
 pub async fn get_puzzle_game(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     puzzle_id: i32,
 ) -> Result<Option<i32>, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{}:game", puzzle_id);
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok((cache != -1).then_some(cache));
-    }
-
     let result = sqlx::query_scalar!(
         "SELECT r.game_id FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -44,12 +36,6 @@ pub async fn get_puzzle_game(
     )
     .fetch_optional(db_pool)
     .await?;
-
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result.unwrap_or(-1), 60 * 60).await;
-    });
 
     Ok(result)
 }
@@ -68,17 +54,9 @@ pub async fn get_hint_puzzle(
 
 pub async fn get_puzzle_state(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<RbTeamPuzzleState, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:team:{team_id}:state");
-
-    if let Some(cache) = conn.get::<&str, Option<i16>>(&key).await? {
-        return Ok(cache.into());
-    }
-
     let result = sqlx::query_scalar!(
         "SELECT pstate FROM rb_team_puzzle
         WHERE team_id = $1 AND puzzle_id = $2;",
@@ -86,26 +64,18 @@ pub async fn get_puzzle_state(
         puzzle_id
     )
     .fetch_optional(db_pool)
-    .await?;
+    .await?
+    .unwrap_or(-1);
 
-    if let Some(result) = result {
-        let kv_pool = kv_pool.clone();
-        tokio::spawn(async move {
-            let mut conn = kv_pool.get().await.unwrap();
-            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
-        });
-    }
-
-    Ok(result.unwrap_or(-1).into())
+    Ok(result.into())
 }
 
 pub async fn get_puzzle_user_info(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     user_id: i32,
     puzzle_id: i32,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
-    let game_id = get_puzzle_game(db_pool, kv_pool, puzzle_id).await?;
+    let game_id = get_puzzle_game(db_pool, puzzle_id).await?;
     if game_id.is_none() {
         return Ok(None);
     }
@@ -119,7 +89,7 @@ pub async fn get_puzzle_user_info(
     }
     let team_id = team_id.unwrap();
 
-    let access = get_puzzle_state(db_pool, kv_pool, team_id, puzzle_id)
+    let access = get_puzzle_state(db_pool, team_id, puzzle_id)
         .await?
         .accessible();
 
@@ -143,7 +113,7 @@ pub async fn get_hint_user_info(
         return Ok(None);
     }
 
-    get_puzzle_user_info(db_pool, kv_pool, user_id, puzzle_id.unwrap()).await
+    get_puzzle_user_info(db_pool, user_id, puzzle_id.unwrap()).await
 }
 
 #[derive(FromRow, Serialize)]
@@ -182,7 +152,7 @@ pub async fn get_puzzle_show(
         "SELECT p.id, p.title, p.ptype, p.content, p.content_type,
                 p.round_id, r.title AS round_title, r.game_id
         FROM rb_puzzle p
-        JOIN rb_round r ON r.id = p.round_id AND r.puzzle != p.id
+        JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id
         WHERE p.id = $1;",
         puzzle_id
     )
@@ -573,7 +543,7 @@ pub async fn submit_answer(
     let mut do_unlock = false;
 
     match result.action {
-        RbJudgeAction::Correct => {
+        RbJudgeAction::Correct | RbJudgeAction::FinishGame => {
             let update = sqlx::query!(
                 "UPDATE rb_team_puzzle SET pstate = 1, solve_at = NOW()
                 WHERE team_id = $1 AND puzzle_id = $2 AND pstate = 0",
@@ -582,6 +552,16 @@ pub async fn submit_answer(
             )
             .execute(&mut *tx)
             .await?;
+
+            if matches!(result.action, RbJudgeAction::FinishGame) {
+                sqlx::query!(
+                    "UPDATE rb_team SET tstate = 2, finish_at = NOW()
+                    WHERE id = $1 AND tstate = 1;",
+                    team_id
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
 
             if update.rows_affected() > 0 {
                 solved = true;

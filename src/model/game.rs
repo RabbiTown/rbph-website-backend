@@ -117,6 +117,7 @@ pub enum RbJudgeAction {
     Milestone = 2,
     StartGame = 3,
     EasterEgg = 4,
+    FinishGame = 5,
 
     #[num_enum(catch_all)]
     Invalid(i16),
@@ -124,7 +125,10 @@ pub enum RbJudgeAction {
 
 impl RbJudgeAction {
     pub fn side_effect(&self) -> bool {
-        matches!(self, RbJudgeAction::Correct | RbJudgeAction::StartGame)
+        matches!(
+            self,
+            RbJudgeAction::Correct | RbJudgeAction::StartGame | RbJudgeAction::FinishGame
+        )
     }
 }
 
@@ -137,6 +141,7 @@ impl From<&str> for RbJudgeAction {
             "milestone" => RbJudgeAction::Milestone,
             "start_game" => RbJudgeAction::StartGame,
             "easter_egg" => RbJudgeAction::EasterEgg,
+            "finish_game" => RbJudgeAction::FinishGame,
             _ => RbJudgeAction::Error,
         }
     }

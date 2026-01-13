@@ -10,16 +10,8 @@ use crate::{
 
 pub async fn get_round_game(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     round_id: i32,
 ) -> Result<Option<i32>, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("round:{}:game", round_id);
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok((cache != -1).then_some(cache));
-    }
-
     let result = sqlx::query_scalar!(
         "SELECT game_id FROM rb_round
         WHERE id = $1;",
@@ -28,28 +20,14 @@ pub async fn get_round_game(
     .fetch_optional(db_pool)
     .await?;
 
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result.unwrap_or(-1), 60 * 60).await;
-    });
-
     Ok(result)
 }
 
 pub async fn get_round_state(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     team_id: i32,
     round_id: i32,
 ) -> Result<bool, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("round:{round_id}:team:{team_id}:state");
-
-    if let Some(cache) = conn.get::<&str, Option<bool>>(&key).await? {
-        return Ok(cache);
-    }
-
     let result = sqlx::query_scalar!(
         "SELECT EXISTS (
             SELECT 1 FROM rb_team_puzzle tp
@@ -63,22 +41,15 @@ pub async fn get_round_state(
     .await?
     .unwrap_or(false);
 
-    let kv_pool = kv_pool.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
-    });
-
     Ok(result)
 }
 
 pub async fn get_round_user_info(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     user_id: i32,
     round_id: i32,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
-    let game_id = get_round_game(db_pool, kv_pool, round_id).await?;
+    let game_id = get_round_game(db_pool, round_id).await?;
     if game_id.is_none() {
         return Ok(None);
     }
@@ -92,7 +63,7 @@ pub async fn get_round_user_info(
     }
     let team_id = team_id.unwrap();
 
-    let access = get_round_state(db_pool, kv_pool, team_id, round_id).await?;
+    let access = get_round_state(db_pool, team_id, round_id).await?;
 
     match access {
         true => Ok(Some(GameUserInfo {
@@ -189,10 +160,10 @@ pub async fn get_state_for_team(
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
         LEFT JOIN rb_submission s ON s.puzzle_id = p.id
             AND s.team_id = tp.team_id
-            AND s.saction = 1
+            AND (s.saction = 1 OR s.saction = 5)
             AND s.real_answer IS NOT NULL
         WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.pstate >= 0
-            AND p.id != (SELECT puzzle FROM rb_round WHERE id = $1)
+            AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)
         GROUP BY p.id, p.title, tp.pstate;",
         round_id,
         team_id

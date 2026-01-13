@@ -107,7 +107,7 @@ async fn get_rounds(
 ) -> Result<HttpResponse> {
     let team_id = user.get_team_id();
     if team_id.is_none() {
-        RbError::forbid().err()?;
+        RbError::not_found().err()?;
     }
     let team_id = team_id.unwrap();
 
@@ -115,17 +115,26 @@ async fn get_rounds(
     Ok(HttpResponse::Ok().json(result))
 }
 
+#[derive(Deserialize)]
+struct LeaderBoardQuery {
+    version: Option<u32>,
+}
+
 async fn get_leaderboard(
+    req: web::Query<LeaderBoardQuery>,
     info: web::Path<PathInfo>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::board::LEADER_BOARD_CACHE
-        .get_info_str(&app.db, info.game_id)
+        .get_info_str(&app.db, info.game_id, req.version)
         .await?;
 
-    Ok(HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body(result))
+    match result {
+        Some(json) => Ok(HttpResponse::Ok()
+            .content_type(ContentType::json())
+            .body(json)),
+        None => Ok(HttpResponse::NotModified().finish()),
+    }
 }
 
 async fn check_game_middleware(

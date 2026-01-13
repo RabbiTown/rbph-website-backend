@@ -112,10 +112,7 @@ pub async fn invalidate_team_puzzle_solved(
 ) -> Result<(), RbInternalError> {
     invalidate_cache!(
         app.kv,
-        keys = [
-            format!("puzzle:{puzzle_id}:team:{team_id}:state"),
-            format!("puzzle:{puzzle_id}:team:{team_id}:full_state")
-        ],
+        keys = [format!("puzzle:{puzzle_id}:team:{team_id}:full_state")],
         patterns = [format!("round:*:team:{team_id}:full_state")]
     );
 

@@ -108,7 +108,7 @@ CREATE TABLE rb_puzzle (
     content         TEXT NOT NULL,
     content_type    SMALLINT NOT NULL DEFAULT 0,
     judge           JSONB NOT NULL DEFAULT '{}',
-    penalty         JSONB NOT NULL DEFAULT '{"type":0}',
+    penalty         JSONB NOT NULL DEFAULT '[]',
     max_submit      INT,
     unlock_cond     TEXT NOT NULL,
     round_id        INT NOT NULL REFERENCES rb_round(id),

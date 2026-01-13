@@ -23,6 +23,7 @@ pub struct LeaderBoardTeamInfo {
 #[derive(Serialize)]
 pub struct LeaderBoardInfo {
     pub data: Vec<LeaderBoardTeamInfo>,
+    pub version: u32,
 }
 
 struct LeaderBoard {
@@ -31,6 +32,8 @@ struct LeaderBoard {
 
     order_dirty: bool,
     json_cache: Option<String>,
+
+    pub version: u32,
 }
 
 impl LeaderBoard {
@@ -45,6 +48,10 @@ impl LeaderBoard {
 
     fn mark_json_dirty(&mut self) {
         self.json_cache = None;
+    }
+
+    fn bump_version(&mut self) {
+        self.version += 1;
     }
 }
 
@@ -92,6 +99,7 @@ impl LeaderBoardCache {
         cache.order = new_order;
 
         cache.mark_order_clean();
+        cache.bump_version();
 
         Ok(())
     }
@@ -166,6 +174,7 @@ impl LeaderBoardCache {
                 teams: new_teams,
                 order_dirty: false,
                 json_cache: None,
+                version: 0,
             },
         );
 
@@ -234,6 +243,7 @@ impl LeaderBoardCache {
                     cache.mark_json_dirty();
                 }
                 cache.teams.insert(team.id, team);
+                cache.bump_version();
             }
         }
 
@@ -258,13 +268,14 @@ impl LeaderBoardCache {
         &self,
         db_pool: &DbPool,
         game_id: i32,
-    ) -> Result<String, RbInternalError> {
+        prev_version: Option<u32>,
+    ) -> Result<Option<String>, RbInternalError> {
         // check if anything needs updates (R LOCK)
-        let (needs_all, needs_order) = {
+        let (needs_all, needs_order, version) = {
             let guard = self.cache.read().await;
             match guard.get(&game_id) {
-                None => (true, false),
-                Some(cache) => (false, cache.order_dirty),
+                None => (true, false, 0),
+                Some(cache) => (false, cache.order_dirty, cache.version),
             }
         };
 
@@ -272,17 +283,21 @@ impl LeaderBoardCache {
             self.update_all(db_pool, game_id).await?;
         } else if needs_order {
             self.update_order(db_pool, game_id).await?;
+        } else if Some(version) == prev_version {
+            return Ok(None);
         }
 
         // get json cache (R LOCK)
-        {
+        let version = {
             let guard = self.cache.read().await;
             let leaderboard = guard.get(&game_id).ok_or("Not Found")?;
 
             if let Some(result) = &leaderboard.json_cache {
-                return Ok(result.clone());
+                return Ok(Some(result.clone()));
             }
-        }
+
+            leaderboard.version
+        };
 
         let teams_vec: Vec<LeaderBoardTeamInfo> = {
             let guard = self.cache.read().await;
@@ -295,7 +310,10 @@ impl LeaderBoardCache {
                 .collect()
         };
 
-        let info = LeaderBoardInfo { data: teams_vec };
+        let info = LeaderBoardInfo {
+            data: teams_vec,
+            version,
+        };
 
         let result = serde_json::to_string(&info)?;
 
@@ -307,6 +325,6 @@ impl LeaderBoardCache {
             }
         }
 
-        Ok(result)
+        Ok(Some(result))
     }
 }

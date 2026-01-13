@@ -229,7 +229,9 @@ pub async fn user_create(
 pub async fn leave(app: &AppState, team_id: i32, user_id: i32) -> Result<bool, RbInternalError> {
     let result = sqlx::query!(
         "DELETE FROM rb_team_member tm
-        WHERE team_id = $1 AND user_id = $2;",
+        USING rb_team t
+        WHERE tm.team_id = $1 AND tm.user_id = $2
+            AND t.id = tm.team_id AND t.tstate < 1;",
         team_id,
         user_id
     )
@@ -250,12 +252,17 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
     let mut tx = app.db.begin().await?;
 
     let members = sqlx::query_scalar!(
-        "SELECT user_id FROM rb_team_member
-        WHERE team_id = $1;",
+        "SELECT tm.user_id FROM rb_team_member tm
+        JOIN rb_team t ON t.id = tm.team_id
+        WHERE tm.team_id = $1 AND t.tstate < 1;",
         team_id
     )
     .fetch_all(&mut *tx)
     .await?;
+
+    if members.is_empty() {
+        return Ok(false);
+    }
 
     let result = sqlx::query_scalar!(
         "DELETE FROM rb_team
@@ -271,8 +278,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
 
         db::cache::remove_team_info(game_id, team_id).await?;
 
-        app
-            .sync_hub
+        app.sync_hub
             .do_push_all(&members, SyncMessageType::TeamDisbanded, ());
 
         Ok(true)
@@ -483,8 +489,7 @@ pub async fn kick_member(
         // other member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
 
-        app
-            .sync_hub
+        app.sync_hub
             .do_push(user_id, SyncMessageType::TeamSelfKicked, ());
 
         Ok(true)
@@ -517,8 +522,7 @@ pub async fn promote_member(
         // target member => TeamSelfPromoted
         db::cache::invalidate_team_info(app, team_id).await?;
 
-        app
-            .sync_hub
+        app.sync_hub
             .do_push(user_id, SyncMessageType::TeamSelfPromoted, ());
 
         Ok(true)

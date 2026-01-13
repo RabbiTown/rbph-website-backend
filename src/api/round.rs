@@ -56,7 +56,7 @@ async fn check_round_middleware(
 
     let app = req.app_data::<web::Data<AppState>>().unwrap();
 
-    match db::round::get_round_user_info(&app.db, &app.kv, user_id, round_id).await? {
+    match db::round::get_round_user_info(&app.db, user_id, round_id).await? {
         Some(info) => {
             req.extensions_mut().insert(info);
         }

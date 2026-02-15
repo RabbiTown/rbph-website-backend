@@ -5,6 +5,7 @@ mod puzzle;
 mod round;
 mod sync;
 mod team;
+mod ticket;
 mod user;
 
 use actix_web::{
@@ -58,6 +59,12 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("/rounds")
             .wrap(PrivilegeMiddleware::new(RbUserRole::User))
             .configure(round::rounds_config)
+            .default_service(web::route().to(error_handler)),
+    )
+    .service(
+        web::scope("/tickets")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::User))
+            .configure(ticket::tickets_config)
             .default_service(web::route().to(error_handler)),
     )
     .service(

@@ -41,7 +41,7 @@ pub enum RbTeamState {
 pub struct RbTeam {
     pub id: i32,
     pub tname: String,
-    pub tstate: RbTeamState,
+    pub state: RbTeamState,
     pub pass: String,
     pub bio: String,
     pub game_id: i32,
@@ -69,8 +69,17 @@ pub enum RbContentType {
     Markdown = 0,
     Html = 1,
 
+    /// mark this content should be sanitized by frontend
+    UnsafeMarkdown = 2,
+
     #[num_enum(catch_all)]
     Invalid(i16),
+}
+
+impl RbContentType {
+    pub fn is_trusted(&self) -> bool {
+        matches!(self, Self::Markdown | Self::Html)
+    }
 }
 
 impl Type<sqlx::Postgres> for RbContentType {
@@ -170,4 +179,26 @@ pub enum RbPuzzlePenaltyType {
     FixedTime = 1,
     LinearTime = 2,
     Currency = 3,
+}
+
+#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[repr(i16)]
+#[serde(into = "i16")]
+pub enum RbTicketState {
+    Close = 0,
+    Open = 1,
+
+    #[num_enum(catch_all)]
+    Invalid(i16),
+}
+
+#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[repr(i16)]
+#[serde(into = "i16")]
+pub enum RbTicketSenderType {
+    Team = 0,
+    Host = 1,
+
+    #[num_enum(catch_all)]
+    Invalid(i16),
 }

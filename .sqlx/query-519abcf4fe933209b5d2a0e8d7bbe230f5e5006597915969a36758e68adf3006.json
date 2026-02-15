@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team SET state = 1\n                WHERE id = $1 AND state = 0;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "519abcf4fe933209b5d2a0e8d7bbe230f5e5006597915969a36758e68adf3006"
+}

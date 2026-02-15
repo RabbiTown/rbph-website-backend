@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::{
     AppState,
-    api::{error_handler, team},
+    api::{error_handler, team, ticket},
     db::{
         self,
         game::RbGameShowData,
@@ -26,11 +26,11 @@ use crate::{
 };
 
 #[derive(Deserialize)]
-struct PathInfo {
+pub struct GamePathInfo {
     game_id: i32,
 }
 
-async fn get_info(info: web::Path<PathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
+async fn get_info(info: web::Path<GamePathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::game::get_by_id(&app.db, info.game_id).await?;
     if result.is_none() {
         RbError::not_found().err()?
@@ -53,21 +53,21 @@ struct GameAggreInfo {
 }
 
 async fn get_aggre_info(
-    info: web::Path<PathInfo>,
+    path: web::Path<GamePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let game = db::game::get_by_id(&app.db, info.game_id).await?;
+    let game = db::game::get_by_id(&app.db, path.game_id).await?;
     if game.is_none() {
         RbError::not_found().err()?;
     }
 
-    let team = db::team::get_by_user_game(&app.db, user.uid, info.game_id).await?;
+    let team = db::team::get_by_user_game(&app.db, user.uid, path.game_id).await?;
 
-    let (currency, rounds) = match user.get_team_id() {
+    let (currency, rounds) = match user.req_team_id()? {
         Some(team_id) => (
             Some(db::team::get_currency_info(&app.db, team_id).await?),
-            Some(db::round::get_simple_list_for_team(&app, info.game_id, team_id).await?),
+            Some(db::round::get_simple_list_for_team(&app, path.game_id, team_id).await?),
         ),
         None => (None, None),
     };
@@ -88,30 +88,30 @@ async fn list_online(app: web::Data<AppState>) -> Result<HttpResponse> {
 }
 
 async fn get_anmts(
-    info: web::Path<PathInfo>,
+    path: web::Path<GamePathInfo>,
     user: Option<AuthUser>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let team_id = user.and_then(|x| x.get_team_id());
+    let team_id = user.map(|u| u.req_team_id()).transpose()?.flatten();
     if let Some(team_id) = team_id {
         Ok(HttpResponse::Ok().json(db::anmt::list_all_for_team(&app.db, team_id).await?))
     } else {
-        Ok(HttpResponse::Ok().json(db::anmt::list_all_for_public(&app.db, info.game_id).await?))
+        Ok(HttpResponse::Ok().json(db::anmt::list_all_for_public(&app.db, path.game_id).await?))
     }
 }
 
 async fn get_rounds(
-    info: web::Path<PathInfo>,
+    path: web::Path<GamePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let team_id = user.get_team_id();
+    let team_id = user.req_team_id()?;
     if team_id.is_none() {
         RbError::not_found().err()?;
     }
     let team_id = team_id.unwrap();
 
-    let result = db::round::get_simple_list_for_team(&app, info.game_id, team_id).await?;
+    let result = db::round::get_simple_list_for_team(&app, path.game_id, team_id).await?;
     Ok(HttpResponse::Ok().json(result))
 }
 
@@ -121,12 +121,12 @@ struct LeaderBoardQuery {
 }
 
 async fn get_leaderboard(
+    path: web::Path<GamePathInfo>,
     req: web::Query<LeaderBoardQuery>,
-    info: web::Path<PathInfo>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::board::LEADER_BOARD_CACHE
-        .get_info_str(&app.db, info.game_id, req.version)
+        .get_info_str(&app.db, path.game_id, req.version)
         .await?;
 
     match result {
@@ -180,6 +180,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                     .service(
                         web::scope("/teams")
                             .configure(team::games_config)
+                            .default_service(web::route().to(error_handler)),
+                    )
+                    .service(
+                        web::scope("/tickets")
+                            .configure(ticket::games_config)
                             .default_service(web::route().to(error_handler)),
                     )
                     .route("/info", web::get().to(get_aggre_info))

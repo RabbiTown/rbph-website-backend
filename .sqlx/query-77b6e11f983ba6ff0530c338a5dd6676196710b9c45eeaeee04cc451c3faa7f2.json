@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.title, a.content, a.content_type,\n                a.is_pinned, a.game_id, a.puzzle_id, a.utime_at\n        FROM rb_announcement a\n        JOIN rb_team t ON t.id = $1\n        WHERE a.is_shown\n            AND (a.game_id IS NULL OR a.game_id = t.game_id)\n            AND (a.puzzle_id IS NULL OR EXISTS (\n                SELECT 1\n                FROM rb_team_puzzle tp\n                WHERE tp.team_id = t.id\n                    AND tp.pstate >= 0\n                    AND tp.puzzle_id = a.puzzle_id\n            ))\n        ORDER BY a.is_pinned DESC, utime_at DESC",
+  "query": "SELECT a.id, a.title, a.content, a.content_type,\n                a.is_pinned, a.game_id, a.puzzle_id, a.utime_at\n        FROM rb_announcement a\n        JOIN rb_team t ON t.id = $1\n        WHERE a.is_shown\n            AND (a.game_id IS NULL OR a.game_id = t.game_id)\n            AND (a.puzzle_id IS NULL OR EXISTS (\n                SELECT 1\n                FROM rb_team_puzzle tp\n                WHERE tp.team_id = t.id\n                    AND tp.state >= 0\n                    AND tp.puzzle_id = a.puzzle_id\n            ))\n        ORDER BY a.is_pinned DESC, utime_at DESC",
   "describe": {
     "columns": [
       {
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "b385ab09c8f104411692951ebed14c1036b4f8ab3db4474c53f5ac0d3cc647d7"
+  "hash": "77b6e11f983ba6ff0530c338a5dd6676196710b9c45eeaeee04cc451c3faa7f2"
 }

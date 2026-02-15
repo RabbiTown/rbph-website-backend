@@ -72,10 +72,10 @@ impl LeaderBoardCache {
         let result = sqlx::query_scalar!(
             "SELECT t.id
             FROM rb_team t
-            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1
-            WHERE t.game_id = $1 AND t.tstate > 0
+            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
+            WHERE t.game_id = $1 AND t.state > 0
             GROUP BY t.id
-            ORDER BY t.tstate DESC,
+            ORDER BY t.state DESC,
                 finish_at ASC NULLS LAST,
                 COUNT(tp.puzzle_id) DESC,
                 MAX(tp.solve_at) ASC NULLS LAST;",
@@ -113,10 +113,10 @@ impl LeaderBoardCache {
             "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
                 COUNT(tp.puzzle_id) AS \"solves!\"
             FROM rb_team t
-            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1
-            WHERE t.game_id = $1 AND t.tstate > 0
+            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
+            WHERE t.game_id = $1 AND t.state > 0
             GROUP BY t.id
-            ORDER BY t.tstate DESC,
+            ORDER BY t.state DESC,
                 finish_at ASC NULLS LAST,
                 \"solves!\" DESC,
                 MAX(tp.solve_at) ASC NULLS LAST;",
@@ -190,7 +190,7 @@ impl LeaderBoardCache {
             "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
                 COUNT(tp.puzzle_id) AS \"solves!\", t.game_id
             FROM rb_team t
-            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate = 1
+            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
             WHERE t.id = $1
             GROUP BY t.id;",
             team_id

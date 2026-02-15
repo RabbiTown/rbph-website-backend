@@ -57,18 +57,16 @@ enum TeamCreateResult {
 static PWD_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[!-~]{8,32}$").unwrap());
 
 async fn create_self(
-    user: AuthUser,
     path: web::Path<GamePathInfo>,
     req: web::Json<TeamCreateRequest>,
+    user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let req = req.into_inner();
 
     let trimmed_pwd = req.pass.trim();
     if !PWD_REGEX.is_match(trimmed_pwd) {
-        RbError::unauth()
-            .code(TeamCreateResult::Invalid.into())
-            .err()?
+        RbError::bad_req(TeamCreateResult::Invalid.into()).err()?
     }
 
     let data = RbTeamPutData {
@@ -103,9 +101,9 @@ enum TeamUpdateResult {
 }
 
 async fn update_self(
+    path: web::Path<GamePathInfo>,
     req: web::Json<db::team::UserUpdateData>,
     user: AuthUser,
-    path: web::Path<GamePathInfo>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     if let Err(e) = req.validate() {
@@ -138,7 +136,7 @@ enum TeamLeaveResult {
 
 async fn leave_self(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
     let team_id = user
-        .get_team_id()
+        .req_team_id()?
         .ok_or(RbError::conflict(TeamLeaveResult::Bad.into()))?;
 
     let result = db::team::leave(&app, team_id, user.uid).await?;
@@ -152,7 +150,7 @@ async fn leave_self(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResp
 }
 
 async fn disband_self(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let team_id = user.get_team_id().ok_or(RbError::forbid())?;
+    let team_id = user.req_team_id()?.ok_or(RbError::not_found())?;
 
     let result = db::team::disband(&app, team_id).await?;
     if !result {
@@ -185,7 +183,13 @@ async fn join(
         RbError::not_found().err()?
     }
 
-    Ok(HttpResponse::Ok().json(TeamJoinResponse { code: result }))
+    if !matches!(result, TeamJoinResult::Ok) {
+        RbError::conflict(result.into()).err()?
+    }
+
+    Ok(HttpResponse::Ok().json(TeamJoinResponse {
+        code: TeamJoinResult::Ok,
+    }))
 }
 
 async fn get_self(
@@ -202,7 +206,7 @@ async fn get_self(
 }
 
 async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let team_id = user.get_team_id();
+    let team_id = user.req_team_id()?;
     if team_id.is_none() {
         RbError::not_found().err()?
     }
@@ -238,10 +242,10 @@ async fn kick_self(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     if req.target == user.uid {
-        RbError::conflict(TeamTargetResult::TargetSelf.into()).err()?;
+        RbError::unprocessable(TeamTargetResult::TargetSelf.into()).err()?;
     }
 
-    let team_id = user.get_team_id().ok_or(RbError::forbid())?;
+    let team_id = user.req_team_id()?.ok_or(RbError::not_found())?;
 
     let result = db::team::kick_member(&app, team_id, req.target).await?;
     if !result {
@@ -261,10 +265,10 @@ async fn promote_self(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     if req.target == user.uid {
-        RbError::conflict(TeamTargetResult::TargetSelf.into()).err()?;
+        RbError::unprocessable(TeamTargetResult::TargetSelf.into()).err()?;
     }
 
-    let team_id = user.get_team_id().ok_or(RbError::forbid())?;
+    let team_id = user.req_team_id()?.ok_or(RbError::not_found())?;
 
     let result = db::team::promote_member(&app, team_id, req.target).await?;
     if !result {

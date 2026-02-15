@@ -54,7 +54,7 @@ pub async fn list_all_for_team(
                 SELECT 1
                 FROM rb_team_puzzle tp
                 WHERE tp.team_id = t.id
-                    AND tp.pstate >= 0
+                    AND tp.state >= 0
                     AND tp.puzzle_id = a.puzzle_id
             ))
         ORDER BY a.is_pinned DESC, utime_at DESC",

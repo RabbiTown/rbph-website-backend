@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT r.game_id, tm.team_id, h.puzzle_id, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.pstate >= 0\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND EXTRACT(EPOCH FROM (NOW() - tp.ctime_at)) >= h.cooldown;",
+  "query": "SELECT r.game_id, tm.team_id, h.puzzle_id, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND EXTRACT(EPOCH FROM (NOW() - tp.ctime_at)) >= h.cooldown;",
   "describe": {
     "columns": [
       {
@@ -43,5 +43,5 @@
       false
     ]
   },
-  "hash": "e68cdbacfee946f140a2449699cdd6569c6cccedb44c6a707f735843a4ba1f33"
+  "hash": "34ce4368c63eec254b1b65be00527284cd3da626505d2c476948d101d4bcb4e4"
 }

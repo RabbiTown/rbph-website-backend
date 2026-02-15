@@ -10,7 +10,7 @@ async fn append() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().finish())
 }
 
-async fn edit(_info: web::Path<PathInfo>) -> Result<HttpResponse> {
+async fn edit(_path: web::Path<PathInfo>) -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().finish())
 }
 

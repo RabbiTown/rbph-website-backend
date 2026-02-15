@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_puzzle SET state = 1, solve_at = NOW()\n                WHERE team_id = $1 AND puzzle_id = $2 AND state = 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d1e7fb02fcee06371b5746641d5c3b8ed2c503630858ecc2394586a0256b929"
+}

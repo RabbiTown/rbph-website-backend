@@ -55,6 +55,14 @@ impl RbError {
         }
     }
 
+    pub fn unprocessable(code: i32) -> Self {
+        Self {
+            code,
+            message: None,
+            status_code: StatusCode::UNPROCESSABLE_ENTITY,
+        }
+    }
+
     pub fn internal<T: Debug>(e: T) -> Self {
         let code: String = rand::rng()
             .sample_iter(rand::distr::Alphanumeric)

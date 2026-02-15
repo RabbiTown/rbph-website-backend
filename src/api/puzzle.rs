@@ -35,15 +35,15 @@ struct HintPathInfo {
 }
 
 async fn get_puzzle(
-    info: web::Path<PuzzlePathInfo>,
+    path: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_puzzle_show_str_for_team(
         &app.db,
         &app.kv,
-        user.get_team_id().ok_or(RbError::forbid())?,
-        info.puzzle_id,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
+        path.puzzle_id,
     )
     .await?;
     if result.is_none() {
@@ -76,12 +76,13 @@ struct JudgePuzzleResponse {
 }
 
 async fn judge_puzzle(
+    path: web::Path<PuzzlePathInfo>,
     req: web::Json<PuzzleJudgeRequest>,
-    info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let submit_result = db::puzzle::submit_answer(&app, &user, info.puzzle_id, &req.answer).await?;
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let submit_result = db::puzzle::submit_answer(&app, &user, path.puzzle_id, &req.answer).await?;
 
     match submit_result {
         db::puzzle::SubmitAnswerResult::NotFound => RbError::not_found().http_err(),
@@ -92,7 +93,7 @@ async fn judge_puzzle(
             RbError::bad_req(PuzzleJudgeResult::Invalid.into()).http_err()
         }
         db::puzzle::SubmitAnswerResult::Locked => {
-            RbError::bad_req(PuzzleJudgeResult::Locked.into()).http_err()
+            RbError::conflict(PuzzleJudgeResult::Locked.into()).http_err()
         }
         db::puzzle::SubmitAnswerResult::Ok {
             result,
@@ -106,7 +107,7 @@ async fn judge_puzzle(
                         (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,
                         (SELECT title FROM rb_puzzle WHERE id = $2) AS p_t;",
                     user.uid,
-                    info.puzzle_id
+                    path.puzzle_id
                 )
                 .fetch_one(&app.db)
                 .await;
@@ -125,7 +126,7 @@ async fn judge_puzzle(
                             "name": row.u_n,
                         },
                         "puzzle": {
-                            "id": info.puzzle_id,
+                            "id": path.puzzle_id,
                             "title": row.p_t,
                         },
                         "answer": req.answer,
@@ -156,12 +157,7 @@ async fn judge_puzzle(
                     }
                     let _ = app
                         .sync_hub
-                        .do_push_team(
-                            &app.db,
-                            user.get_team_id().unwrap(),
-                            SyncMessageType::PuzzleSubmitted,
-                            sync,
-                        )
+                        .do_push_team(&app.db, team_id, SyncMessageType::PuzzleSubmitted, sync)
                         .await;
                 }
             });
@@ -181,15 +177,15 @@ pub struct SubmissionQuery {
 }
 
 async fn get_puzzle_hints(
-    info: web::Path<PuzzlePathInfo>,
+    path: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_hints_show_str_for_team(
         &app.db,
         &app.kv,
-        user.get_team_id().ok_or(RbError::forbid())?,
-        info.puzzle_id,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
+        path.puzzle_id,
     )
     .await?;
 
@@ -207,11 +203,12 @@ pub enum PurchaseHintResult {
 }
 
 async fn purchase_hint(
-    info: web::Path<HintPathInfo>,
+    path: web::Path<HintPathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let purchase_result = db::puzzle::purchase_hint(&app, user.uid, info.hint_id).await?;
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let purchase_result = db::puzzle::purchase_hint(&app, user.uid, path.hint_id).await?;
 
     match purchase_result {
         db::puzzle::PurchaseHintResult::Unavailable => {
@@ -230,7 +227,7 @@ async fn purchase_hint(
                     JOIN rb_puzzle p ON p.id = h.puzzle_id
                     WHERE h.id = $2",
                     user.uid,
-                    info.hint_id
+                    path.hint_id
                 )
                 .fetch_one(&app.db)
                 .await;
@@ -246,7 +243,7 @@ async fn purchase_hint(
                             "title": row.p_t,
                         },
                         "hint": {
-                            "id": info.hint_id,
+                            "id": path.hint_id,
                             "title": row.h_t,
                             "cost_id": row.h_ci,
                             "cost_amount": row.h_ca
@@ -254,12 +251,7 @@ async fn purchase_hint(
                     });
                     let _ = app
                         .sync_hub
-                        .do_push_team(
-                            &app.db,
-                            user.get_team_id().unwrap(),
-                            SyncMessageType::PuzzleHintUnlocked,
-                            sync,
-                        )
+                        .do_push_team(&app.db, team_id, SyncMessageType::PuzzleHintUnlocked, sync)
                         .await;
                 }
             });
@@ -270,15 +262,15 @@ async fn purchase_hint(
 }
 
 async fn get_puzzle_submissions(
+    path: web::Path<PuzzlePathInfo>,
     req: web::Query<SubmissionQuery>,
-    info: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::puzzle::get_team_submissions(
         &app.db,
-        user.get_team_id().ok_or(RbError::forbid())?,
-        info.puzzle_id,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
+        path.puzzle_id,
         req.page.unwrap_or(0),
         req.only_ok.unwrap_or(false),
     )

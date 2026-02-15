@@ -15,8 +15,16 @@ pub enum RbUserRole {
 }
 
 impl RbUserRole {
-    fn is_valid(&self) -> bool {
+    pub fn is_valid(&self) -> bool {
         !matches!(self, Self::Invalid(_))
+    }
+
+    pub fn is_moderator(&self) -> bool {
+        !matches!(self, Self::Moderator | Self::Admin)
+    }
+
+    pub fn is_admin(&self) -> bool {
+        !matches!(self, Self::Admin)
     }
 }
 

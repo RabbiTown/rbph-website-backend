@@ -5,6 +5,7 @@ pub mod game;
 pub mod puzzle;
 pub mod round;
 pub mod team;
+pub mod ticket;
 pub mod user;
 
 use sqlx::postgres::PgPoolOptions;

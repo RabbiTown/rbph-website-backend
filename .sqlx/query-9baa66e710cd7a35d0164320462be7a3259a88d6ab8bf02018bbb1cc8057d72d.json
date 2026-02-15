@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_team_member tm\n        USING rb_team t\n        WHERE tm.team_id = $1 AND tm.user_id = $2\n            AND t.id = tm.team_id AND t.state < 1;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9baa66e710cd7a35d0164320462be7a3259a88d6ab8bf02018bbb1cc8057d72d"
+}

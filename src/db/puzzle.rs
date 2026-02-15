@@ -58,7 +58,7 @@ pub async fn get_puzzle_state(
     puzzle_id: i32,
 ) -> Result<RbTeamPuzzleState, RbInternalError> {
     let result = sqlx::query_scalar!(
-        "SELECT pstate FROM rb_team_puzzle
+        "SELECT state FROM rb_team_puzzle
         WHERE team_id = $1 AND puzzle_id = $2;",
         team_id,
         puzzle_id
@@ -230,7 +230,7 @@ pub async fn get_puzzle_team_state(
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleTeamStateShowData>, RbInternalError> {
     let row = sqlx::query!(
-        "SELECT tp.ctime_at AS utime_at, tp.pstate, tp.cooldown_till,
+        "SELECT tp.ctime_at AS utime_at, tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
                 ARRAY_AGG(s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
@@ -239,7 +239,7 @@ pub async fn get_puzzle_team_state(
             AND s.team_id = tp.team_id
             AND s.saction = 1
         WHERE tp.team_id = $1 AND tp.puzzle_id = $2
-        GROUP BY tp.ctime_at, tp.pstate, tp.max_submit, tp.cooldown_till, p.max_submit;",
+        GROUP BY tp.ctime_at, tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         puzzle_id
     )
@@ -252,7 +252,7 @@ pub async fn get_puzzle_team_state(
     let row = row.unwrap();
 
     Ok(Some(RbPuzzleTeamStateShowData {
-        state: row.pstate.into(),
+        state: row.state.into(),
         max_submit: row.max_submit,
         answers: row.answers.unwrap_or_default(),
         utime_at: row.utime_at,
@@ -467,7 +467,7 @@ pub async fn submit_answer(
 
     let mut tx = app.db.begin().await?;
 
-    let team_id = user.get_team_id().ok_or("Require team_id")?;
+    let team_id = user.req_team_id()?.ok_or("Require team_id")?;
 
     sqlx::query_scalar!(
         "SELECT 1 FROM rb_team_puzzle tp
@@ -545,8 +545,8 @@ pub async fn submit_answer(
     match result.action {
         RbJudgeAction::Correct | RbJudgeAction::FinishGame => {
             let update = sqlx::query!(
-                "UPDATE rb_team_puzzle SET pstate = 1, solve_at = NOW()
-                WHERE team_id = $1 AND puzzle_id = $2 AND pstate = 0",
+                "UPDATE rb_team_puzzle SET state = 1, solve_at = NOW()
+                WHERE team_id = $1 AND puzzle_id = $2 AND state = 0",
                 team_id,
                 puzzle_id
             )
@@ -555,8 +555,8 @@ pub async fn submit_answer(
 
             if matches!(result.action, RbJudgeAction::FinishGame) {
                 sqlx::query!(
-                    "UPDATE rb_team SET tstate = 2, finish_at = NOW()
-                    WHERE id = $1 AND tstate = 1;",
+                    "UPDATE rb_team SET state = 2, finish_at = NOW()
+                    WHERE id = $1 AND state = 1;",
                     team_id
                 )
                 .execute(&mut *tx)
@@ -570,8 +570,8 @@ pub async fn submit_answer(
         }
         RbJudgeAction::StartGame => {
             let result = sqlx::query!(
-                "UPDATE rb_team SET tstate = 1
-                WHERE id = $1 AND tstate = 0;",
+                "UPDATE rb_team SET state = 1
+                WHERE id = $1 AND state = 0;",
                 team_id
             )
             .execute(&mut *tx)
@@ -720,9 +720,9 @@ impl PuzzleStates for RbPuzzleStates {
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
     let info = sqlx::query!(
-        "SELECT t.game_id, t.tstate, tp.puzzle_id AS \"puzzle_id?\"
+        "SELECT t.game_id, t.state, tp.puzzle_id AS \"puzzle_id?\"
         FROM rb_team t
-        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate >= 1
+        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1
         WHERE t.id = $1;",
         team_id
     )
@@ -737,7 +737,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
     let unlocked = info.iter().filter_map(|r| r.puzzle_id).collect();
     let state = RbPuzzleStates {
         unlocked,
-        game_started: info[0].tstate > 0,
+        game_started: info[0].state > 0,
     };
 
     let conds = get_unlock_conds_by_game(&app.db, info[0].game_id).await?;
@@ -754,7 +754,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
 
     if !unlocks.is_empty() {
         sqlx::query!(
-            "INSERT INTO rb_team_puzzle (team_id, puzzle_id, pstate)
+            "INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
             SELECT $1, UNNEST($2::int[]), 0
             ON CONFLICT DO NOTHING;",
             team_id,
@@ -903,7 +903,7 @@ pub async fn purchase_hint(
         JOIN rb_team_member tm ON tm.game_id = r.game_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
-        WHERE tm.user_id = $1 AND h.id = $2 AND tp.pstate >= 0
+        WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
             AND NOT COALESCE(th.unlocked, FALSE)
             AND EXTRACT(EPOCH FROM (NOW() - tp.ctime_at)) >= h.cooldown;",
         user_id,

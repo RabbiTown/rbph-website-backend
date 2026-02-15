@@ -47,7 +47,7 @@ CREATE TABLE rb_game (
 CREATE TABLE rb_team (
     id              SERIAL PRIMARY KEY,
     tname           VARCHAR(60) NOT NULL,
-    tstate          SMALLINT NOT NULL DEFAULT 0,
+    state           SMALLINT NOT NULL DEFAULT 0,
     pass            VARCHAR(32) NOT NULL,
     bio             TEXT NOT NULL,
     game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
@@ -56,7 +56,7 @@ CREATE TABLE rb_team (
 );
 
 CREATE INDEX rb_idx_team_game_state_finish
-ON rb_team(game_id, tstate, finish_at);
+ON rb_team(game_id, state, finish_at);
 
 -- team member
 
@@ -121,7 +121,7 @@ FOREIGN KEY (puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;
 CREATE TABLE rb_team_puzzle(
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
-    pstate          SMALLINT NOT NULL DEFAULT 0,
+    state           SMALLINT NOT NULL DEFAULT 0,
     max_submit      INT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     solve_at        TIMESTAMPTZ,
@@ -211,21 +211,20 @@ CREATE TABLE rb_announcement (
 
 CREATE TABLE rb_ticket (
     id              SERIAL PRIMARY KEY,
-    tstate          SMALLINT NOT NULL,
+    state           SMALLINT NOT NULL,
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
-    puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE
+    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE
 );
 
 CREATE TABLE rb_message (
     id              SERIAL PRIMARY KEY,
     content         TEXT NOT NULL,
-    content_type    SMALLINT NOT NULL DEFAULT 0,
+    content_type    SMALLINT NOT NULL DEFAULT 2,
     sender          INT NOT NULL REFERENCES rb_user(id) ON DELETE CASCADE,
     sender_type     SMALLINT NOT NULL,
     cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
     cost_amount     INT NOT NULL DEFAULT 0,
     unlocked        BOOLEAN NOT NULL DEFAULT TRUE,
-    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     ticket_id       INT REFERENCES rb_ticket(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ

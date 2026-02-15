@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.game_id, t.tstate, tp.puzzle_id AS \"puzzle_id?\"\n        FROM rb_team t\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.pstate >= 1\n        WHERE t.id = $1;",
+  "query": "SELECT t.game_id, t.state, tp.puzzle_id AS \"puzzle_id?\"\n        FROM rb_team t\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1\n        WHERE t.id = $1;",
   "describe": {
     "columns": [
       {
@@ -10,7 +10,7 @@
       },
       {
         "ordinal": 1,
-        "name": "tstate",
+        "name": "state",
         "type_info": "Int2"
       },
       {
@@ -30,5 +30,5 @@
       false
     ]
   },
-  "hash": "0801d0e356ffbf96a154a983696d1078c772513477546073f5614af402e238b4"
+  "hash": "f8a6adecb77b59cce93bfb04ba967cf77c6e5adc06c67d15d993b76c3dc53869"
 }

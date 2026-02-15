@@ -17,15 +17,15 @@ struct RoundPathInfo {
 }
 
 async fn get_round(
-    info: web::Path<RoundPathInfo>,
+    path: web::Path<RoundPathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let result = db::round::get_info_for_team_str(
         &app.db,
         &app.kv,
-        info.round_id,
-        user.get_team_id().ok_or(RbError::forbid())?,
+        path.round_id,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
     )
     .await?;
     if result.is_none() {

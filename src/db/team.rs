@@ -41,7 +41,7 @@ pub async fn get_id_by_user_game(
 pub struct RbTeamFullData {
     pub id: i32,
     pub tname: String,
-    pub tstate: RbTeamState,
+    pub state: RbTeamState,
     pub pass: String,
     pub bio: String,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
@@ -94,7 +94,7 @@ pub async fn get_by_user_game(
     Ok(Some(RbTeamFullData {
         id: team.id,
         tname: team.tname,
-        tstate: team.tstate,
+        state: team.state,
         pass: team.pass,
         bio: team.bio,
         ctime_at: team.ctime_at,
@@ -122,7 +122,7 @@ pub async fn join(
     let mut tx = app.db.begin().await?;
 
     let verify = sqlx::query!(
-        "SELECT tstate, pass FROM rb_team
+        "SELECT state, pass FROM rb_team
         WHERE id = $1
         FOR UPDATE;",
         team_id
@@ -135,7 +135,7 @@ pub async fn join(
     }
     let verify = verify.unwrap();
 
-    if verify.tstate == i16::from(RbTeamState::Banned) {
+    if verify.state == i16::from(RbTeamState::Banned) {
         return Ok(TeamJoinResult::Locked);
     }
 
@@ -231,7 +231,7 @@ pub async fn leave(app: &AppState, team_id: i32, user_id: i32) -> Result<bool, R
         "DELETE FROM rb_team_member tm
         USING rb_team t
         WHERE tm.team_id = $1 AND tm.user_id = $2
-            AND t.id = tm.team_id AND t.tstate < 1;",
+            AND t.id = tm.team_id AND t.state < 1;",
         team_id,
         user_id
     )
@@ -254,7 +254,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
     let members = sqlx::query_scalar!(
         "SELECT tm.user_id FROM rb_team_member tm
         JOIN rb_team t ON t.id = tm.team_id
-        WHERE tm.team_id = $1 AND t.tstate < 1;",
+        WHERE tm.team_id = $1 AND t.state < 1;",
         team_id
     )
     .fetch_all(&mut *tx)
@@ -362,7 +362,7 @@ pub async fn user_update(
 pub struct RbTeamShowData {
     pub id: i32,
     pub tname: String,
-    pub tstate: RbTeamState,
+    pub state: RbTeamState,
     pub bio: String,
     pub members: Vec<RbTeamMemberShowData>,
 }
@@ -402,7 +402,7 @@ pub async fn get_by_id_show(
     Ok(Some(RbTeamShowData {
         id: team.id,
         tname: team.tname,
-        tstate: team.tstate,
+        state: team.state,
         bio: team.bio,
         members,
     }))

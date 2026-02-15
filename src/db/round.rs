@@ -32,7 +32,7 @@ pub async fn get_round_state(
         "SELECT EXISTS (
             SELECT 1 FROM rb_team_puzzle tp
             JOIN rb_puzzle p ON p.id = tp.puzzle_id AND p.round_id = $2
-            WHERE tp.team_id = $1 AND tp.pstate >= 0
+            WHERE tp.team_id = $1 AND tp.state >= 0
         );",
         team_id,
         round_id
@@ -154,7 +154,7 @@ pub async fn get_state_for_team(
 ) -> Result<RbRoundTeamStateShowData, RbInternalError> {
     let puzzles = sqlx::query_as!(
         RbPuzzleSimpleData,
-        "SELECT p.id, p.title, tp.pstate AS state,
+        "SELECT p.id, p.title, tp.state AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
         FROM rb_puzzle p
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
@@ -162,9 +162,9 @@ pub async fn get_state_for_team(
             AND s.team_id = tp.team_id
             AND (s.saction = 1 OR s.saction = 5)
             AND s.real_answer IS NOT NULL
-        WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.pstate >= 0
+        WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.state >= 0
             AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)
-        GROUP BY p.id, p.title, tp.pstate;",
+        GROUP BY p.id, p.title, tp.state;",
         round_id,
         team_id
     )
@@ -172,7 +172,7 @@ pub async fn get_state_for_team(
     .await?;
 
     let row = sqlx::query!(
-        "SELECT tp.ctime_at AS utime_at, tp.pstate, tp.cooldown_till,
+        "SELECT tp.ctime_at AS utime_at, tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
                 ARRAY_AGG(s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
@@ -182,7 +182,7 @@ pub async fn get_state_for_team(
             AND s.team_id = tp.team_id
             AND s.saction = 1
         WHERE tp.team_id = $1 AND tp.puzzle_id = r.puzzle
-        GROUP BY tp.ctime_at, tp.pstate, tp.max_submit, tp.cooldown_till, p.max_submit;",
+        GROUP BY tp.ctime_at, tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         round_id
     )
@@ -192,7 +192,7 @@ pub async fn get_state_for_team(
     Ok(RbRoundTeamStateShowData {
         puzzles,
         puzzle: row.map(|r| RbPuzzleTeamStateShowData {
-            state: r.pstate.into(),
+            state: r.state.into(),
             max_submit: r.max_submit,
             answers: r.answers.unwrap_or_default(),
             utime_at: r.utime_at,
@@ -262,7 +262,7 @@ pub async fn get_simple_list_for_team(
         AND EXISTS (
             SELECT 1 FROM rb_puzzle p
             JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
-                AND tp.team_id = $2 AND tp.pstate >= 0
+                AND tp.team_id = $2 AND tp.state >= 0
             WHERE p.round_id = r.id
         );",
         game_id,

@@ -1,5 +1,5 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use sqlx::{
     Decode, Postgres, Type, postgres::PgValueRef, prelude::FromRow, types::time::OffsetDateTime,
@@ -24,7 +24,7 @@ pub struct RbGame {
     pub ctime_at: OffsetDateTime,
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbTeamState {
@@ -33,8 +33,8 @@ pub enum RbTeamState {
     InGame = 1,
     Finished = 2,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }
 
 #[derive(FromRow, Serialize)]
@@ -51,18 +51,18 @@ pub struct RbTeam {
     pub finish_at: Option<OffsetDateTime>,
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbPuzzleType {
     Normal = 0,
     Story = 1,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbContentType {
@@ -72,8 +72,8 @@ pub enum RbContentType {
     /// mark this content should be sanitized by frontend
     UnsafeMarkdown = 2,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }
 
 impl RbContentType {
@@ -94,7 +94,7 @@ impl<'r> Decode<'r, Postgres> for RbContentType {
     }
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbTeamPuzzleState {
@@ -102,8 +102,8 @@ pub enum RbTeamPuzzleState {
     Unlocked = 0,
     Solved = 1,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }
 
 impl RbTeamPuzzleState {
@@ -115,7 +115,7 @@ impl RbTeamPuzzleState {
     }
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbJudgeAction {
@@ -128,8 +128,8 @@ pub enum RbJudgeAction {
     EasterEgg = 4,
     FinishGame = 5,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }
 
 impl RbJudgeAction {
@@ -181,24 +181,24 @@ pub enum RbPuzzlePenaltyType {
     Currency = 3,
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbTicketState {
-    Close = 0,
+    Closed = 0,
     Open = 1,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }
 
-#[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
+#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbTicketSenderType {
     Team = 0,
     Host = 1,
 
-    #[num_enum(catch_all)]
-    Invalid(i16),
+    #[num_enum(default)]
+    Invalid,
 }

@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 
 use crate::{
     AppState,
-    api::error_handler,
+    api::{error_handler, ticket},
     db::{self},
     error::RbError,
     extractor::auth::AuthUser,
@@ -25,8 +25,8 @@ use crate::{
 };
 
 #[derive(Deserialize)]
-struct PuzzlePathInfo {
-    puzzle_id: i32,
+pub struct PuzzlePathInfo {
+    pub puzzle_id: i32,
 }
 
 #[derive(Deserialize)]
@@ -350,6 +350,11 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
             .route("/submit", web::post().to(judge_puzzle))
             .route("/hints", web::get().to(get_puzzle_hints))
             .route("/submissions", web::get().to(get_puzzle_submissions))
+            .service(
+                web::scope("/tickets")
+                    .configure(ticket::puzzles_config)
+                    .default_service(web::route().to(error_handler)),
+            )
             .default_service(web::route().to(error_handler)),
     );
 }

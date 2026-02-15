@@ -8,16 +8,19 @@ use actix_web::{
     web::{self},
 };
 use num_enum::IntoPrimitive;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 
 use crate::{
     AppState,
-    api::error_handler,
-    db::{self, ticket::TicketUserInfo},
+    api::{error_handler, puzzle::PuzzlePathInfo},
+    db::{
+        self,
+        ticket::{SendMessageData, TicketUserInfo},
+    },
     error::RbError,
     extractor::auth::AuthUser,
-    model::game::{RbContentType, RbTicketSenderType},
+    model::game::{RbContentType, RbTicketSenderType, RbTicketState},
 };
 
 #[derive(Deserialize)]
@@ -53,15 +56,11 @@ async fn get_ticket(
     Ok(HttpResponse::Ok().json(result))
 }
 
-async fn get_dm_ticket(
-    info: TicketUserInfo,
-    user: AuthUser,
-    app: web::Data<AppState>,
-) -> Result<HttpResponse> {
+async fn get_dm_ticket(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::ticket::get_dm_ticket_aggre_info(
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
-        !info.mod_access,
+        !user.req_role()?.is_moderator(),
     )
     .await?;
     if result.is_none() {
@@ -77,30 +76,53 @@ fn def_content_type() -> RbContentType {
     RbContentType::UnsafeMarkdown
 }
 
+fn def_sender_type() -> RbTicketSenderType {
+    RbTicketSenderType::Team
+}
+
 #[derive(Deserialize)]
 struct TicketSendRequest {
     content: String,
     #[serde(default = "def_content_type")]
     content_type: RbContentType,
+    #[serde(default = "def_sender_type")]
     sender_type: RbTicketSenderType,
+    #[serde(default)]
+    cost_id: Option<i32>,
+    #[serde(default)]
+    cost_amount: i32,
 }
 
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TicketSendResult {
-    ContentTooLong = -2,
-    BadContentType = -1,
+    BadCost = -5,
+    ContentTooLong = -4,
+    BadContentType = -3,
+    PendingExists = -2,
+    Closed = -1,
     Ok = 0,
 }
 
-async fn send_ticket_message(
-    req: web::Json<TicketSendRequest>,
-    path: web::Path<TicketPathInfo>,
-    info: TicketUserInfo,
-    user: AuthUser,
-    app: web::Data<AppState>,
+#[derive(Serialize)]
+struct TicketSendResponse {
+    code: TicketSendResult,
+    message_id: i32,
+}
+
+async fn do_send_ticket_message(
+    req: TicketSendRequest,
+    info: &TicketUserInfo,
+    user: &AuthUser,
+    app: &AppState,
+    check_pending: bool,
 ) -> Result<HttpResponse> {
-    if !info.member_access {
+    let accessible = match req.sender_type {
+        RbTicketSenderType::Team => info.member_access,
+        RbTicketSenderType::Host => info.mod_access,
+        _ => false,
+    };
+    if !accessible {
         RbError::forbid().err()?
     }
 
@@ -112,12 +134,138 @@ async fn send_ticket_message(
         if req.content.len() > 1000 {
             RbError::unprocessable(TicketSendResult::ContentTooLong.into()).err()?
         }
+        if matches!(info.state, RbTicketState::Closed) {
+            RbError::forbid()
+                .code(TicketSendResult::Closed.into())
+                .err()?
+        }
     }
 
-    Ok(HttpResponse::Ok().finish())
+    if req.cost_id.is_some() && !matches!(req.sender_type, RbTicketSenderType::Host) {
+        RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
+    }
+
+    let data = SendMessageData {
+        content: req.content,
+        content_type: req.content_type,
+        sender_type: req.sender_type,
+        sender_id: user.uid,
+        cost_id: req.cost_id,
+        cost_amount: req.cost_amount,
+    };
+
+    let result =
+        db::ticket::send_ticket_message(&app.db, info.ticket_id, &data, check_pending).await?;
+
+    if result.is_none() {
+        RbError::conflict(TicketSendResult::PendingExists.into()).err()?
+    }
+    let result = result.unwrap();
+
+    Ok(HttpResponse::Ok().json(TicketSendResponse {
+        code: TicketSendResult::Ok,
+        message_id: result,
+    }))
 }
 
-/// check if user has any accessibility to the ticket
+async fn send_ticket_message(
+    req: web::Json<TicketSendRequest>,
+    info: TicketUserInfo,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    do_send_ticket_message(req.into_inner(), &info, &user, &app, true).await
+}
+
+async fn send_dm_ticket_message(
+    req: web::Json<TicketSendRequest>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let ticket_id = db::ticket::get_or_create_dm_ticket_id(
+        &app.db,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
+    )
+    .await?;
+
+    let info = db::ticket::get_ticket_user_info(&app.db, ticket_id, user.uid)
+        .await?
+        .ok_or(RbError::internal("Invalid ticket id"))?;
+
+    do_send_ticket_message(req.into_inner(), &info, &user, &app, false).await
+}
+
+// -- open --
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+pub enum TicketOpenResult {
+    ContentTooLong = -5,
+    BadContentType = -4,
+    Cooldown = -3,
+    PendingExists = -2,
+    Invalid = -1,
+    Ok = 0,
+}
+
+#[derive(Serialize)]
+struct TicketOpenResponse {
+    code: TicketOpenResult,
+    ticket_id: i32,
+    message_id: i32,
+}
+
+async fn open_ticket(
+    req: web::Json<TicketSendRequest>,
+    path: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+
+    if !matches!(req.sender_type, RbTicketSenderType::Team) || req.cost_id.is_some() {
+        RbError::unprocessable(TicketOpenResult::Invalid.into()).err()?
+    }
+
+    if !user.req_role()?.is_admin() {
+        if req.content_type.is_trusted() {
+            RbError::unprocessable(TicketOpenResult::BadContentType.into()).err()?
+        }
+        // TODO: make limit configurable
+        if req.content.len() > 1000 {
+            RbError::unprocessable(TicketOpenResult::ContentTooLong.into()).err()?
+        }
+    }
+
+    let req = req.into_inner();
+    let data = SendMessageData {
+        content: req.content,
+        content_type: req.content_type,
+        sender_type: RbTicketSenderType::Team,
+        sender_id: user.uid,
+        cost_id: None,
+        cost_amount: 0,
+    };
+
+    let result = db::ticket::open_puzzle_ticket(&app.db, team_id, path.puzzle_id, &data).await?;
+
+    match result {
+        db::ticket::OpenPuzzleTicketResult::PendingExists => {
+            RbError::conflict(TicketOpenResult::PendingExists.into()).http_err()
+        }
+        db::ticket::OpenPuzzleTicketResult::Cooldown => {
+            RbError::conflict(TicketOpenResult::Cooldown.into()).http_err()
+        }
+        db::ticket::OpenPuzzleTicketResult::Ok(ticket_id, message_id) => Ok(HttpResponse::Ok()
+            .json(TicketOpenResponse {
+                code: TicketOpenResult::Ok,
+                ticket_id,
+                message_id,
+            })),
+    }
+}
+
+/// Check if user has any accessibility to the ticket.
 async fn check_ticket_middleware(
     req: ServiceRequest,
     next: Next<impl MessageBody>,
@@ -139,7 +287,7 @@ async fn check_ticket_middleware(
 
     let info = db::ticket::get_ticket_user_info(&app.db, ticket_id, user_id)
         .await?
-        .filter(|info| info.any_access())
+        .filter(|info| (info.member_access && info.puzzle_id.is_some()) || info.mod_access)
         .ok_or_else(RbError::not_found)?;
 
     req.extensions_mut().insert(info);
@@ -154,11 +302,16 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("self")
             .route("", web::get().to(get_dm_ticket))
+            .route("/send", web::post().to(send_dm_ticket_message))
             .default_service(web::route().to(error_handler)),
     );
 }
 
-// /puzzles/{puzzle_id}/tickets - get tickets
+// /puzzles/{puzzle_id}/tickets - get/open tickets
+
+pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
+    cfg.route("", web::post().to(open_ticket));
+}
 
 // /tickets/...
 pub fn tickets_config(cfg: &mut web::ServiceConfig) {
@@ -166,7 +319,9 @@ pub fn tickets_config(cfg: &mut web::ServiceConfig) {
         web::scope("/{ticket_id}")
             .wrap(middleware::from_fn(check_ticket_middleware))
             .route("", web::get().to(get_ticket))
-            .route("send", web::post().to(send_ticket_message))
+            .route("/send", web::post().to(send_ticket_message))
             .default_service(web::route().to(error_handler)),
     );
 }
+
+// /messages/... - purchase, delete, ...

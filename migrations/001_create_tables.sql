@@ -112,6 +112,7 @@ CREATE TABLE rb_puzzle (
     max_submit      INT,
     unlock_cond     TEXT NOT NULL,
     round_id        INT NOT NULL REFERENCES rb_round(id),
+    ticket_cooldown INT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -216,6 +217,13 @@ CREATE TABLE rb_ticket (
     puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE
 );
 
+CREATE UNIQUE INDEX rb_idx_ticket_dm_unique
+ON rb_ticket(team_id)
+WHERE puzzle_id IS NULL;
+
+CREATE INDEX rb_idx_ticket_open_team_puzzle
+ON rb_ticket(state, team_id, puzzle_id);
+
 CREATE TABLE rb_message (
     id              SERIAL PRIMARY KEY,
     content         TEXT NOT NULL,
@@ -229,3 +237,6 @@ CREATE TABLE rb_message (
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ
 );
+
+CREATE INDEX rb_idx_message_ticket_host_id_partial
+ON rb_message(sender_type, ticket_id, id);

@@ -20,11 +20,11 @@ impl RbUserRole {
     }
 
     pub fn is_moderator(&self) -> bool {
-        !matches!(self, Self::Moderator | Self::Admin)
+        matches!(self, Self::Moderator | Self::Admin)
     }
 
     pub fn is_admin(&self) -> bool {
-        !matches!(self, Self::Admin)
+        matches!(self, Self::Admin)
     }
 }
 

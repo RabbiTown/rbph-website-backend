@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT FROM rb_ticket WHERE id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "80b7d979fc8cf3ab93445091f798d122d01ffd0d01723d82bcacb0a017165607"
+}

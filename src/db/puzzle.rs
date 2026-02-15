@@ -533,7 +533,7 @@ pub async fn submit_answer(
         result.result,
         result.answer,
         submit_id,
-        result.action == RbJudgeAction::Error
+        matches!(result.action, RbJudgeAction::Error)
     )
     .execute(&mut *tx)
     .await?;
@@ -905,7 +905,7 @@ pub async fn purchase_hint(
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
         WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
             AND NOT COALESCE(th.unlocked, FALSE)
-            AND EXTRACT(EPOCH FROM (NOW() - tp.ctime_at)) >= h.cooldown;",
+            AND tp.ctime_at <= NOW() - (h.cooldown * INTERVAL '1 second');",
         user_id,
         hint_id
     )

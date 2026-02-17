@@ -40,7 +40,7 @@ pub enum RbTeamState {
 #[derive(FromRow, Serialize)]
 pub struct RbTeam {
     pub id: i32,
-    pub tname: String,
+    pub name: String,
     pub state: RbTeamState,
     pub pass: String,
     pub bio: String,

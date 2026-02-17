@@ -35,7 +35,7 @@ struct TeamPathInfo {
 
 #[derive(Deserialize)]
 struct TeamCreateRequest {
-    pub tname: String,
+    pub name: String,
     pub pass: String,
     pub bio: String,
 }
@@ -70,7 +70,7 @@ async fn create_self(
     }
 
     let data = RbTeamPutData {
-        tname: req.tname.trim().to_string(),
+        name: req.name.trim().to_string(),
         pass: trimmed_pwd.to_string(),
         bio: req.bio,
         game_id: path.game_id,

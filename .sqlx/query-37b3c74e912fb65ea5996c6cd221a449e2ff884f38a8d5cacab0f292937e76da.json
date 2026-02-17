@@ -10,7 +10,7 @@
       },
       {
         "ordinal": 1,
-        "name": "tname",
+        "name": "name",
         "type_info": "Varchar"
       },
       {

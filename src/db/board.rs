@@ -10,7 +10,7 @@ use crate::{DbPool, error::RbInternalError};
 #[derive(Clone, Serialize)]
 pub struct LeaderBoardTeamInfo {
     pub id: i32,
-    pub tname: String,
+    pub name: String,
     pub bio: String,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
@@ -110,7 +110,7 @@ impl LeaderBoardCache {
         game_id: i32,
     ) -> Result<Vec<LeaderBoardTeamInfo>, RbInternalError> {
         let teams = sqlx::query!(
-            "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
+            "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
                 COUNT(tp.puzzle_id) AS \"solves!\"
             FROM rb_team t
             LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
@@ -149,7 +149,7 @@ impl LeaderBoardCache {
             .map(|t| LeaderBoardTeamInfo {
                 id: t.id,
                 bio: t.bio.clone(),
-                tname: t.tname.clone(),
+                name: t.name.clone(),
                 finish_at: t.finish_at,
                 last_solved_at: t.last_solved_at,
                 solves: t.solves,
@@ -187,7 +187,7 @@ impl LeaderBoardCache {
         team_id: i32,
     ) -> Result<Option<(i32, LeaderBoardTeamInfo)>, RbInternalError> {
         let team = sqlx::query!(
-            "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
+            "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
                 COUNT(tp.puzzle_id) AS \"solves!\", t.game_id
             FROM rb_team t
             LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
@@ -219,7 +219,7 @@ impl LeaderBoardCache {
             LeaderBoardTeamInfo {
                 id: team.id,
                 bio: team.bio.clone(),
-                tname: team.tname,
+                name: team.name,
                 finish_at: team.finish_at,
                 last_solved_at: team.last_solved_at,
                 solves: team.solves,

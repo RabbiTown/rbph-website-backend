@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct RbTeamPutData {
-    pub tname: String,
+    pub name: String,
     pub pass: String,
     pub bio: String,
     pub game_id: i32,
@@ -40,7 +40,7 @@ pub async fn get_id_by_user_game(
 #[derive(Serialize)]
 pub struct RbTeamFullData {
     pub id: i32,
-    pub tname: String,
+    pub name: String,
     pub state: RbTeamState,
     pub pass: String,
     pub bio: String,
@@ -93,7 +93,7 @@ pub async fn get_by_user_game(
 
     Ok(Some(RbTeamFullData {
         id: team.id,
-        tname: team.tname,
+        name: team.name,
         state: team.state,
         pass: team.pass,
         bio: team.bio,
@@ -185,10 +185,10 @@ pub async fn user_create(
     let mut tx = db_pool.begin().await?;
 
     let team_id = sqlx::query_scalar!(
-        "INSERT INTO rb_team (tname, pass, bio, game_id)
+        "INSERT INTO rb_team (name, pass, bio, game_id)
         VALUES ($1, $2, $3, $4)
         RETURNING id;",
-        data.tname,
+        data.name,
         data.pass,
         data.bio,
         data.game_id
@@ -290,7 +290,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
 #[derive(Deserialize, Validate)]
 pub struct UserUpdateData {
     #[validate(length(min = 1, max = 40))]
-    pub tname: Option<String>,
+    pub name: Option<String>,
     #[validate(length(min = 8, max = 32))]
     pub pass: Option<String>,
     #[validate(length(max = 200))]
@@ -307,11 +307,11 @@ pub async fn user_update(
 
     let mut first = true;
 
-    if let Some(tname) = &data.tname {
+    if let Some(name) = &data.name {
         if !first {
             qb.push(", ");
         }
-        qb.push("tname = ").push_bind(tname);
+        qb.push("name = ").push_bind(name);
         first = false;
     }
 
@@ -361,7 +361,7 @@ pub async fn user_update(
 #[derive(Serialize)]
 pub struct RbTeamShowData {
     pub id: i32,
-    pub tname: String,
+    pub name: String,
     pub state: RbTeamState,
     pub bio: String,
     pub members: Vec<RbTeamMemberShowData>,
@@ -401,7 +401,7 @@ pub async fn get_by_id_show(
 
     Ok(Some(RbTeamShowData {
         id: team.id,
-        tname: team.tname,
+        name: team.name,
         state: team.state,
         bio: team.bio,
         members,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT tk.state,\n                t.id AS t_id, t.tname AS t_name, t.state AS t_state,\n                p.id AS \"p_id?\", p.title AS \"p_title?\", tp.state AS \"p_state?\"\n        FROM rb_ticket tk\n        JOIN rb_team t ON t.id = tk.team_id\n        LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.puzzle_id = p.id\n        WHERE tk.id = $1",
+  "query": "SELECT tk.state,\n                t.id AS t_id, t.name AS t_name, t.state AS t_state,\n                p.id AS \"p_id?\", p.title AS \"p_title?\", tp.state AS \"p_state?\"\n        FROM rb_ticket tk\n        JOIN rb_team t ON t.id = tk.team_id\n        LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.puzzle_id = p.id\n        WHERE tk.id = $1",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       false
     ]
   },
-  "hash": "59c138f1c1577eba7423c41540765e8b517f32ad826f2b0c673f657680b2a446"
+  "hash": "0f76ba32a58892aca9437c76effa0d7426b074d46fe72f1a190d8e65d4cb4b1d"
 }

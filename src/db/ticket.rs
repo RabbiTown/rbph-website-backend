@@ -146,7 +146,7 @@ pub async fn get_ticket_aggre_info(
 ) -> Result<Option<TicketAggreInfo>, RbInternalError> {
     let info = sqlx::query!(
         "SELECT tk.state,
-                t.id AS t_id, t.tname AS t_name, t.state AS t_state,
+                t.id AS t_id, t.name AS t_name, t.state AS t_state,
                 p.id AS \"p_id?\", p.title AS \"p_title?\", tp.state AS \"p_state?\"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id

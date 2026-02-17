@@ -46,7 +46,7 @@ CREATE TABLE rb_game (
 
 CREATE TABLE rb_team (
     id              SERIAL PRIMARY KEY,
-    tname           VARCHAR(60) NOT NULL,
+    name           VARCHAR(60) NOT NULL,
     state           SMALLINT NOT NULL DEFAULT 0,
     pass            VARCHAR(32) NOT NULL,
     bio             TEXT NOT NULL,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.id, t.tname, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,\n                COUNT(tp.puzzle_id) AS \"solves!\"\n            FROM rb_team t\n            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1\n            WHERE t.game_id = $1 AND t.state > 0\n            GROUP BY t.id\n            ORDER BY t.state DESC,\n                finish_at ASC NULLS LAST,\n                \"solves!\" DESC,\n                MAX(tp.solve_at) ASC NULLS LAST;",
+  "query": "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,\n                COUNT(tp.puzzle_id) AS \"solves!\", t.game_id\n            FROM rb_team t\n            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1\n            WHERE t.id = $1\n            GROUP BY t.id;",
   "describe": {
     "columns": [
       {
@@ -10,7 +10,7 @@
       },
       {
         "ordinal": 1,
-        "name": "tname",
+        "name": "name",
         "type_info": "Varchar"
       },
       {
@@ -32,6 +32,11 @@
         "ordinal": 5,
         "name": "solves!",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "game_id",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -45,8 +50,9 @@
       false,
       true,
       null,
-      null
+      null,
+      false
     ]
   },
-  "hash": "fb604ccf74f8e954af2186bf0170a82b2e2cd5a7151481234d0312497c81e71b"
+  "hash": "28db653318061dd2422628a0d72159a11e6f63b7c7d40048722ecb21310953e7"
 }

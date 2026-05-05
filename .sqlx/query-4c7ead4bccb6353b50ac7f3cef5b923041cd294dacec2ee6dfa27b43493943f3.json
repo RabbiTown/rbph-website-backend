@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) FROM rb_message m\n            WHERE ticket_id = $1\n            AND sender_type = 0\n            AND NOT EXISTS (\n                SELECT 1\n                FROM rb_message AS reply\n                WHERE reply.ticket_id = m.ticket_id\n                    AND reply.sender_type = 1\n                    AND reply.id > m.id\n            );",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4c7ead4bccb6353b50ac7f3cef5b923041cd294dacec2ee6dfa27b43493943f3"
+}

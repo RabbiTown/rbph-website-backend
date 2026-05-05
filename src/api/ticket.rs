@@ -57,15 +57,12 @@ async fn get_ticket(
 }
 
 async fn get_dm_ticket(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let result = db::ticket::get_dm_ticket_aggre_info(
+    let result = db::ticket::get_dm_ticket_messages(
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
         !user.req_role()?.is_moderator(),
     )
     .await?;
-    if result.is_none() {
-        RbError::not_found().err()?
-    }
 
     Ok(HttpResponse::Ok().json(result))
 }
@@ -115,7 +112,7 @@ async fn do_send_ticket_message(
     info: &TicketUserInfo,
     user: &AuthUser,
     app: &AppState,
-    check_pending: bool,
+    max_pending: Option<i64>,
 ) -> Result<HttpResponse> {
     let accessible = match req.sender_type {
         RbTicketSenderType::Team => info.member_access,
@@ -155,7 +152,7 @@ async fn do_send_ticket_message(
     };
 
     let result =
-        db::ticket::send_ticket_message(&app.db, info.ticket_id, &data, check_pending).await?;
+        db::ticket::send_ticket_message(&app.db, info.ticket_id, &data, max_pending).await?;
 
     if result.is_none() {
         RbError::conflict(TicketSendResult::PendingExists.into()).err()?
@@ -174,7 +171,7 @@ async fn send_ticket_message(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    do_send_ticket_message(req.into_inner(), &info, &user, &app, true).await
+    do_send_ticket_message(req.into_inner(), &info, &user, &app, Some(1)).await
 }
 
 async fn send_dm_ticket_message(
@@ -192,7 +189,7 @@ async fn send_dm_ticket_message(
         .await?
         .ok_or(RbError::internal("Invalid ticket id"))?;
 
-    do_send_ticket_message(req.into_inner(), &info, &user, &app, false).await
+    do_send_ticket_message(req.into_inner(), &info, &user, &app, Some(3)).await
 }
 
 // -- open --
@@ -265,6 +262,19 @@ async fn open_ticket(
     }
 }
 
+// -- puzzle: get list --
+
+async fn get_team_puzzle_tickets(
+    path: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let result = db::ticket::get_team_puzzle_tickets(&app.db, team_id, path.puzzle_id).await?;
+
+    Ok(HttpResponse::Ok().json(result))
+}
+
 /// Check if user has any accessibility to the ticket.
 async fn check_ticket_middleware(
     req: ServiceRequest,
@@ -295,9 +305,6 @@ async fn check_ticket_middleware(
     next.call(req).await
 }
 
-// /games/{game_id}/tickets/self  - for DM ticket
-// /games/{game_id}/tickets - list all tickets, for mod only
-
 pub fn games_config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("self")
@@ -310,7 +317,8 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
 // /puzzles/{puzzle_id}/tickets - get/open tickets
 
 pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
-    cfg.route("", web::post().to(open_ticket));
+    cfg.route("", web::get().to(get_team_puzzle_tickets))
+        .route("", web::post().to(open_ticket));
 }
 
 // /tickets/...

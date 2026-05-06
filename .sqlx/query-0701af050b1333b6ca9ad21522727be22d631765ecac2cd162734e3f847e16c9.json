@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,\n                            h.title AS h_t, h.cost_id AS h_ci, h.cost_amount AS h_ca,\n                            p.title AS p_t, p.id AS p_i\n                    FROM rb_hint h\n                    JOIN rb_puzzle p ON p.id = h.puzzle_id\n                    WHERE h.id = $2",
+  "query": "SELECT (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,\n                    h.title AS h_t, h.cost_id AS h_ci, h.cost_amount AS h_ca,\n                    p.title AS p_t, p.id AS p_i\n            FROM rb_hint h\n            JOIN rb_puzzle p ON p.id = h.puzzle_id\n            WHERE h.id = $2",
   "describe": {
     "columns": [
       {
@@ -49,5 +49,5 @@
       false
     ]
   },
-  "hash": "82ba94a599ca185227ce38e04ff3b45c139679840e862ad56acd6a7f14bc0876"
+  "hash": "0701af050b1333b6ca9ad21522727be22d631765ecac2cd162734e3f847e16c9"
 }

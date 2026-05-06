@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                        (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,\n                        (SELECT title FROM rb_puzzle WHERE id = $2) AS p_t;",
+  "query": "SELECT\n                (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,\n                (SELECT title FROM rb_puzzle WHERE id = $2) AS p_t;",
   "describe": {
     "columns": [
       {
@@ -25,5 +25,5 @@
       null
     ]
   },
-  "hash": "cd819d1b8604b2f31f1844088f7c930a01f869d707938fd8eaa4073727d48487"
+  "hash": "09e33f927f94a0148e2747a9152b0119996e1242f818e251d5be907f939098b3"
 }

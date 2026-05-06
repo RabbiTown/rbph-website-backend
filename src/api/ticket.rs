@@ -16,7 +16,7 @@ use crate::{
     api::{error_handler, puzzle::PuzzlePathInfo},
     db::{
         self,
-        ticket::{SendMessageData, TicketUserInfo},
+        ticket::{SendMessageData, TicketMessage, TicketSummary, TicketThread, TicketUserInfo},
     },
     error::RbError,
     extractor::auth::AuthUser,
@@ -47,8 +47,7 @@ async fn get_ticket(
     info: TicketUserInfo,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let result =
-        db::ticket::get_ticket_aggre_info(&app.db, path.ticket_id, !info.mod_access).await?;
+    let result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info).await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
@@ -57,10 +56,10 @@ async fn get_ticket(
 }
 
 async fn get_dm_ticket(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let result = db::ticket::get_dm_ticket_messages(
+    let result = db::ticket::get_dm_ticket_thread(
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
-        !user.req_role()?.is_moderator(),
+        user.req_role()?.is_moderator(),
     )
     .await?;
 
@@ -105,6 +104,8 @@ pub enum TicketSendResult {
 struct TicketSendResponse {
     code: TicketSendResult,
     message_id: i32,
+    ticket: Option<TicketSummary>,
+    msg: TicketMessage,
 }
 
 async fn do_send_ticket_message(
@@ -151,17 +152,19 @@ async fn do_send_ticket_message(
         cost_amount: req.cost_amount,
     };
 
-    let result =
-        db::ticket::send_ticket_message(&app.db, info.ticket_id, &data, max_pending).await?;
+    let msg = db::ticket::send_ticket_message(&app.db, info.ticket_id, &data, max_pending).await?;
 
-    if result.is_none() {
+    if msg.is_none() {
         RbError::conflict(TicketSendResult::PendingExists.into()).err()?
     }
-    let result = result.unwrap();
+    let msg = msg.unwrap();
+    let ticket = db::ticket::get_ticket_summary(&app.db, info.ticket_id, info.mod_access).await?;
 
     Ok(HttpResponse::Ok().json(TicketSendResponse {
         code: TicketSendResult::Ok,
-        message_id: result,
+        message_id: msg.id,
+        ticket,
+        msg,
     }))
 }
 
@@ -210,6 +213,7 @@ struct TicketOpenResponse {
     code: TicketOpenResult,
     ticket_id: i32,
     message_id: i32,
+    thread: TicketThread,
 }
 
 async fn open_ticket(
@@ -253,12 +257,22 @@ async fn open_ticket(
         db::ticket::OpenPuzzleTicketResult::Cooldown => {
             RbError::conflict(TicketOpenResult::Cooldown.into()).http_err()
         }
-        db::ticket::OpenPuzzleTicketResult::Ok(ticket_id, message_id) => Ok(HttpResponse::Ok()
-            .json(TicketOpenResponse {
+        db::ticket::OpenPuzzleTicketResult::Ok(thread) => {
+            let ticket = thread
+                .ticket()
+                .ok_or_else(|| RbError::internal("Opened ticket not found"))?;
+            let msg = thread
+                .messages()
+                .first()
+                .ok_or_else(|| RbError::internal("Opened ticket message not found"))?;
+
+            Ok(HttpResponse::Ok().json(TicketOpenResponse {
                 code: TicketOpenResult::Ok,
-                ticket_id,
-                message_id,
-            })),
+                ticket_id: ticket.id(),
+                message_id: msg.id(),
+                thread,
+            }))
+        }
     }
 }
 

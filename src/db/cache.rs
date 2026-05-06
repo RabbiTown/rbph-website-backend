@@ -1,6 +1,6 @@
 use deadpool_redis::redis::{self, AsyncCommands, RedisError};
 
-use crate::{AppState, KvPool, db, error::RbInternalError, module::sync::SyncMessageType};
+use crate::{AppState, KvPool, db, error::RbInternalError};
 
 pub async fn del_pattern(kv_pool: &KvPool, pattern: &str) -> Result<(), RbInternalError> {
     let mut conn = kv_pool.get().await?;
@@ -65,7 +65,7 @@ pub async fn invalidate_team_info(app: &AppState, team_id: i32) -> Result<(), Rb
 
     let _ = app
         .sync_hub
-        .do_push_team(&app.db, team_id, SyncMessageType::TeamInfoUpdated, ())
+        .notify_team_info_updated(&app.db, team_id)
         .await;
 
     Ok(())

@@ -9,7 +9,6 @@ use crate::{
     AppState, DbPool, db,
     error::RbInternalError,
     model::game::{RbTeam, RbTeamState},
-    module::sync::SyncMessageType,
 };
 
 #[derive(Deserialize)]
@@ -278,8 +277,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
 
         db::cache::remove_team_info(game_id, team_id).await?;
 
-        app.sync_hub
-            .do_push_all(&members, SyncMessageType::TeamDisbanded, ());
+        app.sync_hub.notify_team_disbanded(&members);
 
         Ok(true)
     } else {
@@ -489,8 +487,7 @@ pub async fn kick_member(
         // other member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
 
-        app.sync_hub
-            .do_push(user_id, SyncMessageType::TeamSelfKicked, ());
+        app.sync_hub.notify_team_self_kicked(user_id);
 
         Ok(true)
     } else {
@@ -522,8 +519,7 @@ pub async fn promote_member(
         // target member => TeamSelfPromoted
         db::cache::invalidate_team_info(app, team_id).await?;
 
-        app.sync_hub
-            .do_push(user_id, SyncMessageType::TeamSelfPromoted, ());
+        app.sync_hub.notify_team_self_promoted(user_id);
 
         Ok(true)
     } else {

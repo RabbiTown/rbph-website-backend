@@ -9,7 +9,6 @@ use actix_web::{
 };
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
 
@@ -17,11 +16,10 @@ use crate::{
     AppState,
     api::{error_handler, ticket},
     db::{self},
-    error::RbError,
+    error::{RbError, RbInternalError},
     extractor::auth::AuthUser,
     game::judge::JudgeResult,
-    module::sync::SyncMessageType,
-    serde_helpers::serialize_option_offset_datetime,
+    module::sync::{PuzzleHintUnlockedSync, PuzzleSubmittedSync, PuzzleUnlockInfo},
 };
 
 #[derive(Deserialize)]
@@ -58,6 +56,7 @@ async fn get_puzzle(
 #[derive(Deserialize)]
 struct PuzzleJudgeRequest {
     answer: String,
+    sid: Option<String>,
 }
 
 #[repr(i32)]
@@ -73,6 +72,8 @@ struct JudgePuzzleResponse {
     result: JudgeResult,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     cooldown_till: Option<OffsetDateTime>,
+    solved: bool,
+    unlocks: Vec<PuzzleUnlockInfo>,
 }
 
 async fn judge_puzzle(
@@ -101,70 +102,45 @@ async fn judge_puzzle(
             unlocks,
             cooldown_till,
         } => {
+            let unlock_rows = sqlx::query_as!(
+                PuzzleUnlockInfo,
+                "SELECT id, title, round_id FROM rb_puzzle WHERE id = ANY($1)",
+                &unlocks
+            )
+            .fetch_all(&app.db)
+            .await
+            .map_err(RbInternalError::from)?;
+
+            let answer = req.answer.clone();
+            let sid = req.sid.clone();
+            let sync_unlocks = unlock_rows.clone();
+            let action = result.action;
+
             tokio::spawn(async move {
-                let row = sqlx::query!(
-                    "SELECT
-                        (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,
-                        (SELECT title FROM rb_puzzle WHERE id = $2) AS p_t;",
-                    user.uid,
-                    path.puzzle_id
-                )
-                .fetch_one(&app.db)
-                .await;
-
-                let unlock_rows = sqlx::query!(
-                    "SELECT id, title, round_id FROM rb_puzzle WHERE id = ANY($1)",
-                    &unlocks
-                )
-                .fetch_one(&app.db)
-                .await;
-
-                if let Ok(row) = row {
-                    let mut sync = json!({
-                        "user": {
-                            "id": user.uid,
-                            "name": row.u_n,
+                let _ = app
+                    .sync_hub
+                    .notify_puzzle_submitted(
+                        &app.db,
+                        PuzzleSubmittedSync {
+                            team_id,
+                            user_id: user.uid,
+                            puzzle_id: path.puzzle_id,
+                            answer,
+                            action,
+                            cooldown_till,
+                            solved,
+                            unlocks: sync_unlocks,
+                            sid,
                         },
-                        "puzzle": {
-                            "id": path.puzzle_id,
-                            "title": row.p_t,
-                        },
-                        "answer": req.answer,
-                        "action": result.action,
-                    });
-                    if cooldown_till.is_some()
-                        && let Ok(x) = serialize_option_offset_datetime::serialize(
-                            &cooldown_till,
-                            serde_json::value::Serializer,
-                        )
-                    {
-                        sync["cooldown_till"] = x;
-                    }
-                    if solved {
-                        sync["solved"] = json!(true);
-                        sync["unlocks"] = json!(
-                            unlock_rows
-                                .into_iter()
-                                .map(|r| {
-                                    json!({
-                                        "id": r.id,
-                                        "title": r.title,
-                                        "round_id": r.round_id,
-                                    })
-                                })
-                                .collect::<Vec<_>>()
-                        );
-                    }
-                    let _ = app
-                        .sync_hub
-                        .do_push_team(&app.db, team_id, SyncMessageType::PuzzleSubmitted, sync)
-                        .await;
-                }
+                    )
+                    .await;
             });
 
             Ok(HttpResponse::Ok().json(JudgePuzzleResponse {
                 result,
                 cooldown_till,
+                solved,
+                unlocks: unlock_rows,
             }))
         }
     }
@@ -202,8 +178,14 @@ pub enum PurchaseHintResult {
     Ok = 0,
 }
 
+#[derive(Deserialize)]
+struct SidRequest {
+    sid: Option<String>,
+}
+
 async fn purchase_hint(
     path: web::Path<HintPathInfo>,
+    req: Option<web::Json<SidRequest>>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
@@ -218,42 +200,21 @@ async fn purchase_hint(
             RbError::conflict(PurchaseHintResult::Insufficient.into()).http_err()
         }
         db::puzzle::PurchaseHintResult::Ok(result) => {
-            tokio::spawn(async move {
-                let row = sqlx::query!(
-                    "SELECT (SELECT nickname FROM rb_user WHERE id = $1) AS u_n,
-                            h.title AS h_t, h.cost_id AS h_ci, h.cost_amount AS h_ca,
-                            p.title AS p_t, p.id AS p_i
-                    FROM rb_hint h
-                    JOIN rb_puzzle p ON p.id = h.puzzle_id
-                    WHERE h.id = $2",
-                    user.uid,
-                    path.hint_id
-                )
-                .fetch_one(&app.db)
-                .await;
+            let sid = req.and_then(|req| req.sid.clone());
 
-                if let Ok(row) = row {
-                    let sync = json!({
-                        "user": {
-                            "id": user.uid,
-                            "name": row.u_n,
+            tokio::spawn(async move {
+                let _ = app
+                    .sync_hub
+                    .notify_puzzle_hint_unlocked(
+                        &app.db,
+                        PuzzleHintUnlockedSync {
+                            team_id,
+                            user_id: user.uid,
+                            hint_id: path.hint_id,
+                            sid,
                         },
-                        "puzzle": {
-                            "id": row.p_i,
-                            "title": row.p_t,
-                        },
-                        "hint": {
-                            "id": path.hint_id,
-                            "title": row.h_t,
-                            "cost_id": row.h_ci,
-                            "cost_amount": row.h_ca
-                        }
-                    });
-                    let _ = app
-                        .sync_hub
-                        .do_push_team(&app.db, team_id, SyncMessageType::PuzzleHintUnlocked, sync)
-                        .await;
-                }
+                    )
+                    .await;
             });
 
             Ok(HttpResponse::Ok().json(result))

@@ -471,7 +471,7 @@ pub async fn send_ticket_message(
 
     tx.commit().await?;
 
-    Ok(get_ticket_message(db_pool, result, true).await?)
+    get_ticket_message(db_pool, result, true).await
 }
 
 pub enum OpenPuzzleTicketResult {

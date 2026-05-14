@@ -208,21 +208,18 @@ impl TicketSummary {
 
 #[derive(Serialize)]
 pub struct TicketPerm {
-    can_send: bool,
+    send_block: TicketSendBlock,
     can_host: bool,
     can_view_locked: bool,
     content_type: Vec<RbContentType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    send_block: Option<TicketSendBlock>,
 }
 
 impl TicketPerm {
     pub fn new(
-        can_send: bool,
         can_host: bool,
         can_view_locked: bool,
         can_use_trusted_content: bool,
-        send_block: Option<TicketSendBlock>,
+        send_block: TicketSendBlock,
     ) -> Self {
         let content_type = if can_use_trusted_content {
             vec![
@@ -235,11 +232,10 @@ impl TicketPerm {
         };
 
         Self {
-            can_send,
+            send_block,
             can_host,
             can_view_locked,
             content_type,
-            send_block,
         }
     }
 }
@@ -247,9 +243,10 @@ impl TicketPerm {
 #[repr(i16)]
 #[derive(Serialize_repr)]
 pub enum TicketSendBlock {
-    NoAccess = 1,
-    Closed = 2,
-    Pending = 3,
+    Ok = 0,
+    NoAccess = -1,
+    Closed = -2,
+    Pending = -3,
 }
 
 #[derive(Serialize)]
@@ -297,20 +294,20 @@ async fn calc_send_block(
     state: RbTicketState,
     can_send: bool,
     max_pending: Option<i64>,
-) -> Result<Option<TicketSendBlock>, RbInternalError> {
+) -> Result<TicketSendBlock, RbInternalError> {
     if !can_send {
-        return Ok(Some(TicketSendBlock::NoAccess));
+        return Ok(TicketSendBlock::NoAccess);
     }
     if matches!(state, RbTicketState::Closed) {
-        return Ok(Some(TicketSendBlock::Closed));
+        return Ok(TicketSendBlock::Closed);
     }
     if let Some(max_pending) = max_pending
         && get_pending_count(db_pool, ticket_id).await? >= max_pending
     {
-        return Ok(Some(TicketSendBlock::Pending));
+        return Ok(TicketSendBlock::Pending);
     }
 
-    Ok(None)
+    Ok(TicketSendBlock::Ok)
 }
 
 #[derive(Serialize)]
@@ -551,11 +548,10 @@ pub async fn get_dm_ticket_thread(
             ticket: None,
             messages: vec![],
             perm: TicketPerm::new(
-                true,
                 can_view_locked,
                 can_view_locked,
                 can_use_trusted_content,
-                Some(TicketSendBlock::NoAccess),
+                TicketSendBlock::Ok,
             ),
         });
     };
@@ -572,7 +568,6 @@ pub async fn get_dm_ticket_thread(
         ticket,
         messages,
         perm: TicketPerm::new(
-            true,
             can_view_locked,
             can_view_locked,
             can_use_trusted_content,
@@ -656,7 +651,6 @@ pub async fn get_ticket_thread(
         ticket: Some(ticket),
         messages,
         perm: TicketPerm::new(
-            !matches!(info.state, RbTicketState::Closed) && info.member_access,
             info.mod_access,
             info.mod_access,
             info.admin_access,

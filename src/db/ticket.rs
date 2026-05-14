@@ -115,6 +115,7 @@ pub enum TicketThreadItemType {
 pub enum TicketOperationAction {
     Open = 1,
     Close = 2,
+    AutoCloseSolved = 3,
 }
 
 impl From<i16> for TicketOperationAction {
@@ -122,6 +123,7 @@ impl From<i16> for TicketOperationAction {
         match value {
             1 => Self::Open,
             2 => Self::Close,
+            3 => Self::AutoCloseSolved,
             _ => Self::Close,
         }
     }
@@ -166,7 +168,7 @@ impl TicketThreadItem {
         match self {
             Self::Operation(operation) => match operation.action {
                 TicketOperationAction::Open => 0,
-                TicketOperationAction::Close => 2,
+                TicketOperationAction::Close | TicketOperationAction::AutoCloseSolved => 2,
             },
             Self::Message(_) => 1,
         }
@@ -808,6 +810,39 @@ pub async fn close_ticket(
     tx.commit().await?;
 
     Ok(updated)
+}
+
+pub async fn close_puzzle_tickets_on_solve(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: i32,
+    puzzle_id: i32,
+    actor_id: i32,
+) -> Result<(), RbInternalError> {
+    let ticket_ids = sqlx::query_scalar!(
+        "UPDATE rb_ticket
+        SET state = $1
+        WHERE team_id = $2 AND puzzle_id = $3 AND state <> $1
+        RETURNING id;",
+        i16::from(RbTicketState::Closed),
+        team_id,
+        puzzle_id
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    for ticket_id in ticket_ids {
+        sqlx::query!(
+            "INSERT INTO rb_ticket_operation (ticket_id, action, actor)
+            VALUES ($1, $2, $3)",
+            ticket_id,
+            i16::from(TicketOperationAction::AutoCloseSolved),
+            actor_id
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(())
 }
 
 pub enum PurchaseTicketMessageResult {

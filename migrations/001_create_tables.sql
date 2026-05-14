@@ -240,3 +240,15 @@ CREATE TABLE rb_message (
 
 CREATE INDEX rb_idx_message_ticket_host_id_partial
 ON rb_message(sender_type, ticket_id, id);
+
+CREATE TABLE rb_ticket_operation (
+    id              SERIAL PRIMARY KEY,
+    ticket_id       INT NOT NULL REFERENCES rb_ticket(id) ON DELETE CASCADE,
+    action          SMALLINT NOT NULL,
+    actor           INT NOT NULL REFERENCES rb_user(id) ON DELETE CASCADE,
+    message_id      INT REFERENCES rb_message(id) ON DELETE SET NULL,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX rb_idx_ticket_operation_ticket_id
+ON rb_ticket_operation(ticket_id, ctime_at DESC, id DESC);

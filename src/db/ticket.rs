@@ -1,4 +1,4 @@
-use num_enum::FromPrimitive;
+use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
@@ -20,6 +20,7 @@ pub struct TicketUserInfo {
     pub puzzle_id: Option<i32>,
     pub member_access: bool,
     pub mod_access: bool,
+    pub admin_access: bool,
 }
 
 pub async fn get_ticket_user_info(
@@ -50,6 +51,7 @@ pub async fn get_ticket_user_info(
         puzzle_id: x.puzzle_id,
         member_access: x.is_member.unwrap_or(false),
         mod_access: RbUserRole::from(x.urole).is_moderator(),
+        admin_access: RbUserRole::from(x.urole).is_admin(),
     }))
 }
 
@@ -76,6 +78,7 @@ pub struct TicketAggreInfoUser {
 
 #[derive(Serialize)]
 pub struct TicketMessage {
+    r#type: TicketThreadItemType,
     pub id: i32,
     sender: TicketAggreInfoUser,
     sender_type: RbTicketSenderType,
@@ -100,6 +103,83 @@ impl TicketMessage {
     }
 }
 
+#[repr(i16)]
+#[derive(Serialize_repr)]
+pub enum TicketThreadItemType {
+    Message = 0,
+    Operation = 1,
+}
+
+#[repr(i16)]
+#[derive(IntoPrimitive, Serialize_repr)]
+pub enum TicketOperationAction {
+    Open = 1,
+    Close = 2,
+}
+
+impl From<i16> for TicketOperationAction {
+    fn from(value: i16) -> Self {
+        match value {
+            1 => Self::Open,
+            2 => Self::Close,
+            _ => Self::Close,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct TicketOperation {
+    r#type: TicketThreadItemType,
+    id: i32,
+    action: TicketOperationAction,
+    actor: TicketAggreInfoUser,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<TicketMessage>,
+
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    ctime_at: OffsetDateTime,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum TicketThreadItem {
+    Message(TicketMessage),
+    Operation(TicketOperation),
+}
+
+impl TicketThreadItem {
+    fn ctime_at(&self) -> OffsetDateTime {
+        match self {
+            Self::Message(message) => message.ctime_at,
+            Self::Operation(operation) => operation.ctime_at,
+        }
+    }
+
+    fn id(&self) -> i32 {
+        match self {
+            Self::Message(message) => message.id,
+            Self::Operation(operation) => operation.id,
+        }
+    }
+
+    fn same_time_rank(&self) -> i8 {
+        match self {
+            Self::Operation(operation) => match operation.action {
+                TicketOperationAction::Open => 0,
+                TicketOperationAction::Close => 2,
+            },
+            Self::Message(_) => 1,
+        }
+    }
+
+    pub fn message_id(&self) -> Option<i32> {
+        match self {
+            Self::Message(message) => Some(message.id()),
+            Self::Operation(operation) => operation.message.as_ref().map(TicketMessage::id),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct TicketSummary {
     pub id: i32,
@@ -116,7 +196,6 @@ pub struct TicketSummary {
     last_at: Option<OffsetDateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_by: Option<RbTicketSenderType>,
-    has_locked: bool,
 }
 
 impl TicketSummary {
@@ -130,23 +209,52 @@ pub struct TicketPerm {
     can_send: bool,
     can_host: bool,
     can_view_locked: bool,
+    content_type: Vec<RbContentType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    send_block: Option<TicketSendBlock>,
 }
 
 impl TicketPerm {
-    pub fn new(can_send: bool, can_host: bool, can_view_locked: bool) -> Self {
+    pub fn new(
+        can_send: bool,
+        can_host: bool,
+        can_view_locked: bool,
+        can_use_trusted_content: bool,
+        send_block: Option<TicketSendBlock>,
+    ) -> Self {
+        let content_type = if can_use_trusted_content {
+            vec![
+                RbContentType::Markdown,
+                RbContentType::Html,
+                RbContentType::UnsafeMarkdown,
+            ]
+        } else {
+            vec![RbContentType::UnsafeMarkdown]
+        };
+
         Self {
             can_send,
             can_host,
             can_view_locked,
+            content_type,
+            send_block,
         }
     }
+}
+
+#[repr(i16)]
+#[derive(Serialize_repr)]
+pub enum TicketSendBlock {
+    NoAccess = 1,
+    Closed = 2,
+    Pending = 3,
 }
 
 #[derive(Serialize)]
 pub struct TicketThread {
     #[serde(skip_serializing_if = "Option::is_none")]
     ticket: Option<TicketSummary>,
-    messages: Vec<TicketMessage>,
+    messages: Vec<TicketThreadItem>,
     perm: TicketPerm,
 }
 
@@ -155,9 +263,52 @@ impl TicketThread {
         self.ticket.as_ref()
     }
 
-    pub fn messages(&self) -> &[TicketMessage] {
+    pub fn messages(&self) -> &[TicketThreadItem] {
         &self.messages
     }
+}
+
+async fn get_pending_count(db_pool: &DbPool, ticket_id: i32) -> Result<i64, RbInternalError> {
+    let pending = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM rb_message m
+        WHERE ticket_id = $1
+        AND sender_type = 0
+        AND NOT EXISTS (
+            SELECT 1
+            FROM rb_message AS reply
+            WHERE reply.ticket_id = m.ticket_id
+                AND reply.sender_type = 1
+                AND reply.id > m.id
+        );",
+        ticket_id
+    )
+    .fetch_one(db_pool)
+    .await?
+    .unwrap_or(0);
+
+    Ok(pending)
+}
+
+async fn calc_send_block(
+    db_pool: &DbPool,
+    ticket_id: i32,
+    state: RbTicketState,
+    can_send: bool,
+    max_pending: Option<i64>,
+) -> Result<Option<TicketSendBlock>, RbInternalError> {
+    if !can_send {
+        return Ok(Some(TicketSendBlock::NoAccess));
+    }
+    if matches!(state, RbTicketState::Closed) {
+        return Ok(Some(TicketSendBlock::Closed));
+    }
+    if let Some(max_pending) = max_pending
+        && get_pending_count(db_pool, ticket_id).await? >= max_pending
+    {
+        return Ok(Some(TicketSendBlock::Pending));
+    }
+
+    Ok(None)
 }
 
 #[derive(Serialize)]
@@ -175,20 +326,59 @@ pub enum TicketOpenBlock {
     Cooldown = 2,
 }
 
+#[allow(clippy::too_many_arguments)]
+fn make_message(
+    id: Option<i32>,
+    sender_id: Option<i32>,
+    sender_nickname: Option<String>,
+    sender_type: Option<i16>,
+    cost_id: Option<i32>,
+    cost_amount: Option<i32>,
+    unlocked: Option<bool>,
+    content: Option<String>,
+    content_type: Option<i16>,
+    ctime_at: Option<OffsetDateTime>,
+    utime_at: Option<OffsetDateTime>,
+) -> Option<TicketMessage> {
+    Some(TicketMessage {
+        r#type: TicketThreadItemType::Message,
+        id: id?,
+        sender: TicketAggreInfoUser {
+            id: sender_id?,
+            nickname: sender_nickname?,
+        },
+        sender_type: RbTicketSenderType::from_primitive(sender_type?),
+        cost_id,
+        cost_amount: cost_amount?,
+        unlocked: unlocked?,
+        content,
+        content_type: content_type.map(RbContentType::from_primitive),
+        ctime_at: ctime_at?,
+        utime_at,
+    })
+}
+
 pub async fn get_ticket_messages(
     db_pool: &DbPool,
     ticket_id: i32,
     can_view_locked: bool,
-) -> Result<Vec<TicketMessage>, RbInternalError> {
+) -> Result<Vec<TicketThreadItem>, RbInternalError> {
+    let mut items: Vec<TicketThreadItem> = Vec::new();
+
     let result = sqlx::query!(
         "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,
                 m.unlocked, m.ctime_at, m.utime_at,
                 u.id AS u_id, u.nickname AS u_nickname,
-                CASE WHEN ($2 OR unlocked) THEN content ELSE NULL END AS content,
-                CASE WHEN ($2 OR unlocked) THEN content_type ELSE NULL END AS content_type
+                CASE WHEN ($2 OR m.unlocked) THEN m.content ELSE NULL END AS content,
+                CASE WHEN ($2 OR m.unlocked) THEN m.content_type ELSE NULL END AS content_type
         FROM rb_message m
         JOIN rb_user u ON u.id = m.sender
         WHERE ticket_id = $1
+        AND NOT EXISTS (
+            SELECT 1
+            FROM rb_ticket_operation o
+            WHERE o.message_id = m.id
+        )
         ORDER BY m.ctime_at DESC",
         ticket_id,
         can_view_locked
@@ -196,25 +386,74 @@ pub async fn get_ticket_messages(
     .fetch_all(db_pool)
     .await?
     .into_iter()
-    .map(|x| TicketMessage {
-        id: x.id,
-        sender: TicketAggreInfoUser {
-            id: x.u_id,
-            nickname: x.u_nickname,
-        },
-        sender_type: RbTicketSenderType::from_primitive(x.sender_type),
-        cost_id: x.cost_id,
-        cost_amount: x.cost_amount,
-        unlocked: x.unlocked,
+    .map(|x| {
+        TicketThreadItem::Message(TicketMessage {
+            r#type: TicketThreadItemType::Message,
+            id: x.id,
+            sender: TicketAggreInfoUser {
+                id: x.u_id,
+                nickname: x.u_nickname,
+            },
+            sender_type: RbTicketSenderType::from_primitive(x.sender_type),
+            cost_id: x.cost_id,
+            cost_amount: x.cost_amount,
+            unlocked: x.unlocked,
 
-        content: x.content,
-        content_type: x.content_type.map(RbContentType::from_primitive),
-        ctime_at: x.ctime_at,
-        utime_at: x.utime_at,
+            content: x.content,
+            content_type: x.content_type.map(RbContentType::from_primitive),
+            ctime_at: x.ctime_at,
+            utime_at: x.utime_at,
+        })
     })
-    .collect();
+    .collect::<Vec<_>>();
 
-    Ok(result)
+    items.extend(result);
+
+    let operations = sqlx::query!(
+        "SELECT o.id, o.action, o.ctime_at, u.id AS u_id, u.nickname AS u_nickname,
+            m.id AS \"m_id?\", m.sender_type AS \"m_st?\",
+            m.cost_id AS \"m_ci?\", m.cost_amount AS \"m_ca?\",
+            m.unlocked AS \"m_ul?\", m.ctime_at AS \"m_c?\", m.utime_at AS \"m_u?\",
+            mu.id AS \"mu_id?\", mu.nickname AS \"mu_n?\",
+            CASE WHEN ($2 OR m.unlocked) THEN m.content ELSE NULL END AS \"m_t?\",
+            CASE WHEN ($2 OR m.unlocked) THEN m.content_type ELSE NULL END AS \"m_ct?\"
+        FROM rb_ticket_operation o
+        JOIN rb_user u ON u.id = o.actor
+        LEFT JOIN rb_message m ON m.id = o.message_id
+        LEFT JOIN rb_user mu ON mu.id = m.sender
+        WHERE o.ticket_id = $1",
+        ticket_id,
+        can_view_locked
+    )
+    .fetch_all(db_pool)
+    .await?
+    .into_iter()
+    .map(|x| {
+        TicketThreadItem::Operation(TicketOperation {
+            r#type: TicketThreadItemType::Operation,
+            id: x.id,
+            action: TicketOperationAction::from(x.action),
+            actor: TicketAggreInfoUser {
+                id: x.u_id,
+                nickname: x.u_nickname,
+            },
+            message: make_message(
+                x.m_id, x.mu_id, x.mu_n, x.m_st, x.m_ci, x.m_ca, x.m_ul, x.m_t, x.m_ct, x.m_c,
+                x.m_u,
+            ),
+            ctime_at: x.ctime_at,
+        })
+    });
+
+    items.extend(operations);
+    items.sort_by(|a, b| {
+        b.ctime_at()
+            .cmp(&a.ctime_at())
+            .then_with(|| b.same_time_rank().cmp(&a.same_time_rank()))
+            .then_with(|| b.id().cmp(&a.id()))
+    });
+
+    Ok(items)
 }
 
 pub async fn get_ticket_message(
@@ -238,6 +477,7 @@ pub async fn get_ticket_message(
     .await?;
 
     Ok(result.map(|x| TicketMessage {
+        r#type: TicketThreadItemType::Message,
         id: x.id,
         sender: TicketAggreInfoUser {
             id: x.u_id,
@@ -258,25 +498,43 @@ pub async fn get_ticket_message(
 pub async fn get_or_create_dm_ticket_id(
     db_pool: &DbPool,
     team_id: i32,
+    actor_id: i32,
 ) -> Result<i32, RbInternalError> {
-    let result = sqlx::query_scalar!(
+    let mut tx = db_pool.begin().await?;
+
+    let result = sqlx::query!(
         "INSERT INTO rb_ticket (state, team_id, puzzle_id)
         VALUES (1, $1, NULL)
         ON CONFLICT (team_id) WHERE puzzle_id IS NULL
         DO UPDATE SET team_id = EXCLUDED.team_id
-        RETURNING id;",
+        RETURNING id, xmax = 0 AS inserted;",
         team_id
     )
-    .fetch_one(db_pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    Ok(result)
+    if result.inserted.unwrap_or(false) {
+        sqlx::query!(
+            "INSERT INTO rb_ticket_operation (ticket_id, action, actor)
+            VALUES ($1, $2, $3)",
+            result.id,
+            i16::from(TicketOperationAction::Open),
+            actor_id
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(result.id)
 }
 
 pub async fn get_dm_ticket_thread(
     db_pool: &DbPool,
     team_id: i32,
     can_view_locked: bool,
+    can_use_trusted_content: bool,
 ) -> Result<TicketThread, RbInternalError> {
     let ticket_id = sqlx::query_scalar!(
         "SELECT id FROM rb_ticket
@@ -290,17 +548,34 @@ pub async fn get_dm_ticket_thread(
         return Ok(TicketThread {
             ticket: None,
             messages: vec![],
-            perm: TicketPerm::new(true, can_view_locked, can_view_locked),
+            perm: TicketPerm::new(
+                true,
+                can_view_locked,
+                can_view_locked,
+                can_use_trusted_content,
+                Some(TicketSendBlock::NoAccess),
+            ),
         });
     };
 
     let ticket = get_ticket_summary(db_pool, ticket_id, false).await?;
     let messages = get_ticket_messages(db_pool, ticket_id, can_view_locked).await?;
+    let state = ticket
+        .as_ref()
+        .map(|x| x.state)
+        .unwrap_or(RbTicketState::Invalid);
+    let send_block = calc_send_block(db_pool, ticket_id, state, true, Some(3)).await?;
 
     Ok(TicketThread {
         ticket,
         messages,
-        perm: TicketPerm::new(true, can_view_locked, can_view_locked),
+        perm: TicketPerm::new(
+            true,
+            can_view_locked,
+            can_view_locked,
+            can_use_trusted_content,
+            send_block,
+        ),
     })
 }
 
@@ -311,8 +586,7 @@ pub async fn get_ticket_summary(
 ) -> Result<Option<TicketSummary>, RbInternalError> {
     let info = sqlx::query!(
         "WITH stats AS (
-            SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at,
-                BOOL_OR(NOT m.unlocked) AS has_locked
+            SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at
             FROM rb_message m
             WHERE m.ticket_id = $1
             GROUP BY m.ticket_id
@@ -327,7 +601,7 @@ pub async fn get_ticket_summary(
                 t.id AS t_id, t.name AS t_name, t.state AS t_state, t.game_id AS g_id,
                 p.id AS \"p_id?\", p.title AS \"p_title?\", tp.state AS \"p_state?\",
                 r.id AS \"r_id?\", r.title AS \"r_title?\",
-                stats.msg_count, stats.last_at, stats.has_locked,
+                stats.msg_count, stats.last_at,
                 last_msg.sender_type AS \"last_by?\"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id
@@ -355,7 +629,6 @@ pub async fn get_ticket_summary(
         msg_count: x.msg_count,
         last_at: x.last_at,
         last_by: x.last_by.map(RbTicketSenderType::from_primitive),
-        has_locked: x.has_locked.unwrap_or(false),
     }))
 }
 
@@ -368,6 +641,14 @@ pub async fn get_ticket_thread(
         return Ok(None);
     };
     let messages = get_ticket_messages(db_pool, ticket_id, info.mod_access).await?;
+    let send_block = calc_send_block(
+        db_pool,
+        ticket_id,
+        ticket.state,
+        info.member_access,
+        Some(1),
+    )
+    .await?;
 
     Ok(Some(TicketThread {
         ticket: Some(ticket),
@@ -376,6 +657,8 @@ pub async fn get_ticket_thread(
             !matches!(info.state, RbTicketState::Closed) && info.member_access,
             info.mod_access,
             info.mod_access,
+            info.admin_access,
+            send_block,
         ),
     }))
 }
@@ -411,6 +694,32 @@ pub struct SendMessageData {
     pub sender_type: RbTicketSenderType,
     pub cost_id: Option<i32>,
     pub cost_amount: i32,
+}
+
+async fn insert_ticket_message(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ticket_id: i32,
+    data: &SendMessageData,
+) -> Result<i32, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "INSERT INTO rb_message
+            (content, content_type, sender, sender_type,
+            cost_id, cost_amount, unlocked, ticket_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id;",
+        data.content,
+        i16::from(data.content_type),
+        data.sender_id,
+        i16::from(data.sender_type),
+        data.cost_id,
+        data.cost_amount,
+        data.cost_id.is_none(),
+        ticket_id
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(result)
 }
 
 pub async fn send_ticket_message(
@@ -451,27 +760,54 @@ pub async fn send_ticket_message(
         }
     }
 
-    let result = sqlx::query_scalar!(
-        "INSERT INTO rb_message
-            (content, content_type, sender, sender_type,
-            cost_id, cost_amount, unlocked, ticket_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id;",
-        data.content,
-        i16::from(data.content_type),
-        data.sender_id,
-        i16::from(data.sender_type),
-        data.cost_id,
-        data.cost_amount,
-        data.cost_id.is_none(),
-        ticket_id
-    )
-    .fetch_one(&mut *tx)
-    .await?;
+    let result = insert_ticket_message(&mut tx, ticket_id, data).await?;
 
     tx.commit().await?;
 
     get_ticket_message(db_pool, result, true).await
+}
+
+pub async fn close_ticket(
+    db_pool: &DbPool,
+    ticket_id: i32,
+    actor_id: i32,
+    message: Option<&SendMessageData>,
+) -> Result<bool, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+
+    let updated = sqlx::query_scalar!(
+        "UPDATE rb_ticket SET state = $1
+        WHERE id = $2 AND state <> $1
+        RETURNING id;",
+        i16::from(RbTicketState::Closed),
+        ticket_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
+
+    if updated {
+        let message_id = if let Some(message) = message {
+            Some(insert_ticket_message(&mut tx, ticket_id, message).await?)
+        } else {
+            None
+        };
+
+        sqlx::query!(
+            "INSERT INTO rb_ticket_operation (ticket_id, action, actor, message_id)
+            VALUES ($1, $2, $3, $4)",
+            ticket_id,
+            i16::from(TicketOperationAction::Close),
+            actor_id,
+            message_id
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(updated)
 }
 
 pub enum OpenPuzzleTicketResult {
@@ -535,22 +871,17 @@ pub async fn open_puzzle_ticket(
     .fetch_one(&mut *tx)
     .await?;
 
-    let message_id = sqlx::query_scalar!(
-        "INSERT INTO rb_message
-            (content, content_type, sender, sender_type,
-            cost_id, cost_amount, unlocked, ticket_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id;",
-        message.content,
-        i16::from(message.content_type),
+    let message_id = insert_ticket_message(&mut tx, ticket_id, message).await?;
+
+    sqlx::query!(
+        "INSERT INTO rb_ticket_operation (ticket_id, action, actor, message_id)
+        VALUES ($1, $2, $3, $4)",
+        ticket_id,
+        i16::from(TicketOperationAction::Open),
         message.sender_id,
-        i16::from(message.sender_type),
-        message.cost_id,
-        message.cost_amount,
-        message.cost_id.is_none(),
-        ticket_id
+        message_id
     )
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
@@ -561,12 +892,18 @@ pub async fn open_puzzle_ticket(
         puzzle_id: Some(puzzle_id),
         member_access: true,
         mod_access: false,
+        admin_access: false,
     };
     let thread = get_ticket_thread(db_pool, ticket_id, &info)
         .await?
         .ok_or("Opened ticket not found")?;
 
-    debug_assert!(thread.messages.iter().any(|msg| msg.id == message_id));
+    debug_assert!(
+        thread
+            .messages
+            .iter()
+            .any(|item| item.message_id() == Some(message_id))
+    );
 
     Ok(OpenPuzzleTicketResult::Ok(thread))
 }
@@ -578,8 +915,7 @@ pub async fn get_team_puzzle_tickets(
 ) -> Result<TicketPuzzleList, RbInternalError> {
     let info = sqlx::query!(
         "WITH stats AS (
-            SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at,
-                BOOL_OR(NOT m.unlocked) AS has_locked
+            SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at
             FROM rb_message m
             GROUP BY m.ticket_id
         ),
@@ -588,7 +924,7 @@ pub async fn get_team_puzzle_tickets(
             FROM rb_message m
             ORDER BY m.ticket_id, m.ctime_at DESC, m.id DESC
         )
-        SELECT tk.id, tk.state, stats.msg_count, stats.last_at, stats.has_locked,
+        SELECT tk.id, tk.state, stats.msg_count, stats.last_at,
             last_msg.sender_type AS \"last_by?\"
         FROM rb_ticket tk
         LEFT JOIN stats ON stats.ticket_id = tk.id
@@ -601,9 +937,17 @@ pub async fn get_team_puzzle_tickets(
     .fetch_all(db_pool)
     .await?;
 
-    let has_open = info
-        .iter()
-        .any(|x| x.state == i16::from(RbTicketState::Open));
+    let has_open = sqlx::query_scalar!(
+        "SELECT EXISTS (
+            SELECT 1 FROM rb_ticket
+            WHERE state = 1 AND team_id = $1 AND puzzle_id IS NOT NULL
+        );",
+        team_id
+    )
+    .fetch_one(db_pool)
+    .await?
+    .unwrap_or(false);
+
     let cooldown_ready = sqlx::query_scalar!(
         "SELECT EXISTS (
             SELECT 1 FROM rb_puzzle p
@@ -637,7 +981,6 @@ pub async fn get_team_puzzle_tickets(
             msg_count: x.msg_count,
             last_at: x.last_at,
             last_by: x.last_by.map(RbTicketSenderType::from_primitive),
-            has_locked: x.has_locked.unwrap_or(false),
         })
         .collect();
 

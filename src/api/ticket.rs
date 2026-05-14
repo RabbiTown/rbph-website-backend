@@ -60,6 +60,7 @@ async fn get_dm_ticket(user: AuthUser, app: web::Data<AppState>) -> Result<HttpR
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
         user.req_role()?.is_moderator(),
+        user.req_role()?.is_admin(),
     )
     .await?;
 
@@ -185,6 +186,7 @@ async fn send_dm_ticket_message(
     let ticket_id = db::ticket::get_or_create_dm_ticket_id(
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
+        user.uid,
     )
     .await?;
 
@@ -193,6 +195,84 @@ async fn send_dm_ticket_message(
         .ok_or(RbError::internal("Invalid ticket id"))?;
 
     do_send_ticket_message(req.into_inner(), &info, &user, &app, Some(3)).await
+}
+
+// -- close --
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+pub enum TicketCloseResult {
+    Closed = -1,
+    Ok = 0,
+}
+
+#[derive(Serialize)]
+struct TicketCloseResponse {
+    code: TicketCloseResult,
+    ticket: Option<TicketSummary>,
+    thread: TicketThread,
+}
+
+async fn close_ticket(
+    path: web::Path<TicketPathInfo>,
+    req: Option<web::Json<TicketSendRequest>>,
+    info: TicketUserInfo,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !info.mod_access {
+        RbError::forbid().err()?
+    }
+
+    let message = req
+        .map(web::Json::into_inner)
+        .filter(|req| !req.content.is_empty());
+
+    if let Some(message) = message.as_ref() {
+        if !matches!(message.sender_type, RbTicketSenderType::Host) {
+            RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
+        }
+        if !user.req_role()?.is_admin() {
+            if message.content_type.is_trusted() {
+                RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
+            }
+            if message.content.len() > 1000 {
+                RbError::unprocessable(TicketSendResult::ContentTooLong.into()).err()?
+            }
+        }
+        if message.cost_id.is_some() {
+            RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
+        }
+    }
+
+    let message = message.map(|message| SendMessageData {
+        content: message.content,
+        content_type: message.content_type,
+        sender_type: RbTicketSenderType::Host,
+        sender_id: user.uid,
+        cost_id: None,
+        cost_amount: 0,
+    });
+
+    let updated =
+        db::ticket::close_ticket(&app.db, path.ticket_id, user.uid, message.as_ref()).await?;
+    if !updated {
+        RbError::conflict(TicketCloseResult::Closed.into()).err()?
+    }
+
+    let ticket = db::ticket::get_ticket_summary(&app.db, path.ticket_id, info.mod_access).await?;
+    let refreshed_info = db::ticket::get_ticket_user_info(&app.db, path.ticket_id, user.uid)
+        .await?
+        .ok_or(RbError::internal("Invalid ticket id"))?;
+    let thread = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &refreshed_info)
+        .await?
+        .ok_or(RbError::internal("Closed ticket not found"))?;
+
+    Ok(HttpResponse::Ok().json(TicketCloseResponse {
+        code: TicketCloseResult::Ok,
+        ticket,
+        thread,
+    }))
 }
 
 // -- open --
@@ -263,13 +343,14 @@ async fn open_ticket(
                 .ok_or_else(|| RbError::internal("Opened ticket not found"))?;
             let msg = thread
                 .messages()
-                .first()
+                .iter()
+                .find_map(|item| item.message_id())
                 .ok_or_else(|| RbError::internal("Opened ticket message not found"))?;
 
             Ok(HttpResponse::Ok().json(TicketOpenResponse {
                 code: TicketOpenResult::Ok,
                 ticket_id: ticket.id(),
-                message_id: msg.id(),
+                message_id: msg,
                 thread,
             }))
         }
@@ -342,6 +423,7 @@ pub fn tickets_config(cfg: &mut web::ServiceConfig) {
             .wrap(middleware::from_fn(check_ticket_middleware))
             .route("", web::get().to(get_ticket))
             .route("/send", web::post().to(send_ticket_message))
+            .route("/close", web::post().to(close_ticket))
             .default_service(web::route().to(error_handler)),
     );
 }

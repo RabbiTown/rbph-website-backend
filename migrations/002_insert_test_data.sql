@@ -65,7 +65,13 @@ SELECT setval('rb_hint_id_seq', 100);
 
 -- test@rabbi.town : 12345678
 INSERT INTO rb_user (id, email, pass, urole, nickname)
-VALUES (1, 'test@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 1, 'user_1');
+VALUES (1, 'test@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 1, 'test');
+
+INSERT INTO rb_user (id, email, pass, urole, nickname)
+VALUES (2, 'mod@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 2, 'mod');
+
+INSERT INTO rb_user (id, email, pass, urole, nickname)
+VALUES (3, 'admin@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 3, 'admin');
 
 SELECT setval('rb_user_id_seq', 100);
 

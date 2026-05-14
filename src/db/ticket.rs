@@ -4,7 +4,7 @@ use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool,
+    AppState, DbPool,
     db::round::RbRoundSimpleData,
     error::RbInternalError,
     model::{
@@ -808,6 +808,96 @@ pub async fn close_ticket(
     tx.commit().await?;
 
     Ok(updated)
+}
+
+pub enum PurchaseTicketMessageResult {
+    Insufficient,
+    Unavailable,
+    Ok(TicketMessage),
+}
+
+pub async fn purchase_ticket_message(
+    app: &AppState,
+    user_id: i32,
+    ticket_id: i32,
+    message_id: i32,
+) -> Result<PurchaseTicketMessageResult, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+
+    let info = sqlx::query!(
+        "SELECT t.team_id, m.cost_id, m.cost_amount
+        FROM rb_message m
+        JOIN rb_ticket t ON t.id = m.ticket_id
+        JOIN rb_team_member tm ON tm.team_id = t.team_id AND tm.user_id = $1
+        WHERE m.id = $2 AND t.id = $3
+            AND m.sender_type = $4
+            AND NOT m.unlocked
+        FOR UPDATE OF m;",
+        user_id,
+        message_id,
+        ticket_id,
+        i16::from(RbTicketSenderType::Host)
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(info) = info else {
+        return Ok(PurchaseTicketMessageResult::Unavailable);
+    };
+
+    if info.cost_id.is_some() {
+        let result = sqlx::query!(
+            "UPDATE rb_team_currency tc
+            SET utime_at = NOW(), amount = LEAST(
+                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                c.max_amount
+            ) - $3
+            FROM rb_currency c
+            WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
+                AND c.game_id = (
+                    SELECT tm.game_id
+                    FROM rb_team_member tm
+                    WHERE tm.team_id = $1 AND tm.user_id = $4
+                )
+                AND ($3 <= 0 OR LEAST(
+                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                    c.max_amount
+                ) >= $3);",
+            info.team_id,
+            info.cost_id,
+            info.cost_amount,
+            user_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(PurchaseTicketMessageResult::Insufficient);
+        }
+    }
+
+    let updated = sqlx::query_scalar!(
+        "UPDATE rb_message
+        SET unlocked = TRUE, utime_at = NOW()
+        WHERE id = $1 AND ticket_id = $2 AND NOT unlocked
+        RETURNING id;",
+        message_id,
+        ticket_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if updated.is_none() {
+        return Ok(PurchaseTicketMessageResult::Unavailable);
+    }
+
+    tx.commit().await?;
+
+    let message = get_ticket_message(&app.db, message_id, true)
+        .await?
+        .ok_or("Unlocked ticket message not found")?;
+
+    Ok(PurchaseTicketMessageResult::Ok(message))
 }
 
 pub enum OpenPuzzleTicketResult {

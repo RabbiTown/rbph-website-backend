@@ -28,6 +28,12 @@ struct TicketPathInfo {
     ticket_id: i32,
 }
 
+#[derive(Deserialize)]
+struct TicketMessagePathInfo {
+    ticket_id: i32,
+    message_id: i32,
+}
+
 impl FromRequest for TicketUserInfo {
     type Error = Error;
     type Future = Ready<Result<Self, Error>>;
@@ -275,6 +281,41 @@ async fn close_ticket(
     }))
 }
 
+// -- purchase message --
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+pub enum TicketMessagePurchaseResult {
+    Insufficient = -2,
+    Unavailable = -1,
+    Ok = 0,
+}
+
+async fn purchase_ticket_message(
+    path: web::Path<TicketMessagePathInfo>,
+    info: TicketUserInfo,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !info.member_access {
+        RbError::forbid().err()?
+    }
+
+    let purchase_result =
+        db::ticket::purchase_ticket_message(&app, user.uid, path.ticket_id, path.message_id)
+            .await?;
+
+    match purchase_result {
+        db::ticket::PurchaseTicketMessageResult::Unavailable => {
+            RbError::conflict(TicketMessagePurchaseResult::Unavailable.into()).http_err()
+        }
+        db::ticket::PurchaseTicketMessageResult::Insufficient => {
+            RbError::conflict(TicketMessagePurchaseResult::Insufficient.into()).http_err()
+        }
+        db::ticket::PurchaseTicketMessageResult::Ok(message) => Ok(HttpResponse::Ok().json(message)),
+    }
+}
+
 // -- open --
 
 #[repr(i32)]
@@ -424,6 +465,10 @@ pub fn tickets_config(cfg: &mut web::ServiceConfig) {
             .route("", web::get().to(get_ticket))
             .route("/send", web::post().to(send_ticket_message))
             .route("/close", web::post().to(close_ticket))
+            .route(
+                "/messages/{message_id}/purchase",
+                web::post().to(purchase_ticket_message),
+            )
             .default_service(web::route().to(error_handler)),
     );
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.team_id, m.cost_id, m.cost_amount\n        FROM rb_message m\n        JOIN rb_ticket t ON t.id = m.ticket_id\n        JOIN rb_team_member tm ON tm.team_id = t.team_id AND tm.user_id = $1\n        WHERE m.id = $2 AND t.id = $3\n            AND m.sender_type = $4\n            AND NOT m.unlocked\n        FOR UPDATE OF m;",
+  "query": "SELECT t.team_id, m.cost_id, m.cost_amount\n        FROM rb_message m\n        JOIN rb_ticket t ON t.id = m.ticket_id\n        WHERE m.id = $1 AND t.id = $2\n            AND NOT m.unlocked\n        FOR UPDATE OF m;",
   "describe": {
     "columns": [
       {
@@ -22,9 +22,7 @@
     "parameters": {
       "Left": [
         "Int4",
-        "Int4",
-        "Int4",
-        "Int2"
+        "Int4"
       ]
     },
     "nullable": [
@@ -33,5 +31,5 @@
       false
     ]
   },
-  "hash": "2b7618a7c093f16b35ac6aa53af2ee61dcad49f58d19622c4da23fd0ae639175"
+  "hash": "643a651142431bf401096d7f1d86baacecc238ec839846a2df7c17d1182aa1b7"
 }

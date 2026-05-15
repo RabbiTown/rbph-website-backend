@@ -170,7 +170,7 @@ async fn do_send_ticket_message(
         RbError::conflict(TicketSendResult::PendingExists.into()).err()?
     }
     let msg = msg.unwrap();
-    let ticket = db::ticket::get_ticket_summary(&app.db, info.ticket_id, info.mod_access).await?;
+    let ticket = db::ticket::get_ticket_summary(&app.db, info.ticket_id, true).await?;
     let send_block = db::ticket::calc_send_block(
         &app.db,
         info.ticket_id,
@@ -179,8 +179,14 @@ async fn do_send_ticket_message(
         max_pending,
     )
     .await?;
-    let currency =
-        db::ticket::get_ticket_perm_currency(&app.db, info.ticket_id, info.mod_access).await?;
+    let currency = if info.mod_access {
+        ticket
+            .as_ref()
+            .map(TicketSummary::currency_ids)
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
     let perm = db::ticket::TicketPerm::new(
         info.mod_access,
         info.mod_access,
@@ -295,7 +301,7 @@ async fn close_ticket(
         RbError::conflict(TicketCloseResult::Closed.into()).err()?
     }
 
-    let ticket = db::ticket::get_ticket_summary(&app.db, path.ticket_id, info.mod_access).await?;
+    let ticket = db::ticket::get_ticket_summary(&app.db, path.ticket_id, true).await?;
     let refreshed_info = db::ticket::get_ticket_user_info(&app.db, path.ticket_id, user.uid)
         .await?
         .ok_or(RbError::internal("Invalid ticket id"))?;

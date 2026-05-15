@@ -408,7 +408,7 @@ pub async fn get_by_id_show(
 
 #[derive(Serialize)]
 pub struct RbCurrencyShowData {
-    id: i32,
+    pub id: i32,
     name: String,
     growth: i32,
     prec: i32,

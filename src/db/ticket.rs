@@ -4,10 +4,13 @@ use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
 
 use crate::{
-    AppState, DbPool, db::round::RbRoundSimpleData, error::RbInternalError, model::{
+    AppState, DbPool,
+    db::{round::RbRoundSimpleData, team::RbCurrencyShowData},
+    error::RbInternalError,
+    model::{
         game::{RbContentType, RbTeamPuzzleState, RbTeamState, RbTicketSenderType, RbTicketState},
         user::RbUserRole,
-    }
+    },
 };
 
 #[derive(Clone)]
@@ -57,6 +60,8 @@ pub struct TicketAggreInfoTeam {
     id: i32,
     name: String,
     state: RbTeamState,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    currency: Vec<RbCurrencyShowData>,
 }
 
 #[derive(Serialize)]
@@ -202,6 +207,13 @@ impl TicketSummary {
     pub fn id(&self) -> i32 {
         self.id
     }
+
+    pub fn currency_ids(&self) -> Vec<i32> {
+        self.team
+            .as_ref()
+            .map(|team| team.currency.iter().map(|currency| currency.id).collect())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -210,7 +222,7 @@ pub struct TicketPerm {
     can_host: bool,
     can_view_locked: bool,
     content_type: Vec<RbContentType>,
-    currency: Vec<TicketPermCurrency>,
+    currency: Vec<i32>,
 }
 
 impl TicketPerm {
@@ -218,7 +230,7 @@ impl TicketPerm {
         can_host: bool,
         can_view_locked: bool,
         can_use_trusted_content: bool,
-        currency: Vec<TicketPermCurrency>,
+        currency: Vec<i32>,
         send_block: TicketSendBlock,
     ) -> Self {
         let content_type = if can_use_trusted_content {
@@ -239,18 +251,6 @@ impl TicketPerm {
             currency,
         }
     }
-}
-
-#[derive(Clone, Serialize)]
-pub struct TicketPermCurrency {
-    id: i32,
-    name: String,
-    growth: i32,
-    prec: i32,
-    amount: i32,
-    max_amount: i32,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    utime_at: OffsetDateTime,
 }
 
 #[repr(i16)]
@@ -325,30 +325,6 @@ pub async fn calc_send_block(
     }
 
     Ok(TicketSendBlock::Ok)
-}
-
-pub async fn get_ticket_perm_currency(
-    db_pool: &DbPool,
-    ticket_id: i32,
-    can_host: bool,
-) -> Result<Vec<TicketPermCurrency>, RbInternalError> {
-    if !can_host {
-        return Ok(vec![]);
-    }
-
-    Ok(sqlx::query_as!(
-        TicketPermCurrency,
-        "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
-            c.prec, tc.amount, c.max_amount, tc.utime_at
-        FROM rb_currency c
-        JOIN rb_team_currency tc ON tc.currency_id = c.id
-        JOIN rb_ticket t ON t.team_id = tc.team_id
-        WHERE t.id = $1
-        ORDER BY c.id;",
-        ticket_id
-    )
-    .fetch_all(db_pool)
-    .await?)
 }
 
 #[derive(Serialize)]
@@ -672,7 +648,16 @@ pub async fn get_ticket_summary(
     .fetch_optional(db_pool)
     .await?;
 
-    Ok(info.map(|x| TicketSummary {
+    let Some(x) = info else {
+        return Ok(None);
+    };
+    let currency = if include_team {
+        crate::db::team::get_currency_info(db_pool, x.t_id).await?
+    } else {
+        vec![]
+    };
+
+    Ok(Some(TicketSummary {
         id: ticket_id,
         state: RbTicketState::from_primitive(x.state),
         game_id: Some(x.g_id),
@@ -680,6 +665,7 @@ pub async fn get_ticket_summary(
             id: x.t_id,
             name: x.t_name,
             state: RbTeamState::from_primitive(x.t_state),
+            currency,
         }),
         puzzle: make_puzzle(x.p_id, x.p_title, x.p_state, x.r_id, x.r_title),
         msg_count: x.msg_count,
@@ -693,7 +679,7 @@ pub async fn get_ticket_thread(
     ticket_id: i32,
     info: &TicketUserInfo,
 ) -> Result<Option<TicketThread>, RbInternalError> {
-    let Some(ticket) = get_ticket_summary(db_pool, ticket_id, info.mod_access).await? else {
+    let Some(ticket) = get_ticket_summary(db_pool, ticket_id, true).await? else {
         return Ok(None);
     };
     let messages = get_ticket_messages(db_pool, ticket_id, info.mod_access).await?;
@@ -705,7 +691,11 @@ pub async fn get_ticket_thread(
         Some(1),
     )
     .await?;
-    let currency = get_ticket_perm_currency(db_pool, ticket_id, info.mod_access).await?;
+    let currency = if info.mod_access {
+        ticket.currency_ids()
+    } else {
+        vec![]
+    };
 
     Ok(Some(TicketThread {
         ticket: Some(ticket),
@@ -1078,13 +1068,6 @@ pub async fn open_puzzle_ticket(
     let thread = get_ticket_thread(db_pool, ticket_id, &info)
         .await?
         .ok_or("Opened ticket not found")?;
-
-    debug_assert!(
-        thread
-            .messages
-            .iter()
-            .any(|item| item.message_id() == Some(message_id))
-    );
 
     Ok(OpenPuzzleTicketResult::Ok(Box::new(thread)))
 }

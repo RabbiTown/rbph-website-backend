@@ -4,13 +4,10 @@ use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
 
 use crate::{
-    AppState, DbPool,
-    db::round::RbRoundSimpleData,
-    error::RbInternalError,
-    model::{
+    AppState, DbPool, db::round::RbRoundSimpleData, error::RbInternalError, model::{
         game::{RbContentType, RbTeamPuzzleState, RbTeamState, RbTicketSenderType, RbTicketState},
         user::RbUserRole,
-    },
+    }
 };
 
 #[derive(Clone)]
@@ -914,7 +911,7 @@ pub enum PurchaseTicketMessageResult {
 
 pub async fn purchase_ticket_message(
     app: &AppState,
-    user: &crate::extractor::auth::AuthUser,
+    needs_pay: bool,
     user_id: i32,
     ticket_id: i32,
     message_id: i32,
@@ -925,15 +922,11 @@ pub async fn purchase_ticket_message(
         "SELECT t.team_id, m.cost_id, m.cost_amount
         FROM rb_message m
         JOIN rb_ticket t ON t.id = m.ticket_id
-        JOIN rb_team_member tm ON tm.team_id = t.team_id AND tm.user_id = $1
-        WHERE m.id = $2 AND t.id = $3
-            AND m.sender_type = $4
+        WHERE m.id = $1 AND t.id = $2
             AND NOT m.unlocked
         FOR UPDATE OF m;",
-        user_id,
         message_id,
-        ticket_id,
-        i16::from(RbTicketSenderType::Host)
+        ticket_id
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -942,7 +935,7 @@ pub async fn purchase_ticket_message(
         return Ok(PurchaseTicketMessageResult::Unavailable);
     };
 
-    if info.cost_id.is_some() && !user.req_role()?.is_moderator() {
+    if info.cost_id.is_some() && needs_pay {
         let result = sqlx::query!(
             "UPDATE rb_team_currency tc
             SET utime_at = NOW(), amount = LEAST(

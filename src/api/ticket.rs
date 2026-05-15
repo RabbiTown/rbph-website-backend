@@ -10,6 +10,7 @@ use actix_web::{
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
+use validator::Validate;
 
 use crate::{
     AppState,
@@ -83,8 +84,9 @@ fn def_sender_type() -> RbTicketSenderType {
     RbTicketSenderType::Team
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Validate)]
 struct TicketSendRequest {
+    #[validate(length(min = 1, max = 1000))]
     content: String,
     #[serde(default = "def_content_type")]
     content_type: RbContentType,
@@ -99,6 +101,7 @@ struct TicketSendRequest {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TicketSendResult {
+    Invalid = -6,
     BadCost = -5,
     ContentTooLong = -4,
     BadContentType = -3,
@@ -132,13 +135,12 @@ async fn do_send_ticket_message(
         RbError::forbid().err()?
     }
 
+    req.validate()
+        .map_err(|e| RbError::bad_req(TicketSendResult::Invalid.into()).msg(e.to_string()))?;
+
     if !user.req_role()?.is_admin() {
         if req.content_type.is_trusted() {
             RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
-        }
-        // TODO: make limit configurable
-        if req.content.len() > 1000 {
-            RbError::unprocessable(TicketSendResult::ContentTooLong.into()).err()?
         }
         if matches!(info.state, RbTicketState::Closed)
             && matches!(req.sender_type, RbTicketSenderType::Team)
@@ -257,16 +259,15 @@ async fn close_ticket(
         .filter(|req| !req.content.is_empty());
 
     if let Some(message) = message.as_ref() {
+        message
+            .validate()
+            .map_err(|e| RbError::bad_req(TicketSendResult::Invalid.into()).msg(e.to_string()))?;
+
         if !matches!(message.sender_type, RbTicketSenderType::Host) {
             RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
         }
-        if !user.req_role()?.is_admin() {
-            if message.content_type.is_trusted() {
-                RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
-            }
-            if message.content.len() > 1000 {
-                RbError::unprocessable(TicketSendResult::ContentTooLong.into()).err()?
-            }
+        if !user.req_role()?.is_admin() && message.content_type.is_trusted() {
+            RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
         }
         if message.cost_id.is_some() {
             RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
@@ -331,9 +332,14 @@ async fn purchase_ticket_message(
         RbError::forbid().err()?
     }
 
-    let purchase_result =
-        db::ticket::purchase_ticket_message(&app, &user, user.uid, path.ticket_id, path.message_id)
-            .await?;
+    let purchase_result = db::ticket::purchase_ticket_message(
+        &app,
+        !info.mod_access,
+        user.uid,
+        path.ticket_id,
+        path.message_id,
+    )
+    .await?;
 
     match purchase_result {
         db::ticket::PurchaseTicketMessageResult::Unavailable => {
@@ -377,18 +383,15 @@ async fn open_ticket(
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
 
+    req.validate()
+        .map_err(|e| RbError::bad_req(TicketSendResult::Invalid.into()).msg(e.to_string()))?;
+
     if !matches!(req.sender_type, RbTicketSenderType::Team) || req.cost_id.is_some() {
         RbError::unprocessable(TicketOpenResult::Invalid.into()).err()?
     }
 
-    if !user.req_role()?.is_admin() {
-        if req.content_type.is_trusted() {
-            RbError::unprocessable(TicketOpenResult::BadContentType.into()).err()?
-        }
-        // TODO: make limit configurable
-        if req.content.len() > 1000 {
-            RbError::unprocessable(TicketOpenResult::ContentTooLong.into()).err()?
-        }
+    if !user.req_role()?.is_admin() && req.content_type.is_trusted() {
+        RbError::unprocessable(TicketOpenResult::BadContentType.into()).err()?
     }
 
     let req = req.into_inner();

@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, title, cover, is_shown, is_online,\n            reg_open_at, pre_open_at, start_at, end_at, ctime_at\n        FROM rb_game WHERE id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_shown",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_online",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "reg_open_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "pre_open_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "start_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "end_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "32a97ba56192f62b935478ebe5025dee6216412a32e00f0cdbb198024ce7c0d7"
+}

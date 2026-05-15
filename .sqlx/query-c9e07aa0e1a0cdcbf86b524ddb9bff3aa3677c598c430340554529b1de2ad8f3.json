@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type, message_id)\n            VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int2",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c9e07aa0e1a0cdcbf86b524ddb9bff3aa3677c598c430340554529b1de2ad8f3"
+}

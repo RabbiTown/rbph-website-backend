@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,\n                m.unlocked, m.ctime_at, m.utime_at,\n                u.id AS u_id, u.nickname AS u_nickname,\n                CASE WHEN ($2 OR unlocked) THEN content ELSE NULL END AS content,\n                CASE WHEN ($2 OR unlocked) THEN content_type ELSE NULL END AS content_type\n        FROM rb_message m\n        JOIN rb_user u ON u.id = m.sender\n        WHERE ticket_id = $1\n        ORDER BY m.ctime_at DESC",
+  "query": "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,\n                m.unlocked, m.ctime_at, m.utime_at,\n                u.id AS u_id, u.nickname AS u_nickname,\n                CASE WHEN ($2 OR m.unlocked) THEN m.content ELSE NULL END AS content,\n                CASE WHEN ($2 OR m.unlocked) THEN m.content_type ELSE NULL END AS content_type\n        FROM rb_message m\n        JOIN rb_user u ON u.id = m.sender\n        WHERE ticket_id = $1\n        AND NOT EXISTS (\n            SELECT 1\n            FROM rb_ticket_operation o\n            WHERE o.message_id = m.id\n        )\n        ORDER BY m.ctime_at ASC",
   "describe": {
     "columns": [
       {
@@ -85,5 +85,5 @@
       null
     ]
   },
-  "hash": "6358dc1b4dd86a5a4689e3394bee766b0705a8dc03fdaf3f9aceb673508ddcd8"
+  "hash": "de360c09f44a0e782a84b3aaa0a7fff9b9a66532e26a132c533067137fa89d32"
 }

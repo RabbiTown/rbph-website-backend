@@ -135,6 +135,7 @@ pub struct TicketOperation {
     id: i32,
     action: TicketOperationAction,
     actor: TicketAggreInfoUser,
+    actor_type: RbTicketSenderType,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<TicketMessage>,
 
@@ -206,12 +207,13 @@ impl TicketSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct TicketPerm {
     send_block: TicketSendBlock,
     can_host: bool,
     can_view_locked: bool,
     content_type: Vec<RbContentType>,
+    currency: Vec<TicketPermCurrency>,
 }
 
 impl TicketPerm {
@@ -219,6 +221,7 @@ impl TicketPerm {
         can_host: bool,
         can_view_locked: bool,
         can_use_trusted_content: bool,
+        currency: Vec<TicketPermCurrency>,
         send_block: TicketSendBlock,
     ) -> Self {
         let content_type = if can_use_trusted_content {
@@ -236,12 +239,25 @@ impl TicketPerm {
             can_host,
             can_view_locked,
             content_type,
+            currency,
         }
     }
 }
 
+#[derive(Clone, Serialize)]
+pub struct TicketPermCurrency {
+    id: i32,
+    name: String,
+    growth: i32,
+    prec: i32,
+    amount: i32,
+    max_amount: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    utime_at: OffsetDateTime,
+}
+
 #[repr(i16)]
-#[derive(Serialize_repr)]
+#[derive(Clone, Serialize_repr)]
 pub enum TicketSendBlock {
     Ok = 0,
     NoAccess = -1,
@@ -264,6 +280,10 @@ impl TicketThread {
 
     pub fn messages(&self) -> &[TicketThreadItem] {
         &self.messages
+    }
+
+    pub fn perm(&self) -> &TicketPerm {
+        &self.perm
     }
 }
 
@@ -288,7 +308,7 @@ async fn get_pending_count(db_pool: &DbPool, ticket_id: i32) -> Result<i64, RbIn
     Ok(pending)
 }
 
-async fn calc_send_block(
+pub async fn calc_send_block(
     db_pool: &DbPool,
     ticket_id: i32,
     state: RbTicketState,
@@ -310,19 +330,57 @@ async fn calc_send_block(
     Ok(TicketSendBlock::Ok)
 }
 
+pub async fn get_ticket_perm_currency(
+    db_pool: &DbPool,
+    ticket_id: i32,
+    can_host: bool,
+) -> Result<Vec<TicketPermCurrency>, RbInternalError> {
+    if !can_host {
+        return Ok(vec![]);
+    }
+
+    Ok(sqlx::query_as!(
+        TicketPermCurrency,
+        "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+            c.prec, tc.amount, c.max_amount, tc.utime_at
+        FROM rb_currency c
+        JOIN rb_team_currency tc ON tc.currency_id = c.id
+        JOIN rb_ticket t ON t.team_id = tc.team_id
+        WHERE t.id = $1
+        ORDER BY c.id;",
+        ticket_id
+    )
+    .fetch_all(db_pool)
+    .await?)
+}
+
 #[derive(Serialize)]
 pub struct TicketPuzzleList {
-    can_open: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    block: Option<TicketOpenBlock>,
+    open_block: TicketOpenBlock,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "crate::serde_helpers::serialize_option_offset_datetime"
+    )]
+    cooldown_till: Option<OffsetDateTime>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    open_tickets: Vec<TicketOpenInfo>,
     tickets: Vec<TicketSummary>,
 }
 
 #[repr(i16)]
-#[derive(Serialize_repr)]
+#[derive(Clone, Copy, Serialize_repr)]
 pub enum TicketOpenBlock {
-    Pending = 1,
-    Cooldown = 2,
+    Ok = 0,
+    CurrentPuzzlePending = -1,
+    PendingLimit = -2,
+    Cooldown = -3,
+}
+
+#[derive(Serialize)]
+pub struct TicketOpenInfo {
+    id: i32,
+    puzzle_id: i32,
+    puzzle_title: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -378,7 +436,7 @@ pub async fn get_ticket_messages(
             FROM rb_ticket_operation o
             WHERE o.message_id = m.id
         )
-        ORDER BY m.ctime_at DESC",
+        ORDER BY m.ctime_at ASC",
         ticket_id,
         can_view_locked
     )
@@ -409,7 +467,7 @@ pub async fn get_ticket_messages(
     items.extend(result);
 
     let operations = sqlx::query!(
-        "SELECT o.id, o.action, o.ctime_at, u.id AS u_id, u.nickname AS u_nickname,
+        "SELECT o.id, o.action, o.actor_type, o.ctime_at, u.id AS u_id, u.nickname AS u_nickname,
             m.id AS \"m_id?\", m.sender_type AS \"m_st?\",
             m.cost_id AS \"m_ci?\", m.cost_amount AS \"m_ca?\",
             m.unlocked AS \"m_ul?\", m.ctime_at AS \"m_c?\", m.utime_at AS \"m_u?\",
@@ -436,6 +494,7 @@ pub async fn get_ticket_messages(
                 id: x.u_id,
                 nickname: x.u_nickname,
             },
+            actor_type: RbTicketSenderType::from_primitive(x.actor_type),
             message: make_message(
                 x.m_id, x.mu_id, x.mu_n, x.m_st, x.m_ci, x.m_ca, x.m_ul, x.m_t, x.m_ct, x.m_c,
                 x.m_u,
@@ -446,10 +505,10 @@ pub async fn get_ticket_messages(
 
     items.extend(operations);
     items.sort_by(|a, b| {
-        b.ctime_at()
-            .cmp(&a.ctime_at())
-            .then_with(|| b.same_time_rank().cmp(&a.same_time_rank()))
-            .then_with(|| b.id().cmp(&a.id()))
+        a.ctime_at()
+            .cmp(&b.ctime_at())
+            .then_with(|| a.same_time_rank().cmp(&b.same_time_rank()))
+            .then_with(|| a.id().cmp(&b.id()))
     });
 
     Ok(items)
@@ -514,11 +573,12 @@ pub async fn get_or_create_dm_ticket_id(
 
     if result.inserted.unwrap_or(false) {
         sqlx::query!(
-            "INSERT INTO rb_ticket_operation (ticket_id, action, actor)
-            VALUES ($1, $2, $3)",
+            "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type)
+            VALUES ($1, $2, $3, $4)",
             result.id,
             i16::from(TicketOperationAction::Open),
-            actor_id
+            actor_id,
+            i16::from(RbTicketSenderType::Team)
         )
         .execute(&mut *tx)
         .await?;
@@ -551,6 +611,7 @@ pub async fn get_dm_ticket_thread(
                 can_view_locked,
                 can_view_locked,
                 can_use_trusted_content,
+                vec![],
                 TicketSendBlock::Ok,
             ),
         });
@@ -571,6 +632,7 @@ pub async fn get_dm_ticket_thread(
             can_view_locked,
             can_view_locked,
             can_use_trusted_content,
+            vec![],
             send_block,
         ),
     })
@@ -646,6 +708,7 @@ pub async fn get_ticket_thread(
         Some(1),
     )
     .await?;
+    let currency = get_ticket_perm_currency(db_pool, ticket_id, info.mod_access).await?;
 
     Ok(Some(TicketThread {
         ticket: Some(ticket),
@@ -654,6 +717,7 @@ pub async fn get_ticket_thread(
             info.mod_access,
             info.mod_access,
             info.admin_access,
+            currency,
             send_block,
         ),
     }))
@@ -767,6 +831,7 @@ pub async fn close_ticket(
     db_pool: &DbPool,
     ticket_id: i32,
     actor_id: i32,
+    actor_type: RbTicketSenderType,
     message: Option<&SendMessageData>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
@@ -790,11 +855,12 @@ pub async fn close_ticket(
         };
 
         sqlx::query!(
-            "INSERT INTO rb_ticket_operation (ticket_id, action, actor, message_id)
-            VALUES ($1, $2, $3, $4)",
+            "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type, message_id)
+            VALUES ($1, $2, $3, $4, $5)",
             ticket_id,
             i16::from(TicketOperationAction::Close),
             actor_id,
+            i16::from(actor_type),
             message_id
         )
         .execute(&mut *tx)
@@ -826,11 +892,12 @@ pub async fn close_puzzle_tickets_on_solve(
 
     for ticket_id in ticket_ids {
         sqlx::query!(
-            "INSERT INTO rb_ticket_operation (ticket_id, action, actor)
-            VALUES ($1, $2, $3)",
+            "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type)
+            VALUES ($1, $2, $3, $4)",
             ticket_id,
             i16::from(TicketOperationAction::AutoCloseSolved),
-            actor_id
+            actor_id,
+            i16::from(RbTicketSenderType::Team)
         )
         .execute(&mut **tx)
         .await?;
@@ -847,6 +914,7 @@ pub enum PurchaseTicketMessageResult {
 
 pub async fn purchase_ticket_message(
     app: &AppState,
+    user: &crate::extractor::auth::AuthUser,
     user_id: i32,
     ticket_id: i32,
     message_id: i32,
@@ -874,7 +942,7 @@ pub async fn purchase_ticket_message(
         return Ok(PurchaseTicketMessageResult::Unavailable);
     };
 
-    if info.cost_id.is_some() {
+    if info.cost_id.is_some() && !user.req_role()?.is_moderator() {
         let result = sqlx::query!(
             "UPDATE rb_team_currency tc
             SET utime_at = NOW(), amount = LEAST(
@@ -993,11 +1061,12 @@ pub async fn open_puzzle_ticket(
     let message_id = insert_ticket_message(&mut tx, ticket_id, message).await?;
 
     sqlx::query!(
-        "INSERT INTO rb_ticket_operation (ticket_id, action, actor, message_id)
-        VALUES ($1, $2, $3, $4)",
+        "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type, message_id)
+        VALUES ($1, $2, $3, $4, $5)",
         ticket_id,
         i16::from(TicketOperationAction::Open),
         message.sender_id,
+        i16::from(RbTicketSenderType::Team),
         message_id
     )
     .execute(&mut *tx)
@@ -1056,37 +1125,52 @@ pub async fn get_team_puzzle_tickets(
     .fetch_all(db_pool)
     .await?;
 
-    let has_open = sqlx::query_scalar!(
-        "SELECT EXISTS (
-            SELECT 1 FROM rb_ticket
-            WHERE state = 1 AND team_id = $1 AND puzzle_id IS NOT NULL
-        );",
+    let open_tickets = sqlx::query_as!(
+        TicketOpenInfo,
+        "SELECT tk.id, p.id AS puzzle_id, p.title AS puzzle_title
+        FROM rb_ticket tk
+        JOIN rb_puzzle p ON p.id = tk.puzzle_id
+        WHERE tk.state = $1 AND tk.team_id = $2 AND tk.puzzle_id IS NOT NULL
+        ORDER BY tk.id DESC;",
+        i16::from(RbTicketState::Open),
         team_id
     )
-    .fetch_one(db_pool)
-    .await?
-    .unwrap_or(false);
+    .fetch_all(db_pool)
+    .await?;
 
-    let cooldown_ready = sqlx::query_scalar!(
-        "SELECT EXISTS (
-            SELECT 1 FROM rb_puzzle p
-            JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
-            WHERE p.id = $2 AND p.ticket_cooldown >= 0
-                AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
-        );",
+    let has_current_puzzle_open = open_tickets
+        .iter()
+        .any(|ticket| ticket.puzzle_id == puzzle_id);
+    let pending_limit_reached = open_tickets.len() >= 1;
+
+    let cooldown = sqlx::query!(
+        "SELECT
+            EXISTS (
+                SELECT 1 FROM rb_puzzle p
+                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
+                WHERE p.id = $2 AND p.ticket_cooldown >= 0
+                    AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
+            ) AS ready,
+            (
+                SELECT tp.ctime_at + (p.ticket_cooldown * INTERVAL '1 second')
+                FROM rb_puzzle p
+                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
+                WHERE p.id = $2 AND p.ticket_cooldown >= 0
+            ) AS cooldown_till;",
         team_id,
         puzzle_id
     )
     .fetch_one(db_pool)
-    .await?
-    .unwrap_or(false);
+    .await?;
 
-    let block = if has_open {
-        Some(TicketOpenBlock::Pending)
-    } else if !cooldown_ready {
-        Some(TicketOpenBlock::Cooldown)
+    let open_block = if has_current_puzzle_open {
+        TicketOpenBlock::CurrentPuzzlePending
+    } else if !cooldown.ready.unwrap_or(false) {
+        TicketOpenBlock::Cooldown
+    } else if pending_limit_reached {
+        TicketOpenBlock::PendingLimit
     } else {
-        None
+        TicketOpenBlock::Ok
     };
 
     let tickets = info
@@ -1104,8 +1188,17 @@ pub async fn get_team_puzzle_tickets(
         .collect();
 
     Ok(TicketPuzzleList {
-        can_open: block.is_none(),
-        block,
+        open_block,
+        cooldown_till: if matches!(open_block, TicketOpenBlock::Cooldown) {
+            cooldown.cooldown_till
+        } else {
+            None
+        },
+        open_tickets: if matches!(open_block, TicketOpenBlock::PendingLimit) {
+            open_tickets
+        } else {
+            vec![]
+        },
         tickets,
     })
 }

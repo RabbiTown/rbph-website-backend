@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_currency tc\n            SET utime_at = NOW(), amount = LEAST(\n                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                c.max_amount\n            ) - $3\n            FROM rb_currency c\n            WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2\n                AND c.game_id = (\n                    SELECT tm.game_id\n                    FROM rb_team_member tm\n                    WHERE tm.team_id = $1 AND tm.user_id = $4\n                )\n                AND ($3 <= 0 OR LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) >= $3);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f700c9e51cad60a704b590b21b0c0fe62f66f0d835e28f5959db9f892b792bd"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_ticket (state, team_id, puzzle_id)\n        VALUES (1, $1, NULL)\n        ON CONFLICT (team_id) WHERE puzzle_id IS NULL\n        DO UPDATE SET team_id = EXCLUDED.team_id\n        RETURNING id, xmax = 0 AS inserted;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "inserted",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "a67d318387fd14b2640d0eab7b9de2e8183fe753aae883bc529350a53c3a2f38"
+}

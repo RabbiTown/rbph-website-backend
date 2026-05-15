@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n            c.prec, tc.amount, c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        JOIN rb_ticket t ON t.team_id = tc.team_id\n        WHERE t.id = $1\n        ORDER BY c.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "growth!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "prec",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "09bd34370092b5af94c1656c4ca5be837a4b85ff3d221f6b23e8810d0d5a31b0"
+}

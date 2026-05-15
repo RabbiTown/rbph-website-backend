@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tk.id, p.id AS puzzle_id, p.title AS puzzle_title\n        FROM rb_ticket tk\n        JOIN rb_puzzle p ON p.id = tk.puzzle_id\n        WHERE tk.state = $1 AND tk.team_id = $2 AND tk.puzzle_id IS NOT NULL\n        ORDER BY tk.id DESC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "puzzle_title",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f258f43b56d58a28e8dd6a0ad069f118642f03de590d7d8526470489a411ad86"
+}

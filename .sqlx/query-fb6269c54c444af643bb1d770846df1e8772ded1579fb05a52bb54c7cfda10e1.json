@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_ticket\n        SET state = $1\n        WHERE team_id = $2 AND puzzle_id = $3 AND state <> $1\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb6269c54c444af643bb1d770846df1e8772ded1579fb05a52bb54c7cfda10e1"
+}

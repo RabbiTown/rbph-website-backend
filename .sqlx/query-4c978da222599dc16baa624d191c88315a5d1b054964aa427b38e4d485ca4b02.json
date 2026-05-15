@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_message\n        SET unlocked = TRUE, utime_at = NOW()\n        WHERE id = $1 AND ticket_id = $2 AND NOT unlocked\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4c978da222599dc16baa624d191c88315a5d1b054964aa427b38e4d485ca4b02"
+}

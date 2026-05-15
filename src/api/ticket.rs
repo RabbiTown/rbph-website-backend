@@ -113,6 +113,7 @@ struct TicketSendResponse {
     message_id: i32,
     ticket: Option<TicketSummary>,
     msg: TicketMessage,
+    perm: db::ticket::TicketPerm,
 }
 
 async fn do_send_ticket_message(
@@ -139,7 +140,9 @@ async fn do_send_ticket_message(
         if req.content.len() > 1000 {
             RbError::unprocessable(TicketSendResult::ContentTooLong.into()).err()?
         }
-        if matches!(info.state, RbTicketState::Closed) {
+        if matches!(info.state, RbTicketState::Closed)
+            && matches!(req.sender_type, RbTicketSenderType::Team)
+        {
             RbError::forbid()
                 .code(TicketSendResult::Closed.into())
                 .err()?
@@ -166,12 +169,30 @@ async fn do_send_ticket_message(
     }
     let msg = msg.unwrap();
     let ticket = db::ticket::get_ticket_summary(&app.db, info.ticket_id, info.mod_access).await?;
+    let send_block = db::ticket::calc_send_block(
+        &app.db,
+        info.ticket_id,
+        info.state,
+        info.member_access,
+        max_pending,
+    )
+    .await?;
+    let currency = db::ticket::get_ticket_perm_currency(&app.db, info.ticket_id, info.mod_access)
+        .await?;
+    let perm = db::ticket::TicketPerm::new(
+        info.mod_access,
+        info.mod_access,
+        info.admin_access,
+        currency,
+        send_block,
+    );
 
     Ok(HttpResponse::Ok().json(TicketSendResponse {
         code: TicketSendResult::Ok,
         message_id: msg.id,
         ticket,
         msg,
+        perm,
     }))
 }
 
@@ -217,6 +238,7 @@ struct TicketCloseResponse {
     code: TicketCloseResult,
     ticket: Option<TicketSummary>,
     thread: TicketThread,
+    perm: db::ticket::TicketPerm,
 }
 
 async fn close_ticket(
@@ -261,7 +283,14 @@ async fn close_ticket(
     });
 
     let updated =
-        db::ticket::close_ticket(&app.db, path.ticket_id, user.uid, message.as_ref()).await?;
+        db::ticket::close_ticket(
+            &app.db,
+            path.ticket_id,
+            user.uid,
+            RbTicketSenderType::Host,
+            message.as_ref(),
+        )
+        .await?;
     if !updated {
         RbError::conflict(TicketCloseResult::Closed.into()).err()?
     }
@@ -273,11 +302,13 @@ async fn close_ticket(
     let thread = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &refreshed_info)
         .await?
         .ok_or(RbError::internal("Closed ticket not found"))?;
+    let perm = thread.perm().clone();
 
     Ok(HttpResponse::Ok().json(TicketCloseResponse {
         code: TicketCloseResult::Ok,
         ticket,
         thread,
+        perm,
     }))
 }
 
@@ -297,12 +328,12 @@ async fn purchase_ticket_message(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    if !info.member_access {
+    if !info.member_access && !info.mod_access {
         RbError::forbid().err()?
     }
 
     let purchase_result =
-        db::ticket::purchase_ticket_message(&app, user.uid, path.ticket_id, path.message_id)
+        db::ticket::purchase_ticket_message(&app, &user, user.uid, path.ticket_id, path.message_id)
             .await?;
 
     match purchase_result {

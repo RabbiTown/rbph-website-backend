@@ -998,7 +998,7 @@ pub async fn purchase_ticket_message(
 }
 
 pub enum OpenPuzzleTicketResult {
-    Ok(TicketThread),
+    Ok(Box<TicketThread>),
     PendingExists,
     Cooldown,
 }
@@ -1093,7 +1093,7 @@ pub async fn open_puzzle_ticket(
             .any(|item| item.message_id() == Some(message_id))
     );
 
-    Ok(OpenPuzzleTicketResult::Ok(thread))
+    Ok(OpenPuzzleTicketResult::Ok(Box::new(thread)))
 }
 
 pub async fn get_team_puzzle_tickets(
@@ -1141,7 +1141,7 @@ pub async fn get_team_puzzle_tickets(
     let has_current_puzzle_open = open_tickets
         .iter()
         .any(|ticket| ticket.puzzle_id == puzzle_id);
-    let pending_limit_reached = open_tickets.len() >= 1;
+    let pending_limit_reached = !open_tickets.is_empty();
 
     let cooldown = sqlx::query!(
         "SELECT

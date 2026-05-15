@@ -566,13 +566,8 @@ pub async fn submit_answer(
             if update.rows_affected() > 0 {
                 solved = true;
                 do_unlock = true;
-                db::ticket::close_puzzle_tickets_on_solve(
-                    &mut tx,
-                    team_id,
-                    puzzle_id,
-                    user.uid,
-                )
-                .await?;
+                db::ticket::close_puzzle_tickets_on_solve(&mut tx, team_id, puzzle_id, user.uid)
+                    .await?;
             }
         }
         RbJudgeAction::StartGame => {

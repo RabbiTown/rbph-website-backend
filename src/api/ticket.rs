@@ -177,8 +177,8 @@ async fn do_send_ticket_message(
         max_pending,
     )
     .await?;
-    let currency = db::ticket::get_ticket_perm_currency(&app.db, info.ticket_id, info.mod_access)
-        .await?;
+    let currency =
+        db::ticket::get_ticket_perm_currency(&app.db, info.ticket_id, info.mod_access).await?;
     let perm = db::ticket::TicketPerm::new(
         info.mod_access,
         info.mod_access,
@@ -282,15 +282,14 @@ async fn close_ticket(
         cost_amount: 0,
     });
 
-    let updated =
-        db::ticket::close_ticket(
-            &app.db,
-            path.ticket_id,
-            user.uid,
-            RbTicketSenderType::Host,
-            message.as_ref(),
-        )
-        .await?;
+    let updated = db::ticket::close_ticket(
+        &app.db,
+        path.ticket_id,
+        user.uid,
+        RbTicketSenderType::Host,
+        message.as_ref(),
+    )
+    .await?;
     if !updated {
         RbError::conflict(TicketCloseResult::Closed.into()).err()?
     }
@@ -343,7 +342,9 @@ async fn purchase_ticket_message(
         db::ticket::PurchaseTicketMessageResult::Insufficient => {
             RbError::conflict(TicketMessagePurchaseResult::Insufficient.into()).http_err()
         }
-        db::ticket::PurchaseTicketMessageResult::Ok(message) => Ok(HttpResponse::Ok().json(message)),
+        db::ticket::PurchaseTicketMessageResult::Ok(message) => {
+            Ok(HttpResponse::Ok().json(message))
+        }
     }
 }
 
@@ -410,6 +411,7 @@ async fn open_ticket(
             RbError::conflict(TicketOpenResult::Cooldown.into()).http_err()
         }
         db::ticket::OpenPuzzleTicketResult::Ok(thread) => {
+            let thread = *thread;
             let ticket = thread
                 .ticket()
                 .ok_or_else(|| RbError::internal("Opened ticket not found"))?;

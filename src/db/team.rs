@@ -121,7 +121,7 @@ pub async fn join(
     let mut tx = app.db.begin().await?;
 
     let verify = sqlx::query!(
-        "SELECT state, pass FROM rb_team
+        "SELECT state, pass, game_id FROM rb_team
         WHERE id = $1
         FOR UPDATE;",
         team_id
@@ -142,6 +142,10 @@ pub async fn join(
         return Ok(TeamJoinResult::WrongPwd);
     }
 
+    let max_members = db::game::get_team_max_members(&app.db, verify.game_id)
+        .await?
+        .ok_or("Game not found")?;
+
     let member_count = sqlx::query_scalar!(
         "SELECT COUNT(*) FROM rb_team_member
         WHERE team_id = $1;",
@@ -151,7 +155,7 @@ pub async fn join(
     .await?
     .unwrap_or(0);
 
-    if member_count >= 6 {
+    if member_count >= i64::from(max_members) {
         return Ok(TeamJoinResult::TeamFull);
     }
 

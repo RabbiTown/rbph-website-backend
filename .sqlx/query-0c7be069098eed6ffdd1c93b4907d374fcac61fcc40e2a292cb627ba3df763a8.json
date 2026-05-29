@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, title, cover, is_shown, is_online,\n            reg_open_at, pre_open_at, start_at, end_at, ctime_at\n        FROM rb_game WHERE id = $1;",
+  "query": "UPDATE rb_game\n        SET title = COALESCE($2, title),\n            cover = CASE WHEN $3 THEN $4 ELSE cover END,\n            is_shown = COALESCE($5, is_shown),\n            is_online = COALESCE($6, is_online),\n            reg_open_at = CASE WHEN $7 THEN $8 ELSE reg_open_at END,\n            pre_open_at = CASE WHEN $9 THEN $10 ELSE pre_open_at END,\n            start_at = COALESCE($11, start_at),\n            end_at = COALESCE($12, end_at),\n            settings = CASE WHEN $13 THEN $14 ELSE settings END\n        WHERE id = $1\n        RETURNING id, title, cover, is_shown, is_online,\n            reg_open_at, pre_open_at, start_at, end_at,\n            settings AS \"settings: RbGameSettings\", ctime_at;",
   "describe": {
     "columns": [
       {
@@ -50,13 +50,31 @@
       },
       {
         "ordinal": 9,
+        "name": "settings: RbGameSettings",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4"
+        "Int4",
+        "Varchar",
+        "Bool",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Timestamptz",
+        "Bool",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool",
+        "Jsonb"
       ]
     },
     "nullable": [
@@ -69,8 +87,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "32a97ba56192f62b935478ebe5025dee6216412a32e00f0cdbb198024ce7c0d7"
+  "hash": "0c7be069098eed6ffdd1c93b4907d374fcac61fcc40e2a292cb627ba3df763a8"
 }

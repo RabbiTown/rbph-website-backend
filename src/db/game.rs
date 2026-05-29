@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 use sqlx::{QueryBuilder, prelude::FromRow};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -6,7 +7,10 @@ use crate::{
     DbPool,
     db::{self},
     error::RbInternalError,
-    model::{game::RbGame, user::RbUserRole},
+    model::{
+        game::{GameSettingGroup, RbGame, RbGameSettings, RbGameTeamSettings},
+        user::RbUserRole,
+    },
 };
 
 #[derive(Deserialize)]
@@ -31,6 +35,7 @@ pub struct RbGameCreateData {
     pub start_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub end_at: OffsetDateTime,
+    pub settings: Option<Value>,
 }
 
 #[derive(Default, Deserialize)]
@@ -60,6 +65,7 @@ pub struct RbGameUpdateData {
         with = "crate::serde_helpers::serialize_option_offset_datetime"
     )]
     pub end_at: Option<OffsetDateTime>,
+    pub settings: Option<Value>,
 }
 
 fn deserialize_nullable_string_patch<'de, D>(
@@ -143,7 +149,8 @@ pub async fn get_full_by_id(
     let result = sqlx::query_as!(
         RbGame,
         "SELECT id, title, cover, is_shown, is_online,
-            reg_open_at, pre_open_at, start_at, end_at, ctime_at
+            reg_open_at, pre_open_at, start_at, end_at,
+            settings AS \"settings: RbGameSettings\", ctime_at
         FROM rb_game WHERE id = $1;",
         game_id
     )
@@ -154,15 +161,22 @@ pub async fn get_full_by_id(
 }
 
 pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, RbInternalError> {
+    let patch = data.settings.clone().unwrap_or(Value::Null);
+    let settings = RbGameSettings::sanitize_storage(Some(RbGameSettings::merge_patch(
+        RbGameSettings::default_value(),
+        patch,
+    )));
+
     let result = sqlx::query_as!(
         RbGame,
         "INSERT INTO rb_game (
             title, cover, is_shown, is_online,
-            reg_open_at, pre_open_at, start_at, end_at
+            reg_open_at, pre_open_at, start_at, end_at, settings
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING id, title, cover, is_shown, is_online,
-            reg_open_at, pre_open_at, start_at, end_at, ctime_at;",
+            reg_open_at, pre_open_at, start_at, end_at,
+            settings AS \"settings: RbGameSettings\", ctime_at;",
         data.title,
         data.cover,
         data.is_shown,
@@ -170,7 +184,8 @@ pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, Rb
         data.reg_open_at,
         data.pre_open_at,
         data.start_at,
-        data.end_at
+        data.end_at,
+        settings
     )
     .fetch_one(pool)
     .await?;
@@ -189,6 +204,22 @@ pub async fn update(
     let reg_open_at = data.reg_open_at.flatten();
     let pre_open_at_is_set = data.pre_open_at.is_some();
     let pre_open_at = data.pre_open_at.flatten();
+    let settings_is_set = data.settings.is_some();
+    let settings = if let Some(patch) = data.settings.clone() {
+        let current = sqlx::query_scalar!("SELECT settings FROM rb_game WHERE id = $1;", game_id)
+            .fetch_optional(pool)
+            .await?;
+
+        let Some(current) = current else {
+            return Ok(None);
+        };
+
+        Some(RbGameSettings::sanitize_storage(Some(
+            RbGameSettings::merge_patch(current, patch),
+        )))
+    } else {
+        None
+    };
 
     let result = sqlx::query_as!(
         RbGame,
@@ -200,10 +231,12 @@ pub async fn update(
             reg_open_at = CASE WHEN $7 THEN $8 ELSE reg_open_at END,
             pre_open_at = CASE WHEN $9 THEN $10 ELSE pre_open_at END,
             start_at = COALESCE($11, start_at),
-            end_at = COALESCE($12, end_at)
+            end_at = COALESCE($12, end_at),
+            settings = CASE WHEN $13 THEN $14 ELSE settings END
         WHERE id = $1
         RETURNING id, title, cover, is_shown, is_online,
-            reg_open_at, pre_open_at, start_at, end_at, ctime_at;",
+            reg_open_at, pre_open_at, start_at, end_at,
+            settings AS \"settings: RbGameSettings\", ctime_at;",
         game_id,
         data.title,
         cover_is_set,
@@ -215,7 +248,9 @@ pub async fn update(
         pre_open_at_is_set,
         pre_open_at,
         data.start_at,
-        data.end_at
+        data.end_at,
+        settings_is_set,
+        settings
     )
     .fetch_optional(pool)
     .await?;
@@ -238,9 +273,79 @@ pub async fn list_all(
         qb.push(" AND is_online = true");
     }
 
-    let result = qb.build_query_as::<RbGame>().fetch_all(pool).await?;
+    let result = qb
+        .push(" ORDER BY id")
+        .build_query_as::<RbGame>()
+        .fetch_all(pool)
+        .await?;
 
     Ok(result)
+}
+
+pub async fn list_show(
+    pool: &DbPool,
+    only_shown: bool,
+    only_online: bool,
+) -> Result<Vec<RbGameShowData>, RbInternalError> {
+    let mut qb = QueryBuilder::new(
+        "SELECT id, title, reg_open_at, pre_open_at, start_at, end_at, cover
+        FROM rb_game WHERE 1=1",
+    );
+
+    if only_shown {
+        qb.push(" AND is_shown = true");
+    }
+
+    if only_online {
+        qb.push(" AND is_online = true");
+    }
+
+    let result = qb
+        .push(" ORDER BY id")
+        .build_query_as::<RbGameShowData>()
+        .fetch_all(pool)
+        .await?;
+
+    Ok(result)
+}
+
+pub async fn get_team_max_members(
+    pool: &DbPool,
+    game_id: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    Ok(get_setting_group::<RbGameTeamSettings>(pool, game_id)
+        .await?
+        .map(|settings| settings.max_members))
+}
+
+pub async fn get_setting_group<T>(pool: &DbPool, game_id: i32) -> Result<Option<T>, RbInternalError>
+where
+    T: GameSettingGroup,
+{
+    let path: Vec<String> = T::PATH.iter().map(|key| key.to_string()).collect();
+    let value = sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT settings #> $2
+        FROM rb_game
+        WHERE id = $1;",
+    )
+    .bind(game_id)
+    .bind(path)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(value.map(|value| decode_setting_group::<T>(value.unwrap_or(Value::Null))))
+}
+
+fn decode_setting_group<T>(value: Value) -> T
+where
+    T: GameSettingGroup,
+{
+    let default = serde_json::to_value(T::default()).unwrap_or(Value::Object(Map::new()));
+    let merged = RbGameSettings::merge_patch(default, value);
+
+    serde_json::from_value::<T>(merged)
+        .unwrap_or_default()
+        .sanitize()
 }
 
 #[derive(Clone)]

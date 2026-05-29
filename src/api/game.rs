@@ -82,7 +82,7 @@ async fn get_aggre_info(
 }
 
 async fn list_online(app: web::Data<AppState>) -> Result<HttpResponse> {
-    let result = db::game::list_all(&app.db, true, true).await?;
+    let result = db::game::list_show(&app.db, true, true).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

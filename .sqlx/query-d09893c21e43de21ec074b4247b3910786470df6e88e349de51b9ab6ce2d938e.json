@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_game (\n            title, cover, is_shown, is_online,\n            reg_open_at, pre_open_at, start_at, end_at\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        RETURNING id, title, cover, is_shown, is_online,\n            reg_open_at, pre_open_at, start_at, end_at, ctime_at;",
+  "query": "SELECT id, title, cover, is_shown, is_online,\n            reg_open_at, pre_open_at, start_at, end_at,\n            settings AS \"settings: RbGameSettings\", ctime_at\n        FROM rb_game WHERE id = $1;",
   "describe": {
     "columns": [
       {
@@ -50,20 +50,18 @@
       },
       {
         "ordinal": 9,
+        "name": "settings: RbGameSettings",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Varchar",
-        "Text",
-        "Bool",
-        "Bool",
-        "Timestamptz",
-        "Timestamptz",
-        "Timestamptz",
-        "Timestamptz"
+        "Int4"
       ]
     },
     "nullable": [
@@ -76,8 +74,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "65b050139969bf4433a151cf7d892f15a636be31b53852f9ad62b1e910e6c695"
+  "hash": "d09893c21e43de21ec074b4247b3910786470df6e88e349de51b9ab6ce2d938e"
 }

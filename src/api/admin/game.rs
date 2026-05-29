@@ -7,7 +7,7 @@ use crate::{
     AppState,
     db::{self, game::RbGameUpdateData},
     error::RbError,
-    model::game::RbGame,
+    model::game::{RbGame, RbGameSettings},
 };
 
 #[derive(Deserialize)]
@@ -18,6 +18,7 @@ struct PathInfo {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum GameAdminResult {
+    Invalid = -2,
     NotFound = -1,
     Ok = 0,
 }
@@ -61,6 +62,12 @@ async fn append(
     req: web::Json<db::game::RbGameCreateData>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    if let Some(settings) = &req.settings
+        && !RbGameSettings::validate_patch(settings)
+    {
+        return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
+    }
+
     let game = db::game::create(&app.db, &req).await?;
 
     Ok(HttpResponse::Ok().json(GameAdminResponse {
@@ -74,6 +81,12 @@ async fn edit(
     req: web::Json<RbGameUpdateData>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    if let Some(settings) = &req.settings
+        && !RbGameSettings::validate_patch(settings)
+    {
+        return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
+    }
+
     let game = db::game::update(&app.db, path.game_id, &req).await?;
     let Some(game) = game else {
         return RbError::not_found()

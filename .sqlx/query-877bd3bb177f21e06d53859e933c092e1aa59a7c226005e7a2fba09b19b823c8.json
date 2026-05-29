@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT state, pass FROM rb_team\n        WHERE id = $1\n        FOR UPDATE;",
+  "query": "SELECT state, pass, game_id FROM rb_team\n        WHERE id = $1\n        FOR UPDATE;",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "pass",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -21,8 +26,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "aae5d28b834047a8662b35013032bf96e710f0c7b1a9770a3709a25eed6ab722"
+  "hash": "877bd3bb177f21e06d53859e933c092e1aa59a7c226005e7a2fba09b19b823c8"
 }

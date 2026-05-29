@@ -1,8 +1,13 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use sqlx::{
-    Decode, Postgres, Type, postgres::PgValueRef, prelude::FromRow, types::time::OffsetDateTime,
+    Decode, Encode, Postgres, Type,
+    encode::IsNull,
+    postgres::{PgArgumentBuffer, PgValueRef},
+    prelude::FromRow,
+    types::{Json, time::OffsetDateTime},
 };
 
 #[derive(FromRow, Serialize)]
@@ -20,8 +25,158 @@ pub struct RbGame {
     pub start_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub end_at: OffsetDateTime,
+    pub settings: RbGameSettings,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RbGameSettings {
+    pub team: RbGameTeamSettings,
+    pub ticket: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RbGameTeamSettings {
+    pub max_members: i32,
+}
+
+pub trait GameSettingGroup: Default + for<'de> Deserialize<'de> + Serialize + Sized {
+    const PATH: &'static [&'static str];
+
+    fn sanitize(self) -> Self {
+        self
+    }
+}
+
+impl Default for RbGameSettings {
+    fn default() -> Self {
+        Self {
+            team: RbGameTeamSettings::default(),
+            ticket: Value::Object(Map::new()),
+        }
+    }
+}
+
+impl Default for RbGameTeamSettings {
+    fn default() -> Self {
+        Self { max_members: 6 }
+    }
+}
+
+impl RbGameTeamSettings {
+    pub fn validate_patch(value: &Value) -> bool {
+        match value {
+            Value::Null => true,
+            Value::Object(team) => team.iter().all(|(key, value)| match key.as_str() {
+                "max_members" => {
+                    value.is_null()
+                        || value.as_i64().is_some_and(|max_members| {
+                            max_members > 0 && max_members <= i32::MAX as i64
+                        })
+                }
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+}
+
+impl GameSettingGroup for RbGameTeamSettings {
+    const PATH: &'static [&'static str] = &["team"];
+
+    fn sanitize(mut self) -> Self {
+        let default = Self::default();
+        if self.max_members <= 0 {
+            self.max_members = default.max_members;
+        }
+        self
+    }
+}
+
+impl RbGameSettings {
+    pub fn default_value() -> Value {
+        serde_json::to_value(Self::default()).unwrap_or(Value::Object(Map::new()))
+    }
+
+    pub fn validate_patch(value: &Value) -> bool {
+        let Value::Object(root) = value else {
+            return false;
+        };
+
+        root.iter().all(|(key, value)| match key.as_str() {
+            "team" => RbGameTeamSettings::validate_patch(value),
+            "ticket" => value.is_null() || value.is_object(),
+            _ => false,
+        })
+    }
+
+    pub fn sanitize(value: Option<Value>) -> Self {
+        let value = value.unwrap_or(Value::Null);
+        let default = Self::default_value();
+        let merged = Self::merge_patch(default, value);
+        let mut settings = serde_json::from_value::<Self>(merged).unwrap_or_default();
+
+        settings.team = settings.team.sanitize();
+        if !settings.ticket.is_object() {
+            settings.ticket = Self::default().ticket;
+        }
+
+        settings
+    }
+
+    pub fn sanitize_storage(value: Option<Value>) -> Value {
+        let value = value.unwrap_or(Value::Object(Map::new()));
+        if value.is_object() {
+            value
+        } else {
+            Value::Object(Map::new())
+        }
+    }
+
+    pub fn merge_patch(base: Value, patch: Value) -> Value {
+        match (base, patch) {
+            (Value::Object(mut base), Value::Object(patch)) => {
+                for (key, value) in patch {
+                    if value.is_null() {
+                        base.remove(&key);
+                    } else {
+                        let base_value = base.remove(&key).unwrap_or(Value::Null);
+                        base.insert(key, Self::merge_patch(base_value, value));
+                    }
+                }
+                Value::Object(base)
+            }
+            (_, patch) => patch,
+        }
+    }
+}
+
+impl Type<Postgres> for RbGameSettings {
+    fn type_info() -> <Postgres as sqlx::Database>::TypeInfo {
+        <Json<Self> as Type<Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &<Postgres as sqlx::Database>::TypeInfo) -> bool {
+        <Json<Self> as Type<Postgres>>::compatible(ty)
+    }
+}
+
+impl<'r> Decode<'r, Postgres> for RbGameSettings {
+    fn decode(value: PgValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Self::sanitize(Some(
+            <Json<Value> as Decode<Postgres>>::decode(value)?.0,
+        )))
+    }
+}
+
+impl<'q> Encode<'q, Postgres> for RbGameSettings {
+    fn encode_by_ref(
+        &self,
+        buf: &mut PgArgumentBuffer,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Send + Sync>> {
+        <Json<&Self> as Encode<Postgres>>::encode_by_ref(&Json(self), buf)
+    }
 }
 
 #[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]

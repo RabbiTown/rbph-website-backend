@@ -39,8 +39,12 @@ CREATE TABLE rb_game (
     pre_open_at     TIMESTAMPTZ,
     start_at        TIMESTAMPTZ NOT NULL,
     end_at          TIMESTAMPTZ NOT NULL,
+    settings        JSONB NOT NULL,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE rb_game ADD CONSTRAINT rb_ck_game_settings_object
+CHECK (jsonb_typeof(settings) = 'object');
 
 -- team
 

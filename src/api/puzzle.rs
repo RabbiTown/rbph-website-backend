@@ -108,7 +108,7 @@ async fn judge_puzzle(
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
                 WHERE p.id = ANY($1)
-                ORDER BY r.sort, r.id, p.sort, p.id",
+                ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
                 &unlocks
             )
             .fetch_all(&app.db)

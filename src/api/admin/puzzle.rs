@@ -164,6 +164,10 @@ async fn invalidate_puzzle_cache(app: &AppState, game_id: i32, puzzle_id: i32) {
     }
 }
 
+async fn invalidate_round_state_cache(app: &AppState, round_id: i32) {
+    let _ = db::cache::del_pattern(&app.kv, &format!("round:{round_id}:team:*:full_state")).await;
+}
+
 async fn list(
     query: web::Query<PuzzleListQuery>,
     app: web::Data<AppState>,
@@ -213,6 +217,7 @@ async fn append(
             .http_err();
     };
     invalidate_puzzle_cache(&app, puzzle.game_id, puzzle.id).await;
+    invalidate_round_state_cache(&app, puzzle.round_id).await;
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
         code: PuzzleAdminResult::Ok,
@@ -229,6 +234,7 @@ async fn edit(
         return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
     }
 
+    let previous = db::puzzle::admin_get(&app.db, path.puzzle_id).await?;
     let puzzle = match db::puzzle::admin_update(&app.db, path.puzzle_id, &req).await {
         Ok(puzzle) => puzzle,
         Err(err) => {
@@ -244,6 +250,12 @@ async fn edit(
             .http_err();
     };
     invalidate_puzzle_cache(&app, puzzle.game_id, path.puzzle_id).await;
+    invalidate_round_state_cache(&app, puzzle.round_id).await;
+    if let Some(previous) = previous
+        && previous.round_id != puzzle.round_id
+    {
+        invalidate_round_state_cache(&app, previous.round_id).await;
+    }
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
         code: PuzzleAdminResult::Ok,
@@ -266,6 +278,7 @@ async fn delete(path: web::Path<PuzzlePathInfo>, app: web::Data<AppState>) -> Re
             .http_err();
     }
     invalidate_puzzle_cache(&app, puzzle.game_id, path.puzzle_id).await;
+    invalidate_round_state_cache(&app, puzzle.round_id).await;
 
     Ok(HttpResponse::Ok().json(PuzzleAdminDeleteResponse {
         code: PuzzleAdminResult::Ok,

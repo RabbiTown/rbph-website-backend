@@ -367,15 +367,9 @@ pub async fn admin_create(
     let result = sqlx::query_as!(
         RbRoundAdminData,
         "INSERT INTO rb_round (slug, sort, title, content, content_type, cover, game_id, puzzle)
-        SELECT $2, $3, $4, $5, $6, $7, g.id, checked_puzzle.id
+        SELECT $2, $3, $4, $5, $6, $7, g.id, NULL::INT
         FROM rb_game g
-        LEFT JOIN rb_puzzle checked_puzzle ON checked_puzzle.id = $8::INT
-            AND EXISTS (
-                SELECT 1 FROM rb_round puzzle_round
-                WHERE puzzle_round.id = checked_puzzle.round_id
-                    AND puzzle_round.game_id = g.id
-            )
-        WHERE g.id = $1 AND ($8::INT IS NULL OR checked_puzzle.id IS NOT NULL)
+        WHERE g.id = $1 AND $8::INT IS NULL
         RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",
         data.game_id,
         data.slug,
@@ -423,8 +417,7 @@ pub async fn admin_update(
                 NOT $10 OR $11::INT IS NULL OR EXISTS (
                     SELECT 1
                     FROM rb_puzzle p
-                    JOIN rb_round pr ON pr.id = p.round_id
-                    WHERE p.id = $11::INT AND pr.game_id = r.game_id
+                    WHERE p.id = $11::INT AND p.round_id = r.id
                 )
             )
         RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",

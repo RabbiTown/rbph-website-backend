@@ -356,7 +356,7 @@ pub async fn get_unlock_conds_by_game(
         JOIN rb_round r ON r.id = p.round_id
         JOIN rb_game g ON g.id = r.game_id
         WHERE g.id = $1
-        ORDER BY r.sort, r.id, p.sort, p.id;",
+        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
         game_id
     )
     .fetch_all(pool)
@@ -773,7 +773,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         WHERE r.game_id = $1
-        ORDER BY r.sort, r.id, p.sort, p.id;",
+        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
         game_id
     )
     .fetch_all(&app.db)
@@ -1116,7 +1116,7 @@ pub async fn admin_list(
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         WHERE r.game_id = $1
-        ORDER BY r.sort, r.id, p.sort, p.id;",
+        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
             game_id
         )
         .fetch_all(pool)
@@ -1129,7 +1129,7 @@ pub async fn admin_list(
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        ORDER BY r.game_id, r.sort, r.id, p.sort, p.id;",
+        ORDER BY r.game_id, r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
         )
         .fetch_all(pool)
         .await?
@@ -1207,7 +1207,10 @@ pub async fn admin_update(
         RbPuzzleAdminData,
         "UPDATE rb_puzzle p
         SET slug = CASE WHEN $2 THEN $3 ELSE p.slug END,
-            sort = COALESCE($4, p.sort),
+            sort = CASE
+                WHEN EXISTS (SELECT 1 FROM rb_round owner_round WHERE owner_round.puzzle = p.id) THEN p.sort
+                ELSE COALESCE($4, p.sort)
+            END,
             title = COALESCE($5, p.title),
             ptype = COALESCE($6, p.ptype),
             content = COALESCE($7, p.content),
@@ -1223,6 +1226,10 @@ pub async fn admin_update(
         WHERE p.id = $1
             AND ($14::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_round target_round WHERE target_round.id = $14::INT
+            ))
+            AND ($14::INT IS NULL OR NOT EXISTS (
+                SELECT 1 FROM rb_round owner_round
+                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $14::INT
             ))
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,

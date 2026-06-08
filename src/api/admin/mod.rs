@@ -1,4 +1,6 @@
 mod game;
+mod puzzle;
+mod round;
 
 use actix_web::web;
 
@@ -9,5 +11,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("games")
             .configure(game::config)
             .default_service(web::route().to(error_handler)),
-    );
+    )
+    .configure(puzzle::config)
+    .configure(round::config);
 }

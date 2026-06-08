@@ -1,5 +1,5 @@
 use deadpool_redis::redis::{AsyncCommands, RedisError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState, DbPool, KvPool,
@@ -272,4 +272,170 @@ pub async fn get_simple_list_for_team(
     .await?;
 
     Ok(result)
+}
+
+#[derive(Serialize)]
+pub struct RbRoundAdminData {
+    pub id: i32,
+    pub title: String,
+    pub content: String,
+    pub content_type: i16,
+    pub cover: Option<String>,
+    pub game_id: i32,
+    pub puzzle: Option<i32>,
+}
+
+#[derive(Deserialize)]
+pub struct RbRoundCreateData {
+    pub game_id: i32,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub content_type: i16,
+    pub cover: Option<String>,
+    pub puzzle: Option<i32>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct RbRoundUpdateData {
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub content_type: Option<i16>,
+    pub cover: Option<Option<String>>,
+    pub puzzle: Option<Option<i32>>,
+}
+
+pub async fn admin_list(
+    pool: &DbPool,
+    game_id: Option<i32>,
+) -> Result<Vec<RbRoundAdminData>, RbInternalError> {
+    let result = if let Some(game_id) = game_id {
+        sqlx::query_as!(
+            RbRoundAdminData,
+            "SELECT id, title, content, content_type, cover, game_id, puzzle
+        FROM rb_round
+        WHERE game_id = $1
+        ORDER BY id;",
+            game_id
+        )
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as!(
+            RbRoundAdminData,
+            "SELECT id, title, content, content_type, cover, game_id, puzzle
+        FROM rb_round
+        ORDER BY game_id, id;"
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(result)
+}
+
+pub async fn admin_get(
+    pool: &DbPool,
+    round_id: i32,
+) -> Result<Option<RbRoundAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbRoundAdminData,
+        "SELECT id, title, content, content_type, cover, game_id, puzzle
+        FROM rb_round
+        WHERE id = $1;",
+        round_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_create(
+    pool: &DbPool,
+    data: &RbRoundCreateData,
+) -> Result<Option<RbRoundAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbRoundAdminData,
+        "INSERT INTO rb_round (title, content, content_type, cover, game_id, puzzle)
+        SELECT $2, $3, $4, $5, g.id, checked_puzzle.id
+        FROM rb_game g
+        LEFT JOIN rb_puzzle checked_puzzle ON checked_puzzle.id = $6::INT
+            AND EXISTS (
+                SELECT 1 FROM rb_round puzzle_round
+                WHERE puzzle_round.id = checked_puzzle.round_id
+                    AND puzzle_round.game_id = g.id
+            )
+        WHERE g.id = $1 AND ($6::INT IS NULL OR checked_puzzle.id IS NOT NULL)
+        RETURNING id, title, content, content_type, cover, game_id, puzzle;",
+        data.game_id,
+        data.title,
+        data.content,
+        data.content_type,
+        data.cover,
+        data.puzzle
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_update(
+    pool: &DbPool,
+    round_id: i32,
+    data: &RbRoundUpdateData,
+) -> Result<Option<RbRoundAdminData>, RbInternalError> {
+    let cover_is_set = data.cover.is_some();
+    let cover = data.cover.clone().flatten();
+    let puzzle_is_set = data.puzzle.is_some();
+    let puzzle = data.puzzle.flatten();
+
+    let result = sqlx::query_as!(
+        RbRoundAdminData,
+        "UPDATE rb_round r
+        SET title = COALESCE($2, r.title),
+            content = COALESCE($3, r.content),
+            content_type = COALESCE($4, r.content_type),
+            cover = CASE WHEN $5 THEN $6 ELSE r.cover END,
+            puzzle = CASE
+                WHEN $7 AND $8::INT IS NULL THEN NULL
+                WHEN $7 THEN $8::INT
+                ELSE r.puzzle
+            END
+        WHERE r.id = $1
+            AND (
+                NOT $7 OR $8::INT IS NULL OR EXISTS (
+                    SELECT 1
+                    FROM rb_puzzle p
+                    JOIN rb_round pr ON pr.id = p.round_id
+                    WHERE p.id = $8::INT AND pr.game_id = r.game_id
+                )
+            )
+        RETURNING id, title, content, content_type, cover, game_id, puzzle;",
+        round_id,
+        data.title,
+        data.content,
+        data.content_type,
+        cover_is_set,
+        cover,
+        puzzle_is_set,
+        puzzle
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_delete(pool: &DbPool, round_id: i32) -> Result<bool, RbInternalError> {
+    let result = sqlx::query!(
+        "DELETE FROM rb_round
+        WHERE id = $1;",
+        round_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }

@@ -334,6 +334,11 @@ pub async fn get_judge_rules(
 type UnlockCondMap = DashMap<i32, Arc<Vec<(i32, GateExpr)>>>;
 static UNLOCK_COND_CACHE: Lazy<UnlockCondMap> = Lazy::new(DashMap::new);
 
+pub fn invalidate_admin_cache(game_id: i32, puzzle_id: i32) {
+    JUDGE_CACHE.remove(&puzzle_id);
+    UNLOCK_COND_CACHE.remove(&game_id);
+}
+
 pub async fn get_unlock_conds_by_game(
     pool: &DbPool,
     game_id: i32,
@@ -967,4 +972,213 @@ pub async fn purchase_hint(
 
     tx.commit().await?;
     Ok(PurchaseHintResult::Ok(result))
+}
+
+#[derive(Serialize)]
+pub struct RbPuzzleAdminData {
+    pub id: i32,
+    pub game_id: i32,
+    pub title: String,
+    pub ptype: i16,
+    pub content: String,
+    pub content_type: i16,
+    pub judge: serde_json::Value,
+    pub penalty: serde_json::Value,
+    pub max_submit: Option<i32>,
+    pub unlock_cond: String,
+    pub round_id: i32,
+    pub ticket_cooldown: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}
+
+#[derive(Deserialize)]
+pub struct RbPuzzleCreateData {
+    pub title: String,
+    #[serde(default)]
+    pub ptype: i16,
+    pub content: String,
+    #[serde(default)]
+    pub content_type: i16,
+    #[serde(default = "default_judge")]
+    pub judge: serde_json::Value,
+    #[serde(default = "default_penalty")]
+    pub penalty: serde_json::Value,
+    pub max_submit: Option<i32>,
+    pub unlock_cond: String,
+    pub round_id: i32,
+    #[serde(default)]
+    pub ticket_cooldown: i32,
+}
+
+#[derive(Default, Deserialize)]
+pub struct RbPuzzleUpdateData {
+    pub title: Option<String>,
+    pub ptype: Option<i16>,
+    pub content: Option<String>,
+    pub content_type: Option<i16>,
+    pub judge: Option<serde_json::Value>,
+    pub penalty: Option<serde_json::Value>,
+    pub max_submit: Option<Option<i32>>,
+    pub unlock_cond: Option<String>,
+    pub round_id: Option<i32>,
+    pub ticket_cooldown: Option<i32>,
+}
+
+fn default_judge() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn default_penalty() -> serde_json::Value {
+    serde_json::json!([])
+}
+
+pub async fn admin_list(
+    pool: &DbPool,
+    game_id: Option<i32>,
+) -> Result<Vec<RbPuzzleAdminData>, RbInternalError> {
+    let result = if let Some(game_id) = game_id {
+        sqlx::query_as!(
+            RbPuzzleAdminData,
+            "SELECT p.id, r.game_id, p.title, p.ptype, p.content, p.content_type,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
+            p.ticket_cooldown, p.ctime_at
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE r.game_id = $1
+        ORDER BY p.round_id, p.id;",
+            game_id
+        )
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as!(
+            RbPuzzleAdminData,
+            "SELECT p.id, r.game_id, p.title, p.ptype, p.content, p.content_type,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
+            p.ticket_cooldown, p.ctime_at
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        ORDER BY r.game_id, p.round_id, p.id;"
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(result)
+}
+
+pub async fn admin_get(
+    pool: &DbPool,
+    puzzle_id: i32,
+) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbPuzzleAdminData,
+        "SELECT p.id, r.game_id, p.title, p.ptype, p.content, p.content_type,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
+            p.ticket_cooldown, p.ctime_at
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE p.id = $1;",
+        puzzle_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_create(
+    pool: &DbPool,
+    data: &RbPuzzleCreateData,
+) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbPuzzleAdminData,
+        "INSERT INTO rb_puzzle (
+            title, ptype, content, content_type, judge, penalty,
+            max_submit, unlock_cond, round_id, ticket_cooldown
+        )
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, r.id, $10
+        FROM rb_round r
+        WHERE r.id = $1
+        RETURNING id, (SELECT game_id FROM rb_round WHERE id = round_id) AS \"game_id!\",
+            title, ptype, content, content_type, judge, penalty,
+            max_submit, unlock_cond, round_id, ticket_cooldown, ctime_at;",
+        data.round_id,
+        data.title,
+        data.ptype,
+        data.content,
+        data.content_type,
+        data.judge,
+        data.penalty,
+        data.max_submit,
+        data.unlock_cond,
+        data.ticket_cooldown
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_update(
+    pool: &DbPool,
+    puzzle_id: i32,
+    data: &RbPuzzleUpdateData,
+) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
+    let max_submit_is_set = data.max_submit.is_some();
+    let max_submit = data.max_submit.flatten();
+
+    let result = sqlx::query_as!(
+        RbPuzzleAdminData,
+        "UPDATE rb_puzzle p
+        SET title = COALESCE($2, p.title),
+            ptype = COALESCE($3, p.ptype),
+            content = COALESCE($4, p.content),
+            content_type = COALESCE($5, p.content_type),
+            judge = COALESCE($6, p.judge),
+            penalty = COALESCE($7, p.penalty),
+            max_submit = CASE WHEN $8 THEN $9 ELSE p.max_submit END,
+            unlock_cond = COALESCE($10, p.unlock_cond),
+            round_id = COALESCE((
+                SELECT r.id FROM rb_round r WHERE r.id = $11::INT
+            ), p.round_id),
+            ticket_cooldown = COALESCE($12, p.ticket_cooldown)
+        WHERE p.id = $1
+            AND ($11::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $11::INT
+            ))
+        RETURNING p.id, (SELECT game_id FROM rb_round WHERE id = p.round_id) AS \"game_id!\",
+            p.title, p.ptype, p.content, p.content_type,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
+            p.ticket_cooldown, p.ctime_at;",
+        puzzle_id,
+        data.title,
+        data.ptype,
+        data.content,
+        data.content_type,
+        data.judge,
+        data.penalty,
+        max_submit_is_set,
+        max_submit,
+        data.unlock_cond,
+        data.round_id,
+        data.ticket_cooldown
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_delete(pool: &DbPool, puzzle_id: i32) -> Result<bool, RbInternalError> {
+    let result = sqlx::query!(
+        "DELETE FROM rb_puzzle
+        WHERE id = $1;",
+        puzzle_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }

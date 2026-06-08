@@ -94,6 +94,7 @@ EXECUTE FUNCTION rb_team_member_set_game_id();
 
 CREATE TABLE rb_round (
     id              SERIAL PRIMARY KEY,
+    slug            VARCHAR(120),
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
     content_type    SMALLINT NOT NULL DEFAULT 0,
@@ -103,10 +104,18 @@ CREATE TABLE rb_round (
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE UNIQUE INDEX rb_idx_round_game_slug
+ON rb_round(game_id, slug)
+WHERE slug IS NOT NULL;
+
+ALTER TABLE rb_round ADD CONSTRAINT rb_ck_round_slug_atom
+CHECK (slug IS NULL OR slug ~ '^[A-Za-z_][A-Za-z0-9_-]*$');
+
 -- puzzle
 
 CREATE TABLE rb_puzzle (
     id              SERIAL PRIMARY KEY,
+    slug            VARCHAR(120),
     title           VARCHAR(120) NOT NULL,
     ptype           SMALLINT NOT NULL DEFAULT 0,
     content         TEXT NOT NULL,
@@ -116,9 +125,30 @@ CREATE TABLE rb_puzzle (
     max_submit      INT,
     unlock_cond     TEXT NOT NULL,
     round_id        INT NOT NULL REFERENCES rb_round(id),
+    game_id         INT NOT NULL REFERENCES rb_game(id),
     ticket_cooldown INT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE OR REPLACE FUNCTION rb_puzzle_set_game_id()
+RETURNS TRIGGER AS $$
+BEGIN
+    SELECT game_id INTO NEW.game_id FROM rb_round WHERE id = NEW.round_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER rb_trg_puzzle_set_game_id
+BEFORE INSERT OR UPDATE OF round_id ON rb_puzzle
+FOR EACH ROW
+EXECUTE FUNCTION rb_puzzle_set_game_id();
+
+CREATE UNIQUE INDEX rb_idx_puzzle_game_slug
+ON rb_puzzle(game_id, slug)
+WHERE slug IS NOT NULL;
+
+ALTER TABLE rb_puzzle ADD CONSTRAINT rb_ck_puzzle_slug_atom
+CHECK (slug IS NULL OR slug ~ '^[A-Za-z_][A-Za-z0-9_-]*$');
 
 ALTER TABLE rb_round ADD CONSTRAINT rb_fk_round_puzzle
 FOREIGN KEY (puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;

@@ -10,10 +10,18 @@ use crate::{
         self,
         puzzle::{RbPuzzleAdminData, RbPuzzleCreateData, RbPuzzleUpdateData},
     },
-    error::RbError,
+    error::{RbError, RbInternalError},
     expr,
     model::game::{RbContentType, RbPuzzleType},
 };
+
+fn is_constraint_error(err: &RbInternalError) -> bool {
+    matches!(
+        err,
+        RbInternalError::Sql(sqlx::Error::Database(db_err))
+            if db_err.code().is_some_and(|code| code == "23505" || code == "23514")
+    )
+}
 
 #[derive(Deserialize)]
 struct PuzzlePathInfo {
@@ -72,9 +80,23 @@ fn validate_unlock_cond(value: &str) -> bool {
     value == "default" || expr::compile_gate_expr(value).is_ok()
 }
 
+fn validate_slug(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn validate_slug_option(value: &Option<String>) -> bool {
+    value.as_deref().is_none_or(validate_slug)
+}
+
 fn validate_create(data: &RbPuzzleCreateData) -> bool {
     validate_ptype(data.ptype)
         && validate_content_type(data.content_type)
+        && validate_slug_option(&data.slug)
         && data.ticket_cooldown >= 0
         && data.max_submit.is_none_or(|value| value >= 0)
         && validate_unlock_cond(&data.unlock_cond)
@@ -91,6 +113,12 @@ fn validate_update(data: &RbPuzzleUpdateData) -> bool {
 
     if let Some(content_type) = data.content_type
         && !validate_content_type(content_type)
+    {
+        return false;
+    }
+
+    if let Some(slug) = &data.slug
+        && !validate_slug_option(slug)
     {
         return false;
     }
@@ -170,7 +198,15 @@ async fn append(
         return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
     }
 
-    let puzzle = db::puzzle::admin_create(&app.db, &req).await?;
+    let puzzle = match db::puzzle::admin_create(&app.db, &req).await {
+        Ok(puzzle) => puzzle,
+        Err(err) => {
+            if is_constraint_error(&err) {
+                return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+            }
+            return Err(err.into());
+        }
+    };
     let Some(puzzle) = puzzle else {
         return RbError::not_found()
             .code(PuzzleAdminResult::NotFound.into())
@@ -193,7 +229,15 @@ async fn edit(
         return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
     }
 
-    let puzzle = db::puzzle::admin_update(&app.db, path.puzzle_id, &req).await?;
+    let puzzle = match db::puzzle::admin_update(&app.db, path.puzzle_id, &req).await {
+        Ok(puzzle) => puzzle,
+        Err(err) => {
+            if is_constraint_error(&err) {
+                return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+            }
+            return Err(err.into());
+        }
+    };
     let Some(puzzle) = puzzle else {
         return RbError::not_found()
             .code(PuzzleAdminResult::NotFound.into())

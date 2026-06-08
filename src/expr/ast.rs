@@ -1,6 +1,6 @@
 use crate::expr::{
     PuzzleStates,
-    types::{CountSize, PuzzleId},
+    types::{CountSize, PuzzleId, PuzzleRef, RoundRef},
 };
 
 #[derive(Debug, Clone)]
@@ -15,10 +15,18 @@ pub enum CmpOp {
 
 #[derive(Debug, Clone)]
 pub enum SetExpr {
-    // (set 1 2 3)
-    Explicit(Vec<PuzzleId>),
-    // (range 1 5)
-    Range { start: PuzzleId, end: PuzzleId },
+    // (puzzles 1 2 3)
+    Puzzles(Vec<PuzzleRef>),
+    // (puzzle-range 1 5)
+    PuzzleRange { start: PuzzleId, end: PuzzleId },
+    // (round 1)
+    Round(RoundRef),
+}
+
+#[derive(Debug, Clone)]
+pub enum ValueExpr {
+    SolvedCount(SetExpr),
+    Number(CountSize),
 }
 
 #[derive(Debug, Clone)]
@@ -27,15 +35,15 @@ pub enum GateExpr {
     Or(Vec<GateExpr>),
     Not(Box<GateExpr>),
 
-    Completed(PuzzleId),
-    AllCompleted(SetExpr),
-    AnyCompleted(SetExpr),
+    Solved(PuzzleRef),
+    AllSolved(SetExpr),
+    AnySolved(SetExpr),
     GameStarted,
 
-    CountCmp {
+    Cmp {
         op: CmpOp,
-        set: SetExpr,
-        n: CountSize,
+        lhs: ValueExpr,
+        rhs: ValueExpr,
     },
 }
 
@@ -50,28 +58,48 @@ fn cmp_usize(op: CmpOp, lhs: usize, rhs: usize) -> bool {
     }
 }
 
-fn cmp_f64(op: CmpOp, lhs: f64, rhs: f64) -> bool {
-    match op {
-        CmpOp::Gt => lhs > rhs,
-        CmpOp::Ge => lhs >= rhs,
-        CmpOp::Lt => lhs < rhs,
-        CmpOp::Le => lhs <= rhs,
-        CmpOp::Eq => (lhs - rhs).abs() <= 1e-12,
-        CmpOp::Ne => (lhs - rhs).abs() > 1e-12,
+fn resolve_puzzle<S: PuzzleStates>(state: &S, puzzle: &PuzzleRef) -> Option<PuzzleId> {
+    match puzzle {
+        PuzzleRef::Id(id) => Some(*id),
+        PuzzleRef::Slug(slug) => state.puzzle_slug(slug),
     }
 }
 
-pub fn materialize_set<S: PuzzleStates>(state: &S, set: &SetExpr) -> Vec<PuzzleId> {
+fn resolve_round<S: PuzzleStates>(state: &S, round: &RoundRef) -> Option<Vec<PuzzleId>> {
+    match round {
+        RoundRef::Id(id) => state.round_puzzles(*id),
+        RoundRef::Slug(slug) => state
+            .round_slug(slug)
+            .and_then(|id| state.round_puzzles(id)),
+    }
+}
+
+pub fn materialize_set<S: PuzzleStates>(state: &S, set: &SetExpr) -> Option<Vec<PuzzleId>> {
     match set {
-        SetExpr::Explicit(v) => v.clone(),
-        SetExpr::Range { start, end } => {
+        SetExpr::Puzzles(v) => v
+            .iter()
+            .map(|puzzle| resolve_puzzle(state, puzzle))
+            .collect(),
+        SetExpr::PuzzleRange { start, end } => Some({
             let (a, b) = (*start, *end);
             if a <= b {
                 (a..=b).collect()
             } else {
                 (b..=a).collect()
             }
-        }
+        }),
+        SetExpr::Round(round) => resolve_round(state, round),
+    }
+}
+
+pub fn eval_value<S: PuzzleStates>(state: &S, expr: &ValueExpr) -> CountSize {
+    match expr {
+        ValueExpr::SolvedCount(set) => materialize_set(state, set)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&id| state.is_solved(id))
+            .count(),
+        ValueExpr::Number(n) => *n,
     }
 }
 
@@ -81,21 +109,21 @@ pub fn eval_compiled<S: PuzzleStates>(state: &S, expr: &GateExpr) -> bool {
         GateExpr::Or(xs) => xs.iter().any(|e| eval_compiled(state, e)),
         GateExpr::Not(x) => !eval_compiled(state, x),
 
-        GateExpr::Completed(id) => state.is_completed(*id),
+        GateExpr::Solved(puzzle) => {
+            resolve_puzzle(state, puzzle).is_some_and(|id| state.is_solved(id))
+        }
 
-        GateExpr::AllCompleted(set) => materialize_set(state, set)
-            .iter()
-            .all(|&id| state.is_completed(id)),
-        GateExpr::AnyCompleted(set) => materialize_set(state, set)
-            .iter()
-            .any(|&id| state.is_completed(id)),
+        GateExpr::AllSolved(set) => {
+            materialize_set(state, set).is_some_and(|ids| ids.iter().all(|&id| state.is_solved(id)))
+        }
+        GateExpr::AnySolved(set) => {
+            materialize_set(state, set).is_some_and(|ids| ids.iter().any(|&id| state.is_solved(id)))
+        }
 
         GateExpr::GameStarted => state.game_started(),
 
-        GateExpr::CountCmp { op, set, n } => {
-            let ids = materialize_set(state, set);
-            let cnt = ids.into_iter().filter(|&id| state.is_completed(id)).count();
-            cmp_usize(op.clone(), cnt, *n)
+        GateExpr::Cmp { op, lhs, rhs } => {
+            cmp_usize(op.clone(), eval_value(state, lhs), eval_value(state, rhs))
         }
     }
 }

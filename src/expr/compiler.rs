@@ -1,6 +1,7 @@
 use crate::expr::{
-    ast::{CmpOp, GateExpr, SetExpr},
+    ast::{CmpOp, GateExpr, SetExpr, ValueExpr},
     parser::RawSexpr,
+    types::{PuzzleRef, RoundRef},
 };
 
 #[derive(Debug)]
@@ -10,6 +11,7 @@ pub enum CompileError {
     ExpectedAtom,
     ExpectedNumber,
     ExpectedSetExpr,
+    ExpectedValueExpr,
 }
 
 fn atom(s: &RawSexpr) -> Result<&str, CompileError> {
@@ -29,9 +31,20 @@ fn parse_usize(s: &RawSexpr) -> Result<usize, CompileError> {
     a.parse::<usize>().map_err(|_| CompileError::ExpectedNumber)
 }
 
-fn parse_f64(s: &RawSexpr) -> Result<f64, CompileError> {
+fn parse_puzzle_ref(s: &RawSexpr) -> Result<PuzzleRef, CompileError> {
     let a = atom(s)?;
-    a.parse::<f64>().map_err(|_| CompileError::ExpectedNumber)
+    Ok(match a.parse::<u32>() {
+        Ok(id) => PuzzleRef::Id(id),
+        Err(_) => PuzzleRef::Slug(a.to_string()),
+    })
+}
+
+fn parse_round_ref(s: &RawSexpr) -> Result<RoundRef, CompileError> {
+    let a = atom(s)?;
+    Ok(match a.parse::<u32>() {
+        Ok(id) => RoundRef::Id(id),
+        Err(_) => RoundRef::Slug(a.to_string()),
+    })
 }
 
 fn op_to_cmp(op: &str) -> Option<CmpOp> {
@@ -54,21 +67,27 @@ pub fn compile_set(expr: &RawSexpr) -> Result<SetExpr, CompileError> {
             }
             let head = atom(&items[0])?;
             match head {
-                "set" => {
+                "puzzles" => {
                     let mut ids = Vec::new();
                     for it in &items[1..] {
-                        ids.push(parse_u32(it)?);
+                        ids.push(parse_puzzle_ref(it)?);
                     }
-                    Ok(SetExpr::Explicit(ids))
+                    Ok(SetExpr::Puzzles(ids))
                 }
-                "range" => {
+                "puzzle-range" => {
                     if items.len() != 3 {
-                        return Err(CompileError::BadForm("set-range expects 2 args"));
+                        return Err(CompileError::BadForm("puzzle-range expects 2 args"));
                     }
-                    Ok(SetExpr::Range {
+                    Ok(SetExpr::PuzzleRange {
                         start: parse_u32(&items[1])?,
                         end: parse_u32(&items[2])?,
                     })
+                }
+                "round" => {
+                    if items.len() != 2 {
+                        return Err(CompileError::BadForm("round expects 1 arg"));
+                    }
+                    Ok(SetExpr::Round(parse_round_ref(&items[1])?))
                 }
                 _ => Err(CompileError::ExpectedSetExpr),
             }
@@ -77,16 +96,31 @@ pub fn compile_set(expr: &RawSexpr) -> Result<SetExpr, CompileError> {
     }
 }
 
+pub fn compile_value(expr: &RawSexpr) -> Result<ValueExpr, CompileError> {
+    match expr {
+        RawSexpr::Atom(_) => Ok(ValueExpr::Number(parse_usize(expr)?)),
+        RawSexpr::List(items) => {
+            if items.is_empty() {
+                return Err(CompileError::BadForm("empty list"));
+            }
+
+            let head = atom(&items[0])?;
+            match head {
+                "solved-count" => {
+                    if items.len() != 2 {
+                        return Err(CompileError::BadForm("solved-count expects 1 set arg"));
+                    }
+                    Ok(ValueExpr::SolvedCount(compile_set(&items[1])?))
+                }
+                _ => Err(CompileError::ExpectedValueExpr),
+            }
+        }
+    }
+}
+
 pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
     match expr {
-        RawSexpr::Atom(a) => {
-            if let Ok(id) = a.parse::<u32>() {
-                return Ok(GateExpr::Completed(id));
-            }
-            Err(CompileError::BadForm(
-                "bare atom not allowed (except numbers)",
-            ))
-        }
+        RawSexpr::Atom(_) => Err(CompileError::BadForm("bare atom not allowed")),
         RawSexpr::List(items) => {
             if items.is_empty() {
                 return Err(CompileError::BadForm("empty list"));
@@ -112,23 +146,23 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                     }
                     Ok(GateExpr::Not(Box::new(compile_gate(&items[1])?)))
                 }
-                "completed" => {
+                "solved" => {
                     if items.len() != 2 {
-                        return Err(CompileError::BadForm("completed expects 1 arg"));
+                        return Err(CompileError::BadForm("solved expects 1 arg"));
                     }
-                    Ok(GateExpr::Completed(parse_u32(&items[1])?))
+                    Ok(GateExpr::Solved(parse_puzzle_ref(&items[1])?))
                 }
-                "all-completed" => {
+                "all-solved" => {
                     if items.len() != 2 {
-                        return Err(CompileError::BadForm("all-completed expects 1 set arg"));
+                        return Err(CompileError::BadForm("all-solved expects 1 set arg"));
                     }
-                    Ok(GateExpr::AllCompleted(compile_set(&items[1])?))
+                    Ok(GateExpr::AllSolved(compile_set(&items[1])?))
                 }
-                "any-completed" => {
+                "any-solved" => {
                     if items.len() != 2 {
-                        return Err(CompileError::BadForm("any-completed expects 1 set arg"));
+                        return Err(CompileError::BadForm("any-solved expects 1 set arg"));
                     }
-                    Ok(GateExpr::AnyCompleted(compile_set(&items[1])?))
+                    Ok(GateExpr::AnySolved(compile_set(&items[1])?))
                 }
                 "game-started" => {
                     if items.len() != 1 {
@@ -136,18 +170,14 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                     }
                     Ok(GateExpr::GameStarted)
                 }
-                "set" | "range" => Ok(GateExpr::AnyCompleted(compile_set(expr)?)),
-                _ if head.starts_with("count") => {
-                    let suffix = head.strip_prefix("count").unwrap();
-                    let op = op_to_cmp(suffix)
-                        .ok_or_else(|| CompileError::UnknownOp(head.to_string()))?;
+                "gt" | "ge" | "lt" | "le" | "eq" | "ne" => {
                     if items.len() != 3 {
-                        return Err(CompileError::BadForm("count* expects (set-expr n)"));
+                        return Err(CompileError::BadForm("comparison expects 2 args"));
                     }
-                    Ok(GateExpr::CountCmp {
-                        op,
-                        set: compile_set(&items[1])?,
-                        n: parse_usize(&items[2])?,
+                    Ok(GateExpr::Cmp {
+                        op: op_to_cmp(head).unwrap(),
+                        lhs: compile_value(&items[1])?,
+                        rhs: compile_value(&items[2])?,
                     })
                 }
 

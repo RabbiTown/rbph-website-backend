@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
@@ -700,24 +703,35 @@ pub async fn submit_answer(
 }
 
 struct RbPuzzleStates {
-    unlocked: HashSet<i32>,
+    solved: HashSet<i32>,
+    puzzle_slugs: HashMap<String, u32>,
+    round_slugs: HashMap<String, u32>,
+    round_puzzles: HashMap<u32, Vec<u32>>,
     game_started: bool,
 }
 
 impl PuzzleStates for RbPuzzleStates {
-    fn is_completed(&self, id: expr::types::PuzzleId) -> bool {
-        self.unlocked.contains(&id.try_into().unwrap_or(i32::MAX))
+    fn is_solved(&self, id: expr::types::PuzzleId) -> bool {
+        self.solved.contains(&id.try_into().unwrap_or(i32::MAX))
     }
 
-    fn completed_count(&self) -> expr::types::CountSize {
-        self.unlocked.len()
-    }
-
-    fn completed(&self) -> Vec<expr::types::PuzzleId> {
-        self.unlocked
+    fn solved(&self) -> Vec<expr::types::PuzzleId> {
+        self.solved
             .iter()
             .map(|&x| x.try_into().unwrap_or(0))
             .collect()
+    }
+
+    fn puzzle_slug(&self, slug: &str) -> Option<expr::types::PuzzleId> {
+        self.puzzle_slugs.get(slug).copied()
+    }
+
+    fn round_slug(&self, slug: &str) -> Option<expr::types::RoundId> {
+        self.round_slugs.get(slug).copied()
+    }
+
+    fn round_puzzles(&self, id: expr::types::RoundId) -> Option<Vec<expr::types::PuzzleId>> {
+        self.round_puzzles.get(&id).cloned()
     }
 
     fn game_started(&self) -> bool {
@@ -741,18 +755,65 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         return Ok(vec![]);
     }
 
-    let unlocked = info.iter().filter_map(|r| r.puzzle_id).collect();
+    let game_id = info[0].game_id;
+    let solved = info.iter().filter_map(|r| r.puzzle_id).collect();
+
+    let round_rows = sqlx::query!(
+        "SELECT id, slug
+        FROM rb_round
+        WHERE game_id = $1;",
+        game_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    let puzzle_rows = sqlx::query!(
+        "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE r.game_id = $1;",
+        game_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    let mut round_slugs: HashMap<String, u32> = HashMap::new();
+    for row in round_rows {
+        if let Some(slug) = row.slug {
+            round_slugs.insert(slug, row.id.try_into().unwrap_or(0));
+        }
+    }
+
+    let mut puzzle_slugs: HashMap<String, u32> = HashMap::new();
+    let mut round_puzzles: HashMap<u32, Vec<u32>> = HashMap::new();
+    for row in puzzle_rows {
+        let row_id = row.id;
+        let puzzle_id = row_id.try_into().unwrap_or(0);
+        if let Some(slug) = row.slug {
+            puzzle_slugs.insert(slug, puzzle_id);
+        }
+        if row.round_puzzle_id != Some(row_id) {
+            round_puzzles
+                .entry(row.round_id.try_into().unwrap_or(0))
+                .or_default()
+                .push(puzzle_id);
+        }
+    }
+
     let state = RbPuzzleStates {
-        unlocked,
+        solved,
+        puzzle_slugs,
+        round_slugs,
+        round_puzzles,
         game_started: info[0].state > 0,
     };
 
-    let conds = get_unlock_conds_by_game(&app.db, info[0].game_id).await?;
+    let conds = get_unlock_conds_by_game(&app.db, game_id).await?;
 
     let mut unlocks: Vec<i32> = Vec::new();
 
     for cond in conds.iter() {
-        if !state.is_completed(cond.0.try_into().unwrap_or(0))
+        if !state.is_solved(cond.0.try_into().unwrap_or(0))
             && expr::ast::eval_compiled(&state, &cond.1)
         {
             unlocks.push(cond.0);
@@ -978,6 +1039,7 @@ pub async fn purchase_hint(
 pub struct RbPuzzleAdminData {
     pub id: i32,
     pub game_id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub ptype: i16,
     pub content: String,
@@ -994,6 +1056,7 @@ pub struct RbPuzzleAdminData {
 
 #[derive(Deserialize)]
 pub struct RbPuzzleCreateData {
+    pub slug: Option<String>,
     pub title: String,
     #[serde(default)]
     pub ptype: i16,
@@ -1013,6 +1076,7 @@ pub struct RbPuzzleCreateData {
 
 #[derive(Default, Deserialize)]
 pub struct RbPuzzleUpdateData {
+    pub slug: Option<Option<String>>,
     pub title: Option<String>,
     pub ptype: Option<i16>,
     pub content: Option<String>,
@@ -1040,7 +1104,7 @@ pub async fn admin_list(
     let result = if let Some(game_id) = game_id {
         sqlx::query_as!(
             RbPuzzleAdminData,
-            "SELECT p.id, r.game_id, p.title, p.ptype, p.content, p.content_type,
+            "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
@@ -1054,12 +1118,12 @@ pub async fn admin_list(
     } else {
         sqlx::query_as!(
             RbPuzzleAdminData,
-            "SELECT p.id, r.game_id, p.title, p.ptype, p.content, p.content_type,
+            "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        ORDER BY r.game_id, p.round_id, p.id;"
+        ORDER BY r.game_id, p.round_id, p.id;",
         )
         .fetch_all(pool)
         .await?
@@ -1074,7 +1138,7 @@ pub async fn admin_get(
 ) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
-        "SELECT p.id, r.game_id, p.title, p.ptype, p.content, p.content_type,
+        "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
@@ -1095,16 +1159,17 @@ pub async fn admin_create(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
-            title, ptype, content, content_type, judge, penalty,
+            slug, title, ptype, content, content_type, judge, penalty,
             max_submit, unlock_cond, round_id, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, r.id, $10
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, r.id, $11
         FROM rb_round r
         WHERE r.id = $1
-        RETURNING id, (SELECT game_id FROM rb_round WHERE id = round_id) AS \"game_id!\",
-            title, ptype, content, content_type, judge, penalty,
+        RETURNING id, game_id,
+            slug, title, ptype, content, content_type, judge, penalty,
             max_submit, unlock_cond, round_id, ticket_cooldown, ctime_at;",
         data.round_id,
+        data.slug,
         data.title,
         data.ptype,
         data.content,
@@ -1128,31 +1193,36 @@ pub async fn admin_update(
 ) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
     let max_submit_is_set = data.max_submit.is_some();
     let max_submit = data.max_submit.flatten();
+    let slug_is_set = data.slug.is_some();
+    let slug = data.slug.clone().flatten();
 
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "UPDATE rb_puzzle p
-        SET title = COALESCE($2, p.title),
-            ptype = COALESCE($3, p.ptype),
-            content = COALESCE($4, p.content),
-            content_type = COALESCE($5, p.content_type),
-            judge = COALESCE($6, p.judge),
-            penalty = COALESCE($7, p.penalty),
-            max_submit = CASE WHEN $8 THEN $9 ELSE p.max_submit END,
-            unlock_cond = COALESCE($10, p.unlock_cond),
+        SET slug = CASE WHEN $2 THEN $3 ELSE p.slug END,
+            title = COALESCE($4, p.title),
+            ptype = COALESCE($5, p.ptype),
+            content = COALESCE($6, p.content),
+            content_type = COALESCE($7, p.content_type),
+            judge = COALESCE($8, p.judge),
+            penalty = COALESCE($9, p.penalty),
+            max_submit = CASE WHEN $10 THEN $11 ELSE p.max_submit END,
+            unlock_cond = COALESCE($12, p.unlock_cond),
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $11::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $13::INT
             ), p.round_id),
-            ticket_cooldown = COALESCE($12, p.ticket_cooldown)
+            ticket_cooldown = COALESCE($14, p.ticket_cooldown)
         WHERE p.id = $1
-            AND ($11::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $11::INT
+            AND ($13::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $13::INT
             ))
-        RETURNING p.id, (SELECT game_id FROM rb_round WHERE id = p.round_id) AS \"game_id!\",
-            p.title, p.ptype, p.content, p.content_type,
+        RETURNING p.id, p.game_id,
+            p.slug, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at;",
         puzzle_id,
+        slug_is_set,
+        slug,
         data.title,
         data.ptype,
         data.content,

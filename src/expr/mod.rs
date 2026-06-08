@@ -9,7 +9,10 @@ use crate::expr::{ast::GateExpr, types::PuzzleStates};
 
 pub fn compile_gate_expr(expr: &str) -> Result<GateExpr, String> {
     let tokens = parser::tokenize(expr);
-    let (sexpr, _used) = parser::parse_expr(&tokens).map_err(|e| format!("Parse Error: {e:?}"))?;
+    let (sexpr, used) = parser::parse_expr(&tokens).map_err(|e| format!("Parse Error: {e:?}"))?;
+    if used != tokens.len() {
+        return Err("Parse Error: trailing tokens".to_string());
+    }
     compiler::compile_gate(&sexpr).map_err(|e| format!("Compile Error: {e:?}"))
 }
 
@@ -30,16 +33,38 @@ mod test {
     struct TestState {}
 
     impl PuzzleStates for TestState {
-        fn is_completed(&self, id: super::types::PuzzleId) -> bool {
+        fn is_solved(&self, id: super::types::PuzzleId) -> bool {
             UNLOCKED.contains(&id)
         }
 
-        fn completed_count(&self) -> super::types::CountSize {
-            UNLOCKED.len()
+        fn solved(&self) -> Vec<super::types::PuzzleId> {
+            UNLOCKED.to_vec()
         }
 
-        fn completed(&self) -> Vec<super::types::PuzzleId> {
-            UNLOCKED.to_vec()
+        fn puzzle_slug(&self, slug: &str) -> Option<super::types::PuzzleId> {
+            match slug {
+                "intro" => Some(1),
+                "alpha" => Some(2),
+                "beta" => Some(3),
+                "gamma" => Some(4),
+                _ => None,
+            }
+        }
+
+        fn round_slug(&self, slug: &str) -> Option<super::types::RoundId> {
+            match slug {
+                "round-one" => Some(1),
+                "round-two" => Some(2),
+                _ => None,
+            }
+        }
+
+        fn round_puzzles(&self, id: super::types::RoundId) -> Option<Vec<super::types::PuzzleId>> {
+            match id {
+                1 => Some(vec![1, 2, 3]),
+                2 => Some(vec![4, 5, 6]),
+                _ => None,
+            }
         }
 
         fn game_started(&self) -> bool {
@@ -51,35 +76,35 @@ mod test {
     pub fn test_eval() {
         let state = TestState {};
 
-        let expr = "(and 1 2 3)";
+        let expr = "(and (solved 1) (solved 2) (solved 3))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(or (and 1 2) (and 3))";
+        let expr = "(or (and (solved 1) (solved 2)) (and (solved 3)))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(and (countge (set 1 2 3 4 5) 1))";
+        let expr = "(and (ge (solved-count (puzzles 1 2 3 4 5)) 1))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(or (counteq (set 1 2 3 4 5) 3))";
+        let expr = "(or (eq (solved-count (puzzles 1 2 3 4 5)) 3))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(and (counteq (range 1 3) 3))";
+        let expr = "(and (eq (solved-count (puzzle-range 1 3)) 3))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(or (counteq (range 1 3) 3))";
+        let expr = "(or (eq (solved-count (puzzle-range 1 3)) 3))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(not (counteq (range 4 6) 3))";
+        let expr = "(not (eq (solved-count (puzzle-range 4 6)) 3))";
         let result = eval(&state, expr);
         assert!(result);
 
-        let expr = "(not (counteq (set 4 5 6) 3))";
+        let expr = "(not (eq (solved-count (puzzles 4 5 6)) 3))";
         let result = eval(&state, expr);
         assert!(result);
 
@@ -89,10 +114,22 @@ mod test {
 
         let expr = "
         (or
-          (range 1 3)
-          (set 4 5 6)
+          (any-solved (puzzle-range 1 3))
+          (any-solved (puzzles 4 5 6))
         )
         ";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(ge (solved-count (round 1)) 3)";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(and (solved intro) (all-solved (puzzles intro alpha beta)))";
+        let result = eval(&state, expr);
+        assert!(result);
+
+        let expr = "(ge (solved-count (round round-one)) 3)";
         let result = eval(&state, expr);
         assert!(result);
     }
@@ -100,7 +137,7 @@ mod test {
     #[test]
     pub fn test_eval_complex() {
         let state = TestState {};
-        let expr = "(or (and 1 2) (and 3))";
+        let expr = "(or (and (solved 1) (solved 2)) (and (solved 3)))";
         let result = eval(&state, expr);
         assert!(result);
     }
@@ -108,8 +145,40 @@ mod test {
     #[test]
     pub fn test_eval_failed() {
         let state = TestState {};
-        let expr = "(countge (range 4 40) 1)";
+        let expr = "(ge (solved-count (puzzle-range 4 40)) 1)";
         let result = eval(&state, expr);
         assert!(!result);
+    }
+
+    #[test]
+    pub fn test_bare_number_failed() {
+        assert!(super::compile_gate_expr("1").is_err());
+    }
+
+    #[test]
+    pub fn test_bare_set_failed() {
+        assert!(super::compile_gate_expr("(puzzles 1 2 3)").is_err());
+        assert!(super::compile_gate_expr("(puzzle-range 1 3)").is_err());
+        assert!(super::compile_gate_expr("(round 1)").is_err());
+    }
+
+    #[test]
+    pub fn test_old_names_failed() {
+        assert!(super::compile_gate_expr("(completed 1)").is_err());
+        assert!(super::compile_gate_expr("(all-completed (puzzles 1 2))").is_err());
+        assert!(super::compile_gate_expr("(any-completed (puzzles 1 2))").is_err());
+        assert!(super::compile_gate_expr("(solved-ge (puzzles 1 2) 2)").is_err());
+        assert!(super::compile_gate_expr("(countge (puzzles 1 2) 2)").is_err());
+        assert!(super::compile_gate_expr("(ge (solved-count (set 1 2)) 2)").is_err());
+        assert!(super::compile_gate_expr("(ge (solved-count (range 1 2)) 2)").is_err());
+    }
+
+    #[test]
+    pub fn test_unknown_slug_failed() {
+        let state = TestState {};
+        assert!(!eval(&state, "(solved unknown-puzzle)"));
+        assert!(!eval(&state, "(all-solved (puzzles intro unknown-puzzle))"));
+        assert!(!eval(&state, "(all-solved (round unknown-round))"));
+        assert!(!eval(&state, "(ge (solved-count (round unknown-round)) 1)"));
     }
 }

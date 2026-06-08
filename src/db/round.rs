@@ -277,6 +277,7 @@ pub async fn get_simple_list_for_team(
 #[derive(Serialize)]
 pub struct RbRoundAdminData {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub content: String,
     pub content_type: i16,
@@ -288,6 +289,7 @@ pub struct RbRoundAdminData {
 #[derive(Deserialize)]
 pub struct RbRoundCreateData {
     pub game_id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub content: String,
     #[serde(default)]
@@ -298,6 +300,7 @@ pub struct RbRoundCreateData {
 
 #[derive(Default, Deserialize)]
 pub struct RbRoundUpdateData {
+    pub slug: Option<Option<String>>,
     pub title: Option<String>,
     pub content: Option<String>,
     pub content_type: Option<i16>,
@@ -312,7 +315,7 @@ pub async fn admin_list(
     let result = if let Some(game_id) = game_id {
         sqlx::query_as!(
             RbRoundAdminData,
-            "SELECT id, title, content, content_type, cover, game_id, puzzle
+            "SELECT id, slug, title, content, content_type, cover, game_id, puzzle
         FROM rb_round
         WHERE game_id = $1
         ORDER BY id;",
@@ -323,9 +326,9 @@ pub async fn admin_list(
     } else {
         sqlx::query_as!(
             RbRoundAdminData,
-            "SELECT id, title, content, content_type, cover, game_id, puzzle
+            "SELECT id, slug, title, content, content_type, cover, game_id, puzzle
         FROM rb_round
-        ORDER BY game_id, id;"
+        ORDER BY game_id, id;",
         )
         .fetch_all(pool)
         .await?
@@ -340,7 +343,7 @@ pub async fn admin_get(
 ) -> Result<Option<RbRoundAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundAdminData,
-        "SELECT id, title, content, content_type, cover, game_id, puzzle
+        "SELECT id, slug, title, content, content_type, cover, game_id, puzzle
         FROM rb_round
         WHERE id = $1;",
         round_id
@@ -357,18 +360,19 @@ pub async fn admin_create(
 ) -> Result<Option<RbRoundAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundAdminData,
-        "INSERT INTO rb_round (title, content, content_type, cover, game_id, puzzle)
-        SELECT $2, $3, $4, $5, g.id, checked_puzzle.id
+        "INSERT INTO rb_round (slug, title, content, content_type, cover, game_id, puzzle)
+        SELECT $2, $3, $4, $5, $6, g.id, checked_puzzle.id
         FROM rb_game g
-        LEFT JOIN rb_puzzle checked_puzzle ON checked_puzzle.id = $6::INT
+        LEFT JOIN rb_puzzle checked_puzzle ON checked_puzzle.id = $7::INT
             AND EXISTS (
                 SELECT 1 FROM rb_round puzzle_round
                 WHERE puzzle_round.id = checked_puzzle.round_id
                     AND puzzle_round.game_id = g.id
             )
-        WHERE g.id = $1 AND ($6::INT IS NULL OR checked_puzzle.id IS NOT NULL)
-        RETURNING id, title, content, content_type, cover, game_id, puzzle;",
+        WHERE g.id = $1 AND ($7::INT IS NULL OR checked_puzzle.id IS NOT NULL)
+        RETURNING id, slug, title, content, content_type, cover, game_id, puzzle;",
         data.game_id,
+        data.slug,
         data.title,
         data.content,
         data.content_type,
@@ -390,30 +394,35 @@ pub async fn admin_update(
     let cover = data.cover.clone().flatten();
     let puzzle_is_set = data.puzzle.is_some();
     let puzzle = data.puzzle.flatten();
+    let slug_is_set = data.slug.is_some();
+    let slug = data.slug.clone().flatten();
 
     let result = sqlx::query_as!(
         RbRoundAdminData,
         "UPDATE rb_round r
-        SET title = COALESCE($2, r.title),
-            content = COALESCE($3, r.content),
-            content_type = COALESCE($4, r.content_type),
-            cover = CASE WHEN $5 THEN $6 ELSE r.cover END,
+        SET slug = CASE WHEN $2 THEN $3 ELSE r.slug END,
+            title = COALESCE($4, r.title),
+            content = COALESCE($5, r.content),
+            content_type = COALESCE($6, r.content_type),
+            cover = CASE WHEN $7 THEN $8 ELSE r.cover END,
             puzzle = CASE
-                WHEN $7 AND $8::INT IS NULL THEN NULL
-                WHEN $7 THEN $8::INT
+                WHEN $9 AND $10::INT IS NULL THEN NULL
+                WHEN $9 THEN $10::INT
                 ELSE r.puzzle
             END
         WHERE r.id = $1
             AND (
-                NOT $7 OR $8::INT IS NULL OR EXISTS (
+                NOT $9 OR $10::INT IS NULL OR EXISTS (
                     SELECT 1
                     FROM rb_puzzle p
                     JOIN rb_round pr ON pr.id = p.round_id
-                    WHERE p.id = $8::INT AND pr.game_id = r.game_id
+                    WHERE p.id = $10::INT AND pr.game_id = r.game_id
                 )
             )
-        RETURNING id, title, content, content_type, cover, game_id, puzzle;",
+        RETURNING id, slug, title, content, content_type, cover, game_id, puzzle;",
         round_id,
+        slug_is_set,
+        slug,
         data.title,
         data.content,
         data.content_type,

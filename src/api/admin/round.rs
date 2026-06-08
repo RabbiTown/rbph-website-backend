@@ -10,9 +10,17 @@ use crate::{
         self,
         round::{RbRoundAdminData, RbRoundCreateData, RbRoundUpdateData},
     },
-    error::RbError,
+    error::{RbError, RbInternalError},
     model::game::RbContentType,
 };
+
+fn is_constraint_error(err: &RbInternalError) -> bool {
+    matches!(
+        err,
+        RbInternalError::Sql(sqlx::Error::Database(db_err))
+            if db_err.code().is_some_and(|code| code == "23505" || code == "23514")
+    )
+}
 
 #[derive(Deserialize)]
 struct RoundPathInfo {
@@ -56,8 +64,21 @@ fn validate_content_type(value: i16) -> bool {
     )
 }
 
+fn validate_slug(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn validate_slug_option(value: &Option<String>) -> bool {
+    value.as_deref().is_none_or(validate_slug)
+}
+
 fn validate_create(data: &RbRoundCreateData) -> bool {
-    validate_content_type(data.content_type)
+    validate_content_type(data.content_type) && validate_slug_option(&data.slug)
 }
 
 fn validate_update(data: &RbRoundUpdateData) -> bool {
@@ -67,10 +88,18 @@ fn validate_update(data: &RbRoundUpdateData) -> bool {
         return false;
     }
 
+    if let Some(slug) = &data.slug
+        && !validate_slug_option(slug)
+    {
+        return false;
+    }
+
     true
 }
 
-async fn invalidate_round_cache(app: &AppState, round_id: i32) {
+async fn invalidate_round_cache(app: &AppState, game_id: i32, round_id: i32) {
+    db::puzzle::invalidate_admin_cache(game_id, 0);
+
     if let Ok(mut conn) = app.kv.get().await {
         let _: Result<(), _> = conn.del(format!("round:{round_id}:show")).await;
     }
@@ -109,13 +138,21 @@ async fn append(
         return RbError::bad_req(RoundAdminResult::Invalid.into()).http_err();
     }
 
-    let round = db::round::admin_create(&app.db, &req).await?;
+    let round = match db::round::admin_create(&app.db, &req).await {
+        Ok(round) => round,
+        Err(err) => {
+            if is_constraint_error(&err) {
+                return RbError::bad_req(RoundAdminResult::Invalid.into()).http_err();
+            }
+            return Err(err.into());
+        }
+    };
     let Some(round) = round else {
         return RbError::not_found()
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_round_cache(&app, round.id).await;
+    invalidate_round_cache(&app, round.game_id, round.id).await;
 
     Ok(HttpResponse::Ok().json(RoundAdminResponse {
         code: RoundAdminResult::Ok,
@@ -132,13 +169,21 @@ async fn edit(
         return RbError::bad_req(RoundAdminResult::Invalid.into()).http_err();
     }
 
-    let round = db::round::admin_update(&app.db, path.round_id, &req).await?;
+    let round = match db::round::admin_update(&app.db, path.round_id, &req).await {
+        Ok(round) => round,
+        Err(err) => {
+            if is_constraint_error(&err) {
+                return RbError::bad_req(RoundAdminResult::Invalid.into()).http_err();
+            }
+            return Err(err.into());
+        }
+    };
     let Some(round) = round else {
         return RbError::not_found()
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_round_cache(&app, path.round_id).await;
+    invalidate_round_cache(&app, round.game_id, path.round_id).await;
 
     Ok(HttpResponse::Ok().json(RoundAdminResponse {
         code: RoundAdminResult::Ok,
@@ -147,13 +192,20 @@ async fn edit(
 }
 
 async fn delete(path: web::Path<RoundPathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let round = db::round::admin_get(&app.db, path.round_id).await?;
+    let Some(round) = round else {
+        return RbError::not_found()
+            .code(RoundAdminResult::NotFound.into())
+            .http_err();
+    };
+
     let deleted = db::round::admin_delete(&app.db, path.round_id).await?;
     if !deleted {
         return RbError::not_found()
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     }
-    invalidate_round_cache(&app, path.round_id).await;
+    invalidate_round_cache(&app, round.game_id, path.round_id).await;
 
     Ok(HttpResponse::Ok().json(RoundAdminDeleteResponse {
         code: RoundAdminResult::Ok,

@@ -36,7 +36,7 @@ VALUES (3, '只说明书', 1, E'<div class="text-center">\n\n*不讲暗话，只
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
 VALUES (4, '最终谜题', 1, E'<div class="text-center">\n\n*最终谜题*\n\n</div><hr>\n\n题目内容略。', 0,
         '[{"type":"exact","text":"FINAL ANSWER","action":"finish_game"}]',
-        '[{"type":1,"args":[10]}]', 20, '(countge (set 2 3) 2)', 2);
+        '[{"type":1,"args":[10]}]', 20, '(ge (solved-count (round 1)) 2)', 2);
 
 SELECT setval('rb_puzzle_id_seq', 100);
 

@@ -1,0 +1,113 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_puzzle p\n        SET slug = CASE WHEN $2 THEN $3 ELSE p.slug END,\n            title = COALESCE($4, p.title),\n            ptype = COALESCE($5, p.ptype),\n            content = COALESCE($6, p.content),\n            content_type = COALESCE($7, p.content_type),\n            judge = COALESCE($8, p.judge),\n            penalty = COALESCE($9, p.penalty),\n            max_submit = CASE WHEN $10 THEN $11 ELSE p.max_submit END,\n            unlock_cond = COALESCE($12, p.unlock_cond),\n            round_id = COALESCE((\n                SELECT r.id FROM rb_round r WHERE r.id = $13::INT\n            ), p.round_id),\n            ticket_cooldown = COALESCE($14, p.ticket_cooldown)\n        WHERE p.id = $1\n            AND ($13::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_round target_round WHERE target_round.id = $13::INT\n            ))\n        RETURNING p.id, p.game_id,\n            p.slug, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_cooldown, p.ctime_at;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "ptype",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "penalty",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "max_submit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "unlock_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "ticket_cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bool",
+        "Varchar",
+        "Varchar",
+        "Int2",
+        "Text",
+        "Int2",
+        "Jsonb",
+        "Jsonb",
+        "Bool",
+        "Int4",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7430656e2fc11b3df6c3da49b84c159e9f7fcf871d231ddfd74ff20a4dbe71dd"
+}

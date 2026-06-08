@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_round (slug, title, content, content_type, cover, game_id, puzzle)\n        SELECT $2, $3, $4, $5, $6, g.id, checked_puzzle.id\n        FROM rb_game g\n        LEFT JOIN rb_puzzle checked_puzzle ON checked_puzzle.id = $7::INT\n            AND EXISTS (\n                SELECT 1 FROM rb_round puzzle_round\n                WHERE puzzle_round.id = checked_puzzle.round_id\n                    AND puzzle_round.game_id = g.id\n            )\n        WHERE g.id = $1 AND ($7::INT IS NULL OR checked_puzzle.id IS NOT NULL)\n        RETURNING id, slug, title, content, content_type, cover, game_id, puzzle;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "puzzle",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "e9c40d9b450028beb2a0628d580d4642eb921d0fe3c6726b7f994905bd84bdc1"
+}

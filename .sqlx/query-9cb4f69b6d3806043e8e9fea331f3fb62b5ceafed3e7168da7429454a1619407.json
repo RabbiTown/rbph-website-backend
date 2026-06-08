@@ -1,0 +1,110 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle (\n            slug, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, round_id, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, r.id, $11\n        FROM rb_round r\n        WHERE r.id = $1\n        RETURNING id, game_id,\n            slug, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, round_id, ticket_cooldown, ctime_at;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "ptype",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "penalty",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "max_submit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "unlock_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "ticket_cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Int2",
+        "Text",
+        "Int2",
+        "Jsonb",
+        "Jsonb",
+        "Int4",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9cb4f69b6d3806043e8e9fea331f3fb62b5ceafed3e7168da7429454a1619407"
+}

@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE p.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "ptype",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "penalty",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "max_submit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "unlock_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "ticket_cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "049578248ce9cd26e7a71666d33cd47e614fa85c1286c16157fe03e5f3187d4c"
+}

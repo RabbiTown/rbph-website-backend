@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, title, round_id FROM rb_puzzle WHERE id = ANY($1)",
+  "query": "SELECT p.id, p.title, p.round_id\n                FROM rb_puzzle p\n                JOIN rb_round r ON r.id = p.round_id\n                WHERE p.id = ANY($1)\n                ORDER BY r.sort, r.id, p.sort, p.id",
   "describe": {
     "columns": [
       {
@@ -30,5 +30,5 @@
       false
     ]
   },
-  "hash": "9035f959b6761e14abbecd33120608b59dea8714b5935ac0a38c1165d423344d"
+  "hash": "84d7105d9ced0d102452cb1254f96b3be38efd33123bec3cc1b003fb80252427"
 }

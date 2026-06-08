@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_round r\n        SET slug = CASE WHEN $2 THEN $3 ELSE r.slug END,\n            sort = COALESCE($4, r.sort),\n            title = COALESCE($5, r.title),\n            content = COALESCE($6, r.content),\n            content_type = COALESCE($7, r.content_type),\n            cover = CASE WHEN $8 THEN $9 ELSE r.cover END,\n            puzzle = CASE\n                WHEN $10 AND $11::INT IS NULL THEN NULL\n                WHEN $10 THEN $11::INT\n                ELSE r.puzzle\n            END\n        WHERE r.id = $1\n            AND (\n                NOT $10 OR $11::INT IS NULL OR EXISTS (\n                    SELECT 1\n                    FROM rb_puzzle p\n                    JOIN rb_round pr ON pr.id = p.round_id\n                    WHERE p.id = $11::INT AND pr.game_id = r.game_id\n                )\n            )\n        RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "puzzle",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bool",
+        "Varchar",
+        "Int4",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Bool",
+        "Text",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "1d1760f7ccf65325577c7707325323f0037c282f6cb30c27d5bc1a7f3dce0a6d"
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        ORDER BY r.game_id, p.round_id, p.id;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        ORDER BY r.game_id, r.sort, r.id, p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -20,56 +20,61 @@
       },
       {
         "ordinal": 3,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
         "name": "title",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "ptype",
         "type_info": "Int2"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "content_type",
         "type_info": "Int2"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "judge",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "penalty",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "max_submit",
         "type_info": "Int4"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "unlock_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -87,6 +92,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -94,5 +100,5 @@
       false
     ]
   },
-  "hash": "929bd509d2d7e878df3d9469378528a71073f01384163ec2fbbafff522b86461"
+  "hash": "c836a97b6cecc42408383ab85f26212d9721fba98baadc45a797fd7ca3492b00"
 }

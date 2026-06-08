@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, title, content, content_type, cover, game_id, puzzle\n        FROM rb_round\n        ORDER BY game_id, id;",
+  "query": "SELECT id, slug, sort, title, content, content_type, cover, game_id, puzzle\n        FROM rb_round\n        WHERE game_id = $1\n        ORDER BY sort, id;",
   "describe": {
     "columns": [
       {
@@ -15,41 +15,49 @@
       },
       {
         "ordinal": 2,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
         "name": "title",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "content_type",
         "type_info": "Int2"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "cover",
         "type_info": "Text"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "game_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "puzzle",
         "type_info": "Int4"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Int4"
+      ]
     },
     "nullable": [
       false,
       true,
+      false,
       false,
       false,
       false,
@@ -58,5 +66,5 @@
       true
     ]
   },
-  "hash": "13ddbae3e70bad7a00f0428a7b1bdc877aeb895ef2e2c2bb7775bf02b0d1ea62"
+  "hash": "649c457540c2b1ab9682f1dd8b3ea7c2816d7f5d77314e3efb3e482dacd4519f"
 }

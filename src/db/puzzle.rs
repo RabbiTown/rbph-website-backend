@@ -355,7 +355,8 @@ pub async fn get_unlock_conds_by_game(
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         JOIN rb_game g ON g.id = r.game_id
-        WHERE g.id = $1;",
+        WHERE g.id = $1
+        ORDER BY r.sort, r.id, p.sort, p.id;",
         game_id
     )
     .fetch_all(pool)
@@ -771,7 +772,8 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        WHERE r.game_id = $1;",
+        WHERE r.game_id = $1
+        ORDER BY r.sort, r.id, p.sort, p.id;",
         game_id
     )
     .fetch_all(&app.db)
@@ -1040,6 +1042,7 @@ pub struct RbPuzzleAdminData {
     pub id: i32,
     pub game_id: i32,
     pub slug: Option<String>,
+    pub sort: i32,
     pub title: String,
     pub ptype: i16,
     pub content: String,
@@ -1057,6 +1060,8 @@ pub struct RbPuzzleAdminData {
 #[derive(Deserialize)]
 pub struct RbPuzzleCreateData {
     pub slug: Option<String>,
+    #[serde(default)]
+    pub sort: i32,
     pub title: String,
     #[serde(default)]
     pub ptype: i16,
@@ -1077,6 +1082,7 @@ pub struct RbPuzzleCreateData {
 #[derive(Default, Deserialize)]
 pub struct RbPuzzleUpdateData {
     pub slug: Option<Option<String>>,
+    pub sort: Option<i32>,
     pub title: Option<String>,
     pub ptype: Option<i16>,
     pub content: Option<String>,
@@ -1104,13 +1110,13 @@ pub async fn admin_list(
     let result = if let Some(game_id) = game_id {
         sqlx::query_as!(
             RbPuzzleAdminData,
-            "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,
+            "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         WHERE r.game_id = $1
-        ORDER BY p.round_id, p.id;",
+        ORDER BY r.sort, r.id, p.sort, p.id;",
             game_id
         )
         .fetch_all(pool)
@@ -1118,12 +1124,12 @@ pub async fn admin_list(
     } else {
         sqlx::query_as!(
             RbPuzzleAdminData,
-            "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,
+            "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        ORDER BY r.game_id, p.round_id, p.id;",
+        ORDER BY r.game_id, r.sort, r.id, p.sort, p.id;",
         )
         .fetch_all(pool)
         .await?
@@ -1138,7 +1144,7 @@ pub async fn admin_get(
 ) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
-        "SELECT p.id, r.game_id, p.slug, p.title, p.ptype, p.content, p.content_type,
+        "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
@@ -1159,17 +1165,18 @@ pub async fn admin_create(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
-            slug, title, ptype, content, content_type, judge, penalty,
+            slug, sort, title, ptype, content, content_type, judge, penalty,
             max_submit, unlock_cond, round_id, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, r.id, $11
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, r.id, $12
         FROM rb_round r
         WHERE r.id = $1
         RETURNING id, game_id,
-            slug, title, ptype, content, content_type, judge, penalty,
+            slug, sort, title, ptype, content, content_type, judge, penalty,
             max_submit, unlock_cond, round_id, ticket_cooldown, ctime_at;",
         data.round_id,
         data.slug,
+        data.sort,
         data.title,
         data.ptype,
         data.content,
@@ -1200,29 +1207,31 @@ pub async fn admin_update(
         RbPuzzleAdminData,
         "UPDATE rb_puzzle p
         SET slug = CASE WHEN $2 THEN $3 ELSE p.slug END,
-            title = COALESCE($4, p.title),
-            ptype = COALESCE($5, p.ptype),
-            content = COALESCE($6, p.content),
-            content_type = COALESCE($7, p.content_type),
-            judge = COALESCE($8, p.judge),
-            penalty = COALESCE($9, p.penalty),
-            max_submit = CASE WHEN $10 THEN $11 ELSE p.max_submit END,
-            unlock_cond = COALESCE($12, p.unlock_cond),
+            sort = COALESCE($4, p.sort),
+            title = COALESCE($5, p.title),
+            ptype = COALESCE($6, p.ptype),
+            content = COALESCE($7, p.content),
+            content_type = COALESCE($8, p.content_type),
+            judge = COALESCE($9, p.judge),
+            penalty = COALESCE($10, p.penalty),
+            max_submit = CASE WHEN $11 THEN $12 ELSE p.max_submit END,
+            unlock_cond = COALESCE($13, p.unlock_cond),
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $13::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $14::INT
             ), p.round_id),
-            ticket_cooldown = COALESCE($14, p.ticket_cooldown)
+            ticket_cooldown = COALESCE($15, p.ticket_cooldown)
         WHERE p.id = $1
-            AND ($13::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $13::INT
+            AND ($14::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $14::INT
             ))
         RETURNING p.id, p.game_id,
-            p.slug, p.title, p.ptype, p.content, p.content_type,
+            p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
             p.ticket_cooldown, p.ctime_at;",
         puzzle_id,
         slug_is_set,
         slug,
+        data.sort,
         data.title,
         data.ptype,
         data.content,

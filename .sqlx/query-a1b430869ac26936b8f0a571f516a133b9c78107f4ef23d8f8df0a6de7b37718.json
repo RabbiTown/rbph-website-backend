@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.unlock_cond\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_game g ON g.id = r.game_id\n        WHERE g.id = $1;",
+  "query": "SELECT p.id, p.unlock_cond\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_game g ON g.id = r.game_id\n        WHERE g.id = $1\n        ORDER BY r.sort, r.id, p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "7fb4430ccccf5d7ab2c69fa838d5e024b3ce49c7d9527ac9745388a4b7589e2c"
+  "hash": "a1b430869ac26936b8f0a571f516a133b9c78107f4ef23d8f8df0a6de7b37718"
 }

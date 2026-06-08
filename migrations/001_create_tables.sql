@@ -95,6 +95,7 @@ EXECUTE FUNCTION rb_team_member_set_game_id();
 CREATE TABLE rb_round (
     id              SERIAL PRIMARY KEY,
     slug            VARCHAR(120),
+    sort            INT NOT NULL DEFAULT 0,
     title           VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL,
     content_type    SMALLINT NOT NULL DEFAULT 0,
@@ -116,6 +117,7 @@ CHECK (slug IS NULL OR slug ~ '^[A-Za-z_][A-Za-z0-9_-]*$');
 CREATE TABLE rb_puzzle (
     id              SERIAL PRIMARY KEY,
     slug            VARCHAR(120),
+    sort            INT NOT NULL DEFAULT 0,
     title           VARCHAR(120) NOT NULL,
     ptype           SMALLINT NOT NULL DEFAULT 0,
     content         TEXT NOT NULL,

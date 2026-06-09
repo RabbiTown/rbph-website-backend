@@ -23,6 +23,34 @@ pub async fn get_round_game(
     Ok(result)
 }
 
+pub async fn get_round_id_by_game_ref(
+    db_pool: &DbPool,
+    game_id: i32,
+    round_ref: &str,
+) -> Result<Option<i32>, RbInternalError> {
+    let result = if let Ok(round_id) = round_ref.parse::<i32>() {
+        sqlx::query_scalar!(
+            "SELECT id FROM rb_round
+            WHERE game_id = $1 AND id = $2;",
+            game_id,
+            round_id
+        )
+        .fetch_optional(db_pool)
+        .await?
+    } else {
+        sqlx::query_scalar!(
+            "SELECT id FROM rb_round
+            WHERE game_id = $1 AND slug = $2;",
+            game_id,
+            round_ref
+        )
+        .fetch_optional(db_pool)
+        .await?
+    };
+
+    Ok(result)
+}
+
 pub async fn get_round_state(
     db_pool: &DbPool,
     team_id: i32,
@@ -77,6 +105,7 @@ pub async fn get_round_user_info(
 #[derive(Serialize)]
 pub struct RbRoundShowData {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub content: String,
     pub content_type: RbContentType,
@@ -91,7 +120,7 @@ pub async fn get_info_show(
 ) -> Result<Option<RbRoundShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundShowData,
-        "SELECT id, title, content, content_type, cover, game_id, puzzle
+        "SELECT id, slug, title, content, content_type, cover, game_id, puzzle
         FROM rb_round
         WHERE id = $1",
         round_id
@@ -134,6 +163,7 @@ pub async fn get_info_show_str(
 #[derive(Serialize)]
 pub struct RbPuzzleSimpleData {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub state: RbTeamPuzzleState,
     pub answer: Option<String>,
@@ -154,7 +184,7 @@ pub async fn get_state_for_team(
 ) -> Result<RbRoundTeamStateShowData, RbInternalError> {
     let puzzles = sqlx::query_as!(
         RbPuzzleSimpleData,
-        "SELECT p.id, p.title, tp.state AS state,
+        "SELECT p.id, p.slug, p.title, tp.state AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
         FROM rb_puzzle p
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
@@ -164,7 +194,7 @@ pub async fn get_state_for_team(
             AND s.real_answer IS NOT NULL
         WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.state >= 0
             AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)
-        GROUP BY p.id, p.title, p.sort, tp.state
+        GROUP BY p.id, p.slug, p.title, p.sort, tp.state
         ORDER BY p.sort, p.id;",
         round_id,
         team_id
@@ -247,6 +277,7 @@ pub async fn get_info_for_team_str(
 #[derive(Serialize)]
 pub struct RbRoundSimpleData {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
 }
 
@@ -257,7 +288,7 @@ pub async fn get_simple_list_for_team(
 ) -> Result<Vec<RbRoundSimpleData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundSimpleData,
-        "SELECT r.id, r.title
+        "SELECT r.id, r.slug, r.title
         FROM rb_round r
         WHERE r.game_id = $1
         AND EXISTS (

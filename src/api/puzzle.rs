@@ -104,7 +104,7 @@ async fn judge_puzzle(
         } => {
             let unlock_rows = sqlx::query_as!(
                 PuzzleUnlockInfo,
-                "SELECT p.id, p.title, p.round_id
+                "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
                 WHERE p.id = ANY($1)

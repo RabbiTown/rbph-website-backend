@@ -13,6 +13,7 @@ pub struct RbAnnouncementShowData {
     pub is_pinned: bool,
     pub game_id: Option<i32>,
     pub puzzle_id: Option<i32>,
+    pub puzzle_slug: Option<String>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub utime_at: OffsetDateTime,
 }
@@ -24,8 +25,11 @@ pub async fn list_all_for_public(
     let result = sqlx::query_as!(
         RbAnnouncementShowData,
         "SELECT a.id, a.title, a.content, a.content_type,
-                a.is_pinned, a.game_id, a.puzzle_id, a.utime_at
+                a.is_pinned, COALESCE(a.game_id, r.game_id) AS game_id, a.puzzle_id,
+                p.slug AS puzzle_slug, a.utime_at
         FROM rb_announcement a
+        LEFT JOIN rb_puzzle p ON p.id = a.puzzle_id
+        LEFT JOIN rb_round r ON r.id = p.round_id
         WHERE a.is_shown
             AND (a.game_id IS NULL OR a.game_id = $1)
             AND a.puzzle_id IS NULL
@@ -45,9 +49,12 @@ pub async fn list_all_for_team(
     let result = sqlx::query_as!(
         RbAnnouncementShowData,
         "SELECT a.id, a.title, a.content, a.content_type,
-                a.is_pinned, a.game_id, a.puzzle_id, a.utime_at
+                a.is_pinned, COALESCE(a.game_id, r.game_id) AS game_id, a.puzzle_id,
+                p.slug AS puzzle_slug, a.utime_at
         FROM rb_announcement a
         JOIN rb_team t ON t.id = $1
+        LEFT JOIN rb_puzzle p ON p.id = a.puzzle_id
+        LEFT JOIN rb_round r ON r.id = p.round_id
         WHERE a.is_shown
             AND (a.game_id IS NULL OR a.game_id = t.game_id)
             AND (a.puzzle_id IS NULL OR EXISTS (

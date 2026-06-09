@@ -236,8 +236,10 @@ pub struct PuzzleHintUnlockedSync {
 #[derive(Clone, Serialize)]
 pub struct PuzzleUnlockInfo {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub round_id: i32,
+    pub round_slug: Option<String>,
 }
 
 pub struct WsSession {

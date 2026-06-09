@@ -67,6 +67,7 @@ pub struct TicketAggreInfoTeam {
 #[derive(Serialize)]
 pub struct TicketAggreInfoPuzzle {
     id: i32,
+    slug: Option<String>,
     title: String,
     state: RbTeamPuzzleState,
     round: RbRoundSimpleData,
@@ -631,8 +632,8 @@ pub async fn get_ticket_summary(
         )
         SELECT tk.state,
                 t.id AS t_id, t.name AS t_name, t.state AS t_state, t.game_id AS g_id,
-                p.id AS \"p_id?\", p.title AS \"p_title?\", tp.state AS \"p_state?\",
-                r.id AS \"r_id?\", r.title AS \"r_title?\",
+                p.id AS \"p_id?\", p.slug AS \"p_slug?\", p.title AS \"p_title?\", tp.state AS \"p_state?\",
+                r.id AS \"r_id?\", r.slug AS \"r_slug?\", r.title AS \"r_title?\",
                 stats.msg_count, stats.last_at,
                 last_msg.sender_type AS \"last_by?\"
         FROM rb_ticket tk
@@ -667,7 +668,7 @@ pub async fn get_ticket_summary(
             state: RbTeamState::from_primitive(x.t_state),
             currency,
         }),
-        puzzle: make_puzzle(x.p_id, x.p_title, x.p_state, x.r_id, x.r_title),
+        puzzle: make_puzzle(x.p_id, x.p_slug, x.p_title, x.p_state, x.r_id, x.r_slug, x.r_title),
         msg_count: x.msg_count,
         last_at: x.last_at,
         last_by: x.last_by.map(RbTicketSenderType::from_primitive),
@@ -712,19 +713,23 @@ pub async fn get_ticket_thread(
 
 fn make_puzzle(
     id: Option<i32>,
+    slug: Option<String>,
     title: Option<String>,
     state: Option<i16>,
     round_id: Option<i32>,
+    round_slug: Option<String>,
     round_title: Option<String>,
 ) -> Option<TicketAggreInfoPuzzle> {
     match (id, title, state, round_id, round_title) {
         (Some(id), Some(title), Some(state), Some(round_id), Some(round_title)) => {
             Some(TicketAggreInfoPuzzle {
                 id,
+                slug,
                 title,
                 state: RbTeamPuzzleState::from_primitive(state),
                 round: RbRoundSimpleData {
                     id: round_id,
+                    slug: round_slug,
                     title: round_title,
                 },
             })

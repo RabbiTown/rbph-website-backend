@@ -43,6 +43,34 @@ pub async fn get_puzzle_game(
     Ok(result)
 }
 
+pub async fn get_puzzle_id_by_game_ref(
+    db_pool: &DbPool,
+    game_id: i32,
+    puzzle_ref: &str,
+) -> Result<Option<i32>, RbInternalError> {
+    let result = if let Ok(puzzle_id) = puzzle_ref.parse::<i32>() {
+        sqlx::query_scalar!(
+            "SELECT id FROM rb_puzzle
+            WHERE game_id = $1 AND id = $2;",
+            game_id,
+            puzzle_id
+        )
+        .fetch_optional(db_pool)
+        .await?
+    } else {
+        sqlx::query_scalar!(
+            "SELECT id FROM rb_puzzle
+            WHERE game_id = $1 AND slug = $2;",
+            game_id,
+            puzzle_ref
+        )
+        .fetch_optional(db_pool)
+        .await?
+    };
+
+    Ok(result)
+}
+
 pub async fn get_hint_puzzle(
     db_pool: &DbPool,
     _kv_pool: &KvPool,
@@ -122,6 +150,7 @@ pub async fn get_hint_user_info(
 #[derive(FromRow, Serialize)]
 pub struct RbPuzzleShowRoundData {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
 }
 
@@ -131,6 +160,9 @@ pub struct RbPuzzleShowAnnouncementData {
     pub title: String,
     pub content: String,
     pub content_type: RbContentType,
+    pub game_id: Option<i32>,
+    pub puzzle_id: Option<i32>,
+    pub puzzle_slug: Option<String>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub utime_at: OffsetDateTime,
 }
@@ -138,6 +170,7 @@ pub struct RbPuzzleShowAnnouncementData {
 #[derive(FromRow, Serialize)]
 pub struct RbPuzzleShowData {
     pub id: i32,
+    pub slug: Option<String>,
     pub title: String,
     pub ptype: RbPuzzleType,
     pub content: String,
@@ -152,8 +185,8 @@ pub async fn get_puzzle_show(
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
     let result = sqlx::query!(
-        "SELECT p.id, p.title, p.ptype, p.content, p.content_type,
-                p.round_id, r.title AS round_title, r.game_id
+        "SELECT p.id, p.slug, p.title, p.ptype, p.content, p.content_type,
+                p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id
         WHERE p.id = $1;",
@@ -164,9 +197,12 @@ pub async fn get_puzzle_show(
 
     let anmts = sqlx::query_as!(
         RbPuzzleShowAnnouncementData,
-        "SELECT id, title, content, content_type, utime_at
-        FROM rb_announcement
-        WHERE puzzle_id = $1;",
+        "SELECT a.id, a.title, a.content, a.content_type,
+            r.game_id AS game_id, a.puzzle_id, p.slug AS puzzle_slug, a.utime_at
+        FROM rb_announcement a
+        JOIN rb_puzzle p ON p.id = a.puzzle_id
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE a.puzzle_id = $1;",
         puzzle_id
     )
     .fetch_all(db_pool)
@@ -174,12 +210,14 @@ pub async fn get_puzzle_show(
 
     Ok(result.map(|x| RbPuzzleShowData {
         id: x.id,
+        slug: x.slug,
         title: x.title,
         ptype: x.ptype.into(),
         content: x.content,
         content_type: x.content_type.into(),
         round: RbPuzzleShowRoundData {
             id: x.round_id,
+            slug: x.round_slug,
             title: x.round_title,
         },
         game_id: x.game_id,

@@ -30,6 +30,18 @@ pub struct GamePathInfo {
     game_id: i32,
 }
 
+#[derive(Deserialize)]
+struct GamePuzzlePathInfo {
+    game_id: i32,
+    puzzle_ref: String,
+}
+
+#[derive(Deserialize)]
+struct GameRoundPathInfo {
+    game_id: i32,
+    round_ref: String,
+}
+
 async fn get_info(info: web::Path<GamePathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::game::get_by_id(&app.db, info.game_id).await?;
     if result.is_none() {
@@ -37,6 +49,74 @@ async fn get_info(info: web::Path<GamePathInfo>, app: web::Data<AppState>) -> Re
     }
 
     Ok(HttpResponse::Ok().json(result))
+}
+
+async fn get_puzzle(
+    path: web::Path<GamePuzzlePathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let puzzle_id =
+        db::puzzle::get_puzzle_id_by_game_ref(&app.db, path.game_id, &path.puzzle_ref).await?;
+    let Some(puzzle_id) = puzzle_id else {
+        return RbError::not_found().http_err();
+    };
+
+    if db::puzzle::get_puzzle_user_info(&app.db, user.uid, puzzle_id)
+        .await?
+        .is_none()
+    {
+        return RbError::not_found().http_err();
+    }
+
+    let result = db::puzzle::get_puzzle_show_str_for_team(
+        &app.db,
+        &app.kv,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
+        puzzle_id,
+    )
+    .await?;
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
+
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::json())
+        .body(result))
+}
+
+async fn get_round(
+    path: web::Path<GameRoundPathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let round_id =
+        db::round::get_round_id_by_game_ref(&app.db, path.game_id, &path.round_ref).await?;
+    let Some(round_id) = round_id else {
+        return RbError::not_found().http_err();
+    };
+
+    if db::round::get_round_user_info(&app.db, user.uid, round_id)
+        .await?
+        .is_none()
+    {
+        return RbError::not_found().http_err();
+    }
+
+    let result = db::round::get_info_for_team_str(
+        &app.db,
+        &app.kv,
+        round_id,
+        user.req_team_id()?.ok_or(RbError::forbid())?,
+    )
+    .await?;
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
+
+    Ok(HttpResponse::Ok()
+        .content_type(ContentType::json())
+        .body(result))
 }
 
 #[derive(Serialize)]
@@ -189,6 +269,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                     )
                     .route("/info", web::get().to(get_aggre_info))
                     .route("/rounds", web::get().to(get_rounds))
+                    .route("/rounds/{round_ref}", web::get().to(get_round))
+                    .route("/puzzles/{puzzle_ref}", web::get().to(get_puzzle))
                     .route("/leaderboard", web::get().to(get_leaderboard))
                     .default_service(web::route().to(error_handler)),
             )

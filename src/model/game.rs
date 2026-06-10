@@ -299,7 +299,6 @@ impl RbJudgeAction {
 impl From<&str> for RbJudgeAction {
     fn from(s: &str) -> Self {
         match s {
-            "pending" => RbJudgeAction::Pending,
             "fail" => RbJudgeAction::Fail,
             "correct" => RbJudgeAction::Correct,
             "milestone" => RbJudgeAction::Milestone,

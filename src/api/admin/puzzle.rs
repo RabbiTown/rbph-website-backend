@@ -12,7 +12,7 @@ use crate::{
     },
     error::{RbError, RbInternalError},
     expr,
-    model::game::{RbContentType, RbPuzzleType},
+    model::game::{RbContentType, RbPuzzlePenaltyType, RbPuzzleType},
 };
 
 fn is_constraint_error(err: &RbInternalError) -> bool {
@@ -31,6 +31,13 @@ struct PuzzlePathInfo {
 #[derive(Deserialize)]
 struct PuzzleListQuery {
     game_id: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct PenaltyRule {
+    #[serde(rename = "type")]
+    rtype: RbPuzzlePenaltyType,
+    args: Vec<i32>,
 }
 
 #[repr(i32)]
@@ -60,6 +67,24 @@ struct PuzzleAdminDeleteResponse {
 
 fn validate_json_shape(data: &RbPuzzleCreateData) -> bool {
     data.judge.is_object() || data.judge.is_array()
+}
+
+fn validate_judge_action(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => items.iter().all(validate_judge_action),
+        serde_json::Value::Object(map) => {
+            if map
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| action == "pending")
+            {
+                return false;
+            }
+
+            map.values().all(validate_judge_action)
+        }
+        _ => true,
+    }
 }
 
 fn validate_ptype(value: i16) -> bool {
@@ -101,6 +126,7 @@ fn validate_create(data: &RbPuzzleCreateData) -> bool {
         && data.max_submit.is_none_or(|value| value >= 0)
         && validate_unlock_cond(&data.unlock_cond)
         && validate_json_shape(data)
+        && validate_judge_action(&data.judge)
         && data.penalty.is_array()
 }
 
@@ -136,7 +162,7 @@ fn validate_update(data: &RbPuzzleUpdateData) -> bool {
     }
 
     if let Some(judge) = &data.judge
-        && !(judge.is_object() || judge.is_array())
+        && (!(judge.is_object() || judge.is_array()) || !validate_judge_action(judge))
     {
         return false;
     }
@@ -154,6 +180,50 @@ fn validate_update(data: &RbPuzzleUpdateData) -> bool {
     }
 
     true
+}
+
+async fn validate_penalty_currency(
+    app: &AppState,
+    game_id: i32,
+    penalty: &serde_json::Value,
+) -> Result<bool, RbInternalError> {
+    let rules: Vec<PenaltyRule> = match serde_json::from_value(penalty.clone()) {
+        Ok(rules) => rules,
+        Err(_) => return Ok(false),
+    };
+
+    let mut has_cooldown = false;
+    for rule in rules {
+        match rule.rtype {
+            RbPuzzlePenaltyType::FixedTime | RbPuzzlePenaltyType::LinearTime => {
+                if has_cooldown {
+                    return Ok(false);
+                }
+                has_cooldown = true;
+
+                if rule.args.first().is_none_or(|value| *value < 0) {
+                    return Ok(false);
+                }
+            }
+            RbPuzzlePenaltyType::Currency => {
+                let Some(currency_id) = rule.args.first() else {
+                    return Ok(false);
+                };
+                let Some(amount) = rule.args.get(1) else {
+                    return Ok(false);
+                };
+                if *currency_id <= 0
+                    || *amount <= 0
+                    || !db::game::currency_belongs_to_game(&app.db, game_id, *currency_id).await?
+                {
+                    return Ok(false);
+                }
+            }
+            RbPuzzlePenaltyType::No => {}
+        }
+    }
+
+    Ok(true)
 }
 
 async fn invalidate_puzzle_cache(app: &AppState, game_id: i32, puzzle_id: i32) {
@@ -202,6 +272,17 @@ async fn append(
         return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
     }
 
+    let game_id = db::round::get_round_game(&app.db, req.round_id).await?;
+    let Some(game_id) = game_id else {
+        return RbError::not_found()
+            .code(PuzzleAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    if !validate_penalty_currency(&app, game_id, &req.penalty).await? {
+        return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+    }
+
     let puzzle = match db::puzzle::admin_create(&app.db, &req).await {
         Ok(puzzle) => puzzle,
         Err(err) => {
@@ -235,6 +316,31 @@ async fn edit(
     }
 
     let previous = db::puzzle::admin_get(&app.db, path.puzzle_id).await?;
+    let Some(previous_data) = previous.as_ref() else {
+        return RbError::not_found()
+            .code(PuzzleAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    if req.penalty.is_some() || req.round_id.is_some() {
+        let game_id = if let Some(round_id) = req.round_id {
+            let game_id = db::round::get_round_game(&app.db, round_id).await?;
+            let Some(game_id) = game_id else {
+                return RbError::not_found()
+                    .code(PuzzleAdminResult::NotFound.into())
+                    .http_err();
+            };
+            game_id
+        } else {
+            previous_data.game_id
+        };
+        let penalty = req.penalty.as_ref().unwrap_or(&previous_data.penalty);
+
+        if !validate_penalty_currency(&app, game_id, penalty).await? {
+            return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+        }
+    }
+
     let puzzle = match db::puzzle::admin_update(&app.db, path.puzzle_id, &req).await {
         Ok(puzzle) => puzzle,
         Err(err) => {

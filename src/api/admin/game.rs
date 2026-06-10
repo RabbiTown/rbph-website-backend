@@ -5,7 +5,10 @@ use serde_repr::Serialize_repr;
 
 use crate::{
     AppState,
-    db::{self, game::RbGameUpdateData},
+    db::{
+        self,
+        game::{RbCurrencyAdminData, RbGameUpdateData},
+    },
     error::RbError,
     model::game::{RbGame, RbGameSettings},
 };
@@ -35,6 +38,12 @@ struct GameAdminListResponse {
     games: Vec<RbGame>,
 }
 
+#[derive(Serialize)]
+struct CurrencyAdminListResponse {
+    code: GameAdminResult,
+    currencies: Vec<RbCurrencyAdminData>,
+}
+
 async fn list(app: web::Data<AppState>) -> Result<HttpResponse> {
     let games = db::game::list_all(&app.db, false, false).await?;
 
@@ -55,6 +64,24 @@ async fn get(path: web::Path<PathInfo>, app: web::Data<AppState>) -> Result<Http
     Ok(HttpResponse::Ok().json(GameAdminResponse {
         code: GameAdminResult::Ok,
         game,
+    }))
+}
+
+async fn list_currency(
+    path: web::Path<PathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !db::game::exists(&app.db, path.game_id, crate::model::user::RbUserRole::Admin).await? {
+        return RbError::not_found()
+            .code(GameAdminResult::NotFound.into())
+            .http_err();
+    }
+
+    let currencies = db::game::list_currency(&app.db, path.game_id).await?;
+
+    Ok(HttpResponse::Ok().json(CurrencyAdminListResponse {
+        code: GameAdminResult::Ok,
+        currencies,
     }))
 }
 
@@ -104,5 +131,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.route("", web::get().to(list))
         .route("", web::post().to(append))
         .route("/{game_id}", web::get().to(get))
+        .route("/{game_id}/currency", web::get().to(list_currency))
         .route("/{game_id}", web::patch().to(edit));
 }

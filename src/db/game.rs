@@ -71,6 +71,15 @@ pub struct RbGameUpdateData {
     pub settings: Option<Value>,
 }
 
+#[derive(Serialize)]
+pub struct RbCurrencyAdminData {
+    pub id: i32,
+    pub name: String,
+    pub growth: i32,
+    pub prec: i32,
+    pub max_amount: i32,
+}
+
 // TODO : add kv cache
 pub async fn exists(
     pool: &DbPool,
@@ -140,6 +149,43 @@ pub async fn get_full_by_id(
     .await?;
 
     Ok(result)
+}
+
+pub async fn list_currency(
+    pool: &DbPool,
+    game_id: i32,
+) -> Result<Vec<RbCurrencyAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbCurrencyAdminData,
+        "SELECT id, cname AS name, growth, prec, max_amount
+        FROM rb_currency
+        WHERE game_id = $1
+        ORDER BY id;",
+        game_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn currency_belongs_to_game(
+    pool: &DbPool,
+    game_id: i32,
+    currency_id: i32,
+) -> Result<bool, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "SELECT EXISTS (
+            SELECT 1 FROM rb_currency
+            WHERE id = $1 AND game_id = $2
+        );",
+        currency_id,
+        game_id
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(result.unwrap_or(false))
 }
 
 pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, RbInternalError> {

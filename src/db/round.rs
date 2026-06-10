@@ -336,12 +336,24 @@ pub struct RbRoundCreateData {
 
 #[derive(Default, Deserialize)]
 pub struct RbRoundUpdateData {
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
     pub slug: Option<Option<String>>,
     pub sort: Option<i32>,
     pub title: Option<String>,
     pub content: Option<String>,
     pub content_type: Option<i16>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
     pub cover: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
+    )]
     pub puzzle: Option<Option<i32>>,
 }
 

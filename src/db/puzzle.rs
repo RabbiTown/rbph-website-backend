@@ -1119,6 +1119,10 @@ pub struct RbPuzzleCreateData {
 
 #[derive(Default, Deserialize)]
 pub struct RbPuzzleUpdateData {
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
     pub slug: Option<Option<String>>,
     pub sort: Option<i32>,
     pub title: Option<String>,
@@ -1127,6 +1131,10 @@ pub struct RbPuzzleUpdateData {
     pub content_type: Option<i16>,
     pub judge: Option<serde_json::Value>,
     pub penalty: Option<serde_json::Value>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
+    )]
     pub max_submit: Option<Option<i32>>,
     pub unlock_cond: Option<String>,
     pub round_id: Option<i32>,

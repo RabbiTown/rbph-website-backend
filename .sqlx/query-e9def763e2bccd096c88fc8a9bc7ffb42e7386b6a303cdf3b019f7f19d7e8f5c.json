@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, title, content, content_type, cover, game_id, puzzle\n        FROM rb_round\n        WHERE id = $1",
+  "query": "SELECT a.id, a.title, a.content, a.content_type,\n            r.game_id AS game_id, a.puzzle_id, p.slug AS puzzle_slug, a.utime_at\n        FROM rb_announcement a\n        JOIN rb_puzzle p ON p.id = a.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE a.puzzle_id = $1;",
   "describe": {
     "columns": [
       {
@@ -25,18 +25,23 @@
       },
       {
         "ordinal": 4,
-        "name": "cover",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 5,
         "name": "game_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
-        "name": "puzzle",
+        "ordinal": 5,
+        "name": "puzzle_id",
         "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "puzzle_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -49,10 +54,11 @@
       false,
       false,
       false,
-      true,
       false,
-      true
+      true,
+      true,
+      false
     ]
   },
-  "hash": "9828cf8666707471ff2a9136f7db0cbd01b9911bdcaaa7f19f25a9711761edff"
+  "hash": "e9def763e2bccd096c88fc8a9bc7ffb42e7386b6a303cdf3b019f7f19d7e8f5c"
 }

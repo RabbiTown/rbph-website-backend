@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, p.sort, p.id;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -102,5 +102,5 @@
       false
     ]
   },
-  "hash": "f00bee9823ded0ea7e1661978f27003d023c3621505becf503099e318b9a9e8a"
+  "hash": "9cd04be9451c84988293079efa1bd7dc3759cbbbc69e928f094d36b32f364ba7"
 }

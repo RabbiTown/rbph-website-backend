@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, slug, title, content, content_type, cover, game_id, puzzle\n        FROM rb_round\n        WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "puzzle",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "e8f5c289f575dc3687f99e9ad3961d8bc7d7f98d98b2912e15ceb6cf8523665b"
+}

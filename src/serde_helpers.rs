@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serializer};
+use serde::{Deserialize, Deserializer, Serializer};
 use sqlx::types::time::OffsetDateTime;
 
 pub fn format_offset_datetime(dt: &OffsetDateTime) -> String {
@@ -79,4 +79,37 @@ pub mod serialize_option_offset_datetime {
             })
             .transpose()
     }
+}
+
+pub fn deserialize_nullable_string_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+pub fn deserialize_nullable_i32_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<i32>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<i32>::deserialize(deserializer).map(Some)
+}
+
+pub fn deserialize_nullable_offset_datetime_patch<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<OffsetDateTime>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|s| {
+            OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
+                .map_err(serde::de::Error::custom)
+        })
+        .transpose()
+        .map(Some)
 }

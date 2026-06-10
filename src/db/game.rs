@@ -1,7 +1,7 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::{QueryBuilder, prelude::FromRow};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
 
 use crate::{
     DbPool,
@@ -41,18 +41,21 @@ pub struct RbGameCreateData {
 #[derive(Default, Deserialize)]
 pub struct RbGameUpdateData {
     pub title: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
     pub cover: Option<Option<String>>,
     pub is_shown: Option<bool>,
     pub is_online: Option<bool>,
     #[serde(
         default,
-        deserialize_with = "deserialize_nullable_offset_datetime_patch"
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_offset_datetime_patch"
     )]
     pub reg_open_at: Option<Option<OffsetDateTime>>,
     #[serde(
         default,
-        deserialize_with = "deserialize_nullable_offset_datetime_patch"
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_offset_datetime_patch"
     )]
     pub pre_open_at: Option<Option<OffsetDateTime>>,
     #[serde(
@@ -66,27 +69,6 @@ pub struct RbGameUpdateData {
     )]
     pub end_at: Option<OffsetDateTime>,
     pub settings: Option<Value>,
-}
-
-fn deserialize_nullable_string_patch<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
-}
-
-fn deserialize_nullable_offset_datetime_patch<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<OffsetDateTime>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer)?
-        .map(|s| OffsetDateTime::parse(&s, &Rfc3339).map_err(serde::de::Error::custom))
-        .transpose()
-        .map(Some)
 }
 
 // TODO : add kv cache

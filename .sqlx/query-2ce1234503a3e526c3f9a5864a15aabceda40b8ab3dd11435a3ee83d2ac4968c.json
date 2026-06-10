@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.title, p.ptype, p.content, p.content_type,\n                p.round_id, r.title AS round_title, r.game_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id\n        WHERE p.id = $1;",
+  "query": "SELECT p.id, p.slug, p.title, p.ptype, p.content, p.content_type,\n                p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id\n        WHERE p.id = $1;",
   "describe": {
     "columns": [
       {
@@ -10,36 +10,46 @@
       },
       {
         "ordinal": 1,
-        "name": "title",
+        "name": "slug",
         "type_info": "Varchar"
       },
       {
         "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
         "name": "ptype",
         "type_info": "Int2"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "content_type",
         "type_info": "Int2"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
+        "name": "round_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
         "name": "round_title",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 7,
+        "ordinal": 9,
         "name": "game_id",
         "type_info": "Int4"
       }
@@ -51,14 +61,16 @@
     },
     "nullable": [
       false,
+      true,
       false,
       false,
       false,
       false,
       false,
+      true,
       false,
       false
     ]
   },
-  "hash": "1ab5320ab10b5c0f72a8506198914dfb58f002cf107fbc05b476584517b0fa52"
+  "hash": "2ce1234503a3e526c3f9a5864a15aabceda40b8ab3dd11435a3ee83d2ac4968c"
 }

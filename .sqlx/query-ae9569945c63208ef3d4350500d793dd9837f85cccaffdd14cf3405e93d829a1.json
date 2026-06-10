@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, p.sort, p.id;",
+  "query": "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -36,5 +36,5 @@
       true
     ]
   },
-  "hash": "e048522b972fd8f4bda4f88e9eb1c3d92ec600ef425f1a90ed0af45d7333f967"
+  "hash": "ae9569945c63208ef3d4350500d793dd9837f85cccaffdd14cf3405e93d829a1"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.title, a.content, a.content_type,\n                a.is_pinned, a.game_id, a.puzzle_id, a.utime_at\n        FROM rb_announcement a\n        JOIN rb_team t ON t.id = $1\n        WHERE a.is_shown\n            AND (a.game_id IS NULL OR a.game_id = t.game_id)\n            AND (a.puzzle_id IS NULL OR EXISTS (\n                SELECT 1\n                FROM rb_team_puzzle tp\n                WHERE tp.team_id = t.id\n                    AND tp.state >= 0\n                    AND tp.puzzle_id = a.puzzle_id\n            ))\n        ORDER BY a.is_pinned DESC, utime_at DESC",
+  "query": "SELECT a.id, a.title, a.content, a.content_type,\n                a.is_pinned, COALESCE(a.game_id, r.game_id) AS game_id, a.puzzle_id,\n                p.slug AS puzzle_slug, a.utime_at\n        FROM rb_announcement a\n        JOIN rb_team t ON t.id = $1\n        LEFT JOIN rb_puzzle p ON p.id = a.puzzle_id\n        LEFT JOIN rb_round r ON r.id = p.round_id\n        WHERE a.is_shown\n            AND (a.game_id IS NULL OR a.game_id = t.game_id)\n            AND (a.puzzle_id IS NULL OR EXISTS (\n                SELECT 1\n                FROM rb_team_puzzle tp\n                WHERE tp.team_id = t.id\n                    AND tp.state >= 0\n                    AND tp.puzzle_id = a.puzzle_id\n            ))\n        ORDER BY a.is_pinned DESC, utime_at DESC",
   "describe": {
     "columns": [
       {
@@ -40,6 +40,11 @@
       },
       {
         "ordinal": 7,
+        "name": "puzzle_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -55,10 +60,11 @@
       false,
       false,
       false,
+      null,
       true,
       true,
       false
     ]
   },
-  "hash": "77b6e11f983ba6ff0530c338a5dd6676196710b9c45eeaeee04cc451c3faa7f2"
+  "hash": "92b1575a675b47df8cff713a25b9986503645920360b600b7f43547fdf775f58"
 }

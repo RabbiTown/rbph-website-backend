@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_round (slug, sort, title, content, content_type, cover, game_id, puzzle)\n        SELECT $2, $3, $4, $5, $6, $7, g.id, checked_puzzle.id\n        FROM rb_game g\n        LEFT JOIN rb_puzzle checked_puzzle ON checked_puzzle.id = $8::INT\n            AND EXISTS (\n                SELECT 1 FROM rb_round puzzle_round\n                WHERE puzzle_round.id = checked_puzzle.round_id\n                    AND puzzle_round.game_id = g.id\n            )\n        WHERE g.id = $1 AND ($8::INT IS NULL OR checked_puzzle.id IS NOT NULL)\n        RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",
+  "query": "INSERT INTO rb_round (slug, sort, title, content, content_type, cover, game_id, puzzle)\n        SELECT $2, $3, $4, $5, $6, $7, g.id, NULL::INT\n        FROM rb_game g\n        WHERE g.id = $1 AND $8::INT IS NULL\n        RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",
   "describe": {
     "columns": [
       {
@@ -73,5 +73,5 @@
       true
     ]
   },
-  "hash": "6a645f21e3417957d9f76024204430a07d3f0761ae6d564d2528663bf3c48af5"
+  "hash": "88e029f1af8e7f4f00b0ed878020807773b01a867fb8f3cb7cc058cbca1024c9"
 }

@@ -668,7 +668,9 @@ pub async fn get_ticket_summary(
             state: RbTeamState::from_primitive(x.t_state),
             currency,
         }),
-        puzzle: make_puzzle(x.p_id, x.p_slug, x.p_title, x.p_state, x.r_id, x.r_slug, x.r_title),
+        puzzle: make_puzzle(
+            x.p_id, x.p_slug, x.p_title, x.p_state, x.r_id, x.r_slug, x.r_title,
+        ),
         msg_count: x.msg_count,
         last_at: x.last_at,
         last_by: x.last_by.map(RbTicketSenderType::from_primitive),

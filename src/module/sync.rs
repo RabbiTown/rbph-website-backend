@@ -14,7 +14,13 @@ use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
 
 use crate::{
-    DbPool, db, error::RbInternalError, model::game::RbJudgeAction,
+    DbPool, db,
+    db::{
+        puzzle::{CurrencyPenaltyShowData, RbPuzzleTeamStateShowData},
+        team::RbCurrencyShowData,
+    },
+    error::RbInternalError,
+    model::game::RbJudgeAction,
     serde_helpers::serialize_option_offset_datetime,
 };
 
@@ -112,6 +118,15 @@ impl SyncHub {
             )
         {
             sync["cooldown_till"] = x;
+        }
+        if let Some(state) = event.state {
+            sync["state"] = json!(state);
+        }
+        if !event.currency.is_empty() {
+            sync["currency"] = json!(event.currency);
+        }
+        if !event.currency_penalty.is_empty() {
+            sync["currency_penalty"] = json!(event.currency_penalty);
         }
         if event.solved {
             sync["solved"] = json!(true);
@@ -223,6 +238,9 @@ pub struct PuzzleSubmittedSync {
     pub cooldown_till: Option<OffsetDateTime>,
     pub solved: bool,
     pub unlocks: Vec<PuzzleUnlockInfo>,
+    pub state: Option<RbPuzzleTeamStateShowData>,
+    pub currency: Vec<RbCurrencyShowData>,
+    pub currency_penalty: Vec<CurrencyPenaltyShowData>,
     pub sid: Option<String>,
 }
 

@@ -74,6 +74,9 @@ struct JudgePuzzleResponse {
     cooldown_till: Option<OffsetDateTime>,
     solved: bool,
     unlocks: Vec<PuzzleUnlockInfo>,
+    state: Option<db::puzzle::RbPuzzleTeamStateShowData>,
+    currency: Vec<db::team::RbCurrencyShowData>,
+    currency_penalty: Vec<db::puzzle::CurrencyPenaltyShowData>,
 }
 
 async fn judge_puzzle(
@@ -101,6 +104,7 @@ async fn judge_puzzle(
             solved,
             unlocks,
             cooldown_till,
+            update,
         } => {
             let unlock_rows = sqlx::query_as!(
                 PuzzleUnlockInfo,
@@ -119,6 +123,9 @@ async fn judge_puzzle(
             let sid = req.sid.clone();
             let sync_unlocks = unlock_rows.clone();
             let action = result.action;
+            let sync_state = update.state.clone();
+            let sync_currency = update.currency.clone();
+            let sync_currency_penalty = update.currency_penalty.clone();
 
             tokio::spawn(async move {
                 let _ = app
@@ -134,6 +141,9 @@ async fn judge_puzzle(
                             cooldown_till,
                             solved,
                             unlocks: sync_unlocks,
+                            state: sync_state,
+                            currency: sync_currency,
+                            currency_penalty: sync_currency_penalty,
                             sid,
                         },
                     )
@@ -145,6 +155,9 @@ async fn judge_puzzle(
                 cooldown_till,
                 solved,
                 unlocks: unlock_rows,
+                state: update.state,
+                currency: update.currency,
+                currency_penalty: update.currency_penalty,
             }))
         }
     }

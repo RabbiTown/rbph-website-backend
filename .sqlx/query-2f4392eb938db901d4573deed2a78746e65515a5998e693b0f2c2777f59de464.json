@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                    (SELECT COUNT(*) FROM rb_submission\n                        WHERE team_id = $1 AND puzzle_id = $2\n                            AND saction = 0\n                            AND NOT ignored)\n                        AS failure_count,\n                    p.penalty,\n                    p.id AS puzzle_id\n                FROM rb_puzzle p\n                WHERE p.id = $2\n                GROUP BY p.id, p.penalty;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "failure_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "penalty",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "2f4392eb938db901d4573deed2a78746e65515a5998e693b0f2c2777f59de464"
+}

@@ -205,10 +205,15 @@ pub async fn get_state_for_team(
     let row = sqlx::query!(
         "SELECT tp.ctime_at AS utime_at, tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
-                ARRAY_AGG(s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
+                COUNT(DISTINCT fs.id) AS submit_count,
+                ARRAY_AGG(DISTINCT s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
         JOIN rb_round r ON r.id = $2
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
+            AND fs.team_id = tp.team_id
+            AND fs.saction = 0
+            AND NOT fs.ignored
         LEFT JOIN rb_submission s ON s.puzzle_id = tp.puzzle_id
             AND s.team_id = tp.team_id
             AND s.saction = 1
@@ -225,6 +230,7 @@ pub async fn get_state_for_team(
         puzzle: row.map(|r| RbPuzzleTeamStateShowData {
             state: r.state.into(),
             max_submit: r.max_submit,
+            submit_count: r.submit_count.unwrap_or(0),
             answers: r.answers.unwrap_or_default(),
             utime_at: r.utime_at,
             cooldown_till: r.cooldown_till,

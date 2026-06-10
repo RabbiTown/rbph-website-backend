@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_currency tc\n                                SET utime_at = NOW(), amount = LEAST(\n                                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                                    c.max_amount\n                                ) - $1\n                                FROM rb_currency c\n                                WHERE tc.currency_id = c.id\n                                    AND tc.team_id = $2\n                                    AND c.id = $3\n                                RETURNING c.id AS \"currency_id!\", c.cname AS \"name!\", c.prec AS \"prec!\", $1::INT AS \"amount!\";",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "currency_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "prec!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "amount!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "dc3dc7e84c16c5dd898b4e98f96b272498df54750dc58397552e29277ae15384"
+}

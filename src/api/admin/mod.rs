@@ -1,4 +1,5 @@
 mod game;
+mod hint;
 mod puzzle;
 mod round;
 
@@ -12,6 +13,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .configure(game::config)
             .default_service(web::route().to(error_handler)),
     )
+    .configure(hint::config)
     .configure(puzzle::config)
     .configure(round::config);
 }

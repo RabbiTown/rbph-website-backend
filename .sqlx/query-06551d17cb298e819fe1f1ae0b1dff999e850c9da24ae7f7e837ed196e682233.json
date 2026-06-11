@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_hint (\n            sort, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, p.id\n        FROM rb_puzzle p\n        WHERE p.id = $1\n        RETURNING id, sort, title, content, content_type, cooldown, cost_id,\n            cost_amount, puzzle_id, ctime_at;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "cost_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "06551d17cb298e819fe1f1ae0b1dff999e850c9da24ae7f7e837ed196e682233"
+}

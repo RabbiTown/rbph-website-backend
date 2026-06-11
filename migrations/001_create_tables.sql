@@ -128,6 +128,7 @@ CREATE TABLE rb_puzzle (
     unlock_cond     TEXT NOT NULL,
     round_id        INT NOT NULL REFERENCES rb_round(id),
     game_id         INT NOT NULL REFERENCES rb_game(id),
+    ticket_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
     ticket_cooldown INT NOT NULL DEFAULT 0,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

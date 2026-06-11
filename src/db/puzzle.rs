@@ -1158,6 +1158,7 @@ pub struct RbPuzzleAdminData {
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
     pub round_id: i32,
+    pub ticket_enabled: bool,
     pub ticket_cooldown: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -1181,6 +1182,8 @@ pub struct RbPuzzleCreateData {
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
     pub round_id: i32,
+    #[serde(default = "default_ticket_enabled")]
+    pub ticket_enabled: bool,
     #[serde(default)]
     pub ticket_cooldown: i32,
 }
@@ -1206,6 +1209,7 @@ pub struct RbPuzzleUpdateData {
     pub max_submit: Option<Option<i32>>,
     pub unlock_cond: Option<String>,
     pub round_id: Option<i32>,
+    pub ticket_enabled: Option<bool>,
     pub ticket_cooldown: Option<i32>,
 }
 
@@ -1217,6 +1221,10 @@ fn default_penalty() -> serde_json::Value {
     serde_json::json!([])
 }
 
+fn default_ticket_enabled() -> bool {
+    true
+}
+
 pub async fn admin_list(
     pool: &DbPool,
     game_id: Option<i32>,
@@ -1226,7 +1234,7 @@ pub async fn admin_list(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
-            p.ticket_cooldown, p.ctime_at
+            p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         WHERE r.game_id = $1
@@ -1240,7 +1248,7 @@ pub async fn admin_list(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
-            p.ticket_cooldown, p.ctime_at
+            p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         ORDER BY r.game_id, r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
@@ -1260,7 +1268,7 @@ pub async fn admin_get(
         RbPuzzleAdminData,
         "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
-            p.ticket_cooldown, p.ctime_at
+            p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         WHERE p.id = $1;",
@@ -1280,14 +1288,14 @@ pub async fn admin_create(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
             slug, sort, title, ptype, content, content_type, judge, penalty,
-            max_submit, unlock_cond, round_id, ticket_cooldown
+            max_submit, unlock_cond, round_id, ticket_enabled, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, r.id, $12
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, r.id, $12, $13
         FROM rb_round r
         WHERE r.id = $1
         RETURNING id, game_id,
             slug, sort, title, ptype, content, content_type, judge, penalty,
-            max_submit, unlock_cond, round_id, ticket_cooldown, ctime_at;",
+            max_submit, unlock_cond, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
         data.round_id,
         data.slug,
         data.sort,
@@ -1299,6 +1307,7 @@ pub async fn admin_create(
         data.penalty,
         data.max_submit,
         data.unlock_cond,
+        data.ticket_enabled,
         data.ticket_cooldown
     )
     .fetch_optional(pool)
@@ -1336,7 +1345,8 @@ pub async fn admin_update(
             round_id = COALESCE((
                 SELECT r.id FROM rb_round r WHERE r.id = $14::INT
             ), p.round_id),
-            ticket_cooldown = COALESCE($15, p.ticket_cooldown)
+            ticket_enabled = COALESCE($15, p.ticket_enabled),
+            ticket_cooldown = COALESCE($16, p.ticket_cooldown)
         WHERE p.id = $1
             AND ($14::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_round target_round WHERE target_round.id = $14::INT
@@ -1348,7 +1358,7 @@ pub async fn admin_update(
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,
-            p.ticket_cooldown, p.ctime_at;",
+            p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         puzzle_id,
         slug_is_set,
         slug,
@@ -1363,6 +1373,7 @@ pub async fn admin_update(
         max_submit,
         data.unlock_cond,
         data.round_id,
+        data.ticket_enabled,
         data.ticket_cooldown
     )
     .fetch_optional(pool)
@@ -1376,6 +1387,190 @@ pub async fn admin_delete(pool: &DbPool, puzzle_id: i32) -> Result<bool, RbInter
         "DELETE FROM rb_puzzle
         WHERE id = $1;",
         puzzle_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+#[derive(FromRow, Serialize)]
+pub struct RbHintAdminData {
+    pub id: i32,
+    pub sort: i32,
+    pub title: String,
+    pub content: String,
+    pub content_type: i16,
+    pub cooldown: i32,
+    pub cost_id: Option<i32>,
+    pub cost_amount: i32,
+    pub puzzle_id: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}
+
+#[derive(Deserialize)]
+pub struct RbHintCreateData {
+    #[serde(default)]
+    pub sort: i32,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub content_type: i16,
+    #[serde(default)]
+    pub cooldown: i32,
+    pub cost_id: Option<i32>,
+    #[serde(default)]
+    pub cost_amount: i32,
+    pub puzzle_id: i32,
+}
+
+#[derive(Default, Deserialize)]
+pub struct RbHintUpdateData {
+    pub sort: Option<i32>,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub content_type: Option<i16>,
+    pub cooldown: Option<i32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
+    )]
+    pub cost_id: Option<Option<i32>>,
+    pub cost_amount: Option<i32>,
+    pub puzzle_id: Option<i32>,
+}
+
+pub async fn admin_list_hints(
+    pool: &DbPool,
+    puzzle_id: Option<i32>,
+) -> Result<Vec<RbHintAdminData>, RbInternalError> {
+    let result = if let Some(puzzle_id) = puzzle_id {
+        sqlx::query_as!(
+            RbHintAdminData,
+            "SELECT id, sort, title, content, content_type, cooldown, cost_id,
+                cost_amount, puzzle_id, ctime_at
+            FROM rb_hint
+            WHERE puzzle_id = $1
+            ORDER BY sort, id;",
+            puzzle_id
+        )
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as!(
+            RbHintAdminData,
+            "SELECT id, sort, title, content, content_type, cooldown, cost_id,
+                cost_amount, puzzle_id, ctime_at
+            FROM rb_hint
+            ORDER BY puzzle_id, sort, id;"
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    Ok(result)
+}
+
+pub async fn admin_get_hint(
+    pool: &DbPool,
+    hint_id: i32,
+) -> Result<Option<RbHintAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbHintAdminData,
+        "SELECT id, sort, title, content, content_type, cooldown, cost_id,
+            cost_amount, puzzle_id, ctime_at
+        FROM rb_hint
+        WHERE id = $1;",
+        hint_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_create_hint(
+    pool: &DbPool,
+    data: &RbHintCreateData,
+) -> Result<Option<RbHintAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbHintAdminData,
+        "INSERT INTO rb_hint (
+            sort, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id
+        )
+        SELECT $2, $3, $4, $5, $6, $7, $8, p.id
+        FROM rb_puzzle p
+        WHERE p.id = $1
+        RETURNING id, sort, title, content, content_type, cooldown, cost_id,
+            cost_amount, puzzle_id, ctime_at;",
+        data.puzzle_id,
+        data.sort,
+        data.title,
+        data.content,
+        data.content_type,
+        data.cooldown,
+        data.cost_id,
+        data.cost_amount,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_update_hint(
+    pool: &DbPool,
+    hint_id: i32,
+    data: &RbHintUpdateData,
+) -> Result<Option<RbHintAdminData>, RbInternalError> {
+    let cost_id_is_set = data.cost_id.is_some();
+    let cost_id = data.cost_id.flatten();
+
+    let result = sqlx::query_as!(
+        RbHintAdminData,
+        "UPDATE rb_hint h
+        SET sort = COALESCE($2, h.sort),
+            title = COALESCE($3, h.title),
+            content = COALESCE($4, h.content),
+            content_type = COALESCE($5, h.content_type),
+            cooldown = COALESCE($6, h.cooldown),
+            cost_id = CASE WHEN $7 THEN $8 ELSE h.cost_id END,
+            cost_amount = CASE
+                WHEN $7 AND $8::INT IS NULL THEN 0
+                ELSE COALESCE($9, h.cost_amount)
+            END,
+            puzzle_id = COALESCE((
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $10::INT
+            ), h.puzzle_id)
+        WHERE h.id = $1
+            AND ($10::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $10::INT
+            ))
+        RETURNING id, sort, title, content, content_type, cooldown, cost_id,
+            cost_amount, puzzle_id, ctime_at;",
+        hint_id,
+        data.sort,
+        data.title,
+        data.content,
+        data.content_type,
+        data.cooldown,
+        cost_id_is_set,
+        cost_id,
+        data.cost_amount,
+        data.puzzle_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_delete_hint(pool: &DbPool, hint_id: i32) -> Result<bool, RbInternalError> {
+    let result = sqlx::query!(
+        "DELETE FROM rb_hint
+        WHERE id = $1;",
+        hint_id
     )
     .execute(pool)
     .await?;

@@ -419,6 +419,9 @@ async fn open_ticket(
         db::ticket::OpenPuzzleTicketResult::Cooldown => {
             RbError::conflict(TicketOpenResult::Cooldown.into()).http_err()
         }
+        db::ticket::OpenPuzzleTicketResult::Disabled => {
+            RbError::conflict(TicketOpenResult::Cooldown.into()).http_err()
+        }
         db::ticket::OpenPuzzleTicketResult::Ok(thread) => {
             let thread = *thread;
             let ticket = thread

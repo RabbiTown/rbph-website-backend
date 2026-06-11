@@ -131,6 +131,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.route("", web::get().to(list))
         .route("", web::post().to(append))
         .route("/{game_id}", web::get().to(get))
-        .route("/{game_id}/currency", web::get().to(list_currency))
+        .route("/{game_id}/currencies", web::get().to(list_currency))
         .route("/{game_id}", web::patch().to(edit));
 }

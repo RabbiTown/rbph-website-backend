@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, round_id, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, r.id, $12\n        FROM rb_round r\n        WHERE r.id = $1\n        RETURNING id, game_id,\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, round_id, ticket_cooldown, ctime_at;",
+  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, round_id, ticket_enabled, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, r.id, $12, $13\n        FROM rb_round r\n        WHERE r.id = $1\n        RETURNING id, game_id,\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -70,11 +70,16 @@
       },
       {
         "ordinal": 13,
+        "name": "ticket_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 14,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -92,6 +97,7 @@
         "Jsonb",
         "Int4",
         "Text",
+        "Bool",
         "Int4"
       ]
     },
@@ -110,8 +116,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "3d58e254b7f7d4f26e5ca86155c4db81012ed94b1ea141217d6df70cce68cae3"
+  "hash": "98b6bf6b3b78697e73dd096a9b5c344aeba55c1608a53c1fafd83d375294cb3b"
 }

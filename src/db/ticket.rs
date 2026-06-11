@@ -348,6 +348,7 @@ pub enum TicketOpenBlock {
     CurrentPuzzlePending = -1,
     PendingLimit = -2,
     Cooldown = -3,
+    Disabled = -4,
 }
 
 #[derive(Serialize)]
@@ -991,6 +992,7 @@ pub enum OpenPuzzleTicketResult {
     Ok(Box<TicketThread>),
     PendingExists,
     Cooldown,
+    Disabled,
 }
 
 pub async fn open_puzzle_ticket(
@@ -1020,21 +1022,28 @@ pub async fn open_puzzle_ticket(
         return Ok(OpenPuzzleTicketResult::PendingExists);
     }
 
-    // check puzzle cooldown
-    let cooldown_ready = sqlx::query_scalar!(
-        "SELECT EXISTS (
-            SELECT 1 FROM rb_puzzle p
-            JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
-            WHERE p.id = $2 AND p.ticket_cooldown >= 0
-                AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
-        );",
+    // check puzzle ticket availability
+    let ticket_availability = sqlx::query!(
+        "SELECT p.ticket_enabled,
+            EXISTS (
+                SELECT 1 FROM rb_team_puzzle tp
+                WHERE tp.puzzle_id = p.id AND tp.team_id = $1
+                    AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
+            ) AS cooldown_ready
+        FROM rb_puzzle p
+        WHERE p.id = $2;",
         team_id,
         puzzle_id
     )
-    .fetch_one(&mut *tx)
-    .await?
-    .unwrap_or(false);
-    if !cooldown_ready {
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(ticket_availability) = ticket_availability else {
+        return Ok(OpenPuzzleTicketResult::Disabled);
+    };
+    if !ticket_availability.ticket_enabled {
+        return Ok(OpenPuzzleTicketResult::Disabled);
+    }
+    if !ticket_availability.cooldown_ready.unwrap_or(false) {
         return Ok(OpenPuzzleTicketResult::Cooldown);
     }
 
@@ -1128,17 +1137,21 @@ pub async fn get_team_puzzle_tickets(
 
     let cooldown = sqlx::query!(
         "SELECT
+            (SELECT p.ticket_enabled
+                FROM rb_puzzle p
+                WHERE p.id = $2
+            ) AS ticket_enabled,
             EXISTS (
                 SELECT 1 FROM rb_puzzle p
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
-                WHERE p.id = $2 AND p.ticket_cooldown >= 0
+                WHERE p.id = $2 AND p.ticket_enabled
                     AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS ready,
             (
                 SELECT tp.ctime_at + (p.ticket_cooldown * INTERVAL '1 second')
                 FROM rb_puzzle p
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
-                WHERE p.id = $2 AND p.ticket_cooldown >= 0
+                WHERE p.id = $2 AND p.ticket_enabled
             ) AS cooldown_till;",
         team_id,
         puzzle_id
@@ -1148,6 +1161,8 @@ pub async fn get_team_puzzle_tickets(
 
     let open_block = if has_current_puzzle_open {
         TicketOpenBlock::CurrentPuzzlePending
+    } else if !cooldown.ticket_enabled.unwrap_or(false) {
+        TicketOpenBlock::Disabled
     } else if !cooldown.ready.unwrap_or(false) {
         TicketOpenBlock::Cooldown
     } else if pending_limit_reached {

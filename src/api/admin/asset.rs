@@ -12,7 +12,7 @@ use crate::{
         asset::{RbAssetFileAdminData, RbAssetGroupAdminData, RbAssetGroupWithFilesAdminData},
     },
     error::{RbError, RbInternalError},
-    module::storage::{AssetUploadFile, LocalStorage, StoredAssetGroup},
+    module::storage::{AssetUploadFile, LocalStorage, StoredAssetGroup, sanitize_relative_path},
 };
 
 #[derive(Deserialize)]
@@ -24,6 +24,28 @@ struct AssetListQuery {
 #[derive(Deserialize)]
 struct AssetPathInfo {
     group_id: i32,
+}
+
+#[derive(Deserialize)]
+struct AssetFilePathInfo {
+    group_id: i32,
+    file_id: i32,
+}
+
+#[derive(Deserialize)]
+struct AssetPatchRequest {
+    original_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AssetFilePatchRequest {
+    file_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AssetFolderPatchRequest {
+    path: String,
+    name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +78,59 @@ struct AssetAdminListResponse {
 #[derive(Serialize)]
 struct AssetAdminDeleteResponse {
     code: AssetAdminResult,
+}
+
+#[derive(Serialize)]
+struct AssetAdminFileDeleteResponse {
+    code: AssetAdminResult,
+    deleted_group: bool,
+    group: Option<RbAssetGroupAdminData>,
+    files: Vec<RbAssetFileAdminData>,
+}
+
+fn valid_asset_group_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= 255
+}
+
+fn normalize_asset_relative_path(path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() || path.chars().count() > 1024 {
+        return None;
+    }
+
+    let normalized = sanitize_relative_path(path);
+    if normalized == path {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn normalize_asset_path_segment(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 255 || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+
+    let normalized = sanitize_relative_path(name);
+    if normalized == name {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn parent_path(path: &str) -> Option<&str> {
+    path.rsplit_once('/').map(|(parent, _)| parent)
+}
+
+fn join_asset_path(parent: Option<&str>, name: &str) -> String {
+    parent.map_or_else(|| name.to_string(), |parent| format!("{parent}/{name}"))
+}
+
+fn is_path_in_folder(path: &str, folder: &str) -> bool {
+    path.strip_prefix(folder)
+        .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 async fn list(query: web::Query<AssetListQuery>, app: web::Data<AppState>) -> Result<HttpResponse> {
@@ -233,6 +308,306 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     }))
 }
 
+async fn recompute_group_metadata(
+    app: &AppState,
+    group: RbAssetGroupAdminData,
+    files: &[RbAssetFileAdminData],
+) -> Result<RbAssetGroupAdminData> {
+    let paths = files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect::<Vec<_>>();
+    let summary = app
+        .storage
+        .summarize_existing_group_files(&group.object_key, &paths)
+        .await
+        .map_err(|_| RbError::internal("failed to summarize asset group files"))?;
+
+    db::asset::admin_update_group_metadata(&app.db, group.id, summary.size as i64, &summary.sha256)
+        .await?
+        .ok_or_else(|| {
+            RbError::not_found()
+                .code(AssetAdminResult::NotFound.into())
+                .into()
+        })
+}
+
+async fn patch(
+    path: web::Path<AssetPathInfo>,
+    body: web::Json<AssetPatchRequest>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let mut group = db::asset::admin_get_group(&app.db, path.group_id)
+        .await?
+        .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+
+    if let Some(original_name) = &body.original_name {
+        let original_name = original_name.trim();
+        if !valid_asset_group_name(original_name) {
+            return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+        }
+
+        group = db::asset::admin_update_group_name(&app.db, path.group_id, original_name)
+            .await?
+            .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    }
+
+    let files = db::asset::list_files(&app.db, group.id).await?;
+
+    Ok(HttpResponse::Ok().json(AssetAdminResponse {
+        code: AssetAdminResult::Ok,
+        group,
+        files,
+    }))
+}
+
+async fn patch_file(
+    path: web::Path<AssetFilePathInfo>,
+    body: web::Json<AssetFilePatchRequest>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let group = db::asset::admin_get_group(&app.db, path.group_id)
+        .await?
+        .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    let file = db::asset::admin_get_file(&app.db, path.group_id, path.file_id)
+        .await?
+        .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+
+    if let Some(file_name) = &body.file_name {
+        let Some(file_name) = normalize_asset_path_segment(file_name) else {
+            return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+        };
+        let relative_path = join_asset_path(parent_path(&file.relative_path), &file_name);
+
+        if relative_path != file.relative_path {
+            if db::asset::admin_file_path_exists(
+                &app.db,
+                path.group_id,
+                &relative_path,
+                path.file_id,
+            )
+            .await?
+            {
+                return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+            }
+
+            let old_path = app
+                .storage
+                .object_path(&group.object_key, &file.relative_path);
+            let new_path = app.storage.object_path(&group.object_key, &relative_path);
+            if let Some(parent) = new_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|_| RbError::internal("failed to create asset directory"))?;
+            }
+
+            tokio::fs::rename(&old_path, &new_path)
+                .await
+                .map_err(|_| RbError::internal("failed to rename asset file"))?;
+
+            let updated_file = match db::asset::admin_update_file_path(
+                &app.db,
+                path.group_id,
+                path.file_id,
+                &relative_path,
+            )
+            .await
+            {
+                Ok(Some(file)) => file,
+                Ok(None) => {
+                    let _ = tokio::fs::rename(&new_path, &old_path).await;
+                    return RbError::not_found()
+                        .code(AssetAdminResult::NotFound.into())
+                        .http_err();
+                }
+                Err(error) => {
+                    let _ = tokio::fs::rename(&new_path, &old_path).await;
+                    return Err(error.into());
+                }
+            };
+
+            let mut files = db::asset::list_files(&app.db, group.id).await?;
+            for current in &mut files {
+                if current.id == updated_file.id {
+                    *current = updated_file.clone();
+                }
+            }
+            let group = recompute_group_metadata(&app, group, &files).await?;
+
+            return Ok(HttpResponse::Ok().json(AssetAdminResponse {
+                code: AssetAdminResult::Ok,
+                group,
+                files,
+            }));
+        }
+    }
+
+    let files = db::asset::list_files(&app.db, group.id).await?;
+    Ok(HttpResponse::Ok().json(AssetAdminResponse {
+        code: AssetAdminResult::Ok,
+        group,
+        files,
+    }))
+}
+
+async fn patch_folder(
+    path: web::Path<AssetPathInfo>,
+    body: web::Json<AssetFolderPatchRequest>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let group = db::asset::admin_get_group(&app.db, path.group_id)
+        .await?
+        .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    let Some(folder_path) = normalize_asset_relative_path(&body.path) else {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    };
+    let Some(folder_name) = normalize_asset_path_segment(&body.name) else {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    };
+
+    let new_folder_path = join_asset_path(parent_path(&folder_path), &folder_name);
+    if new_folder_path == folder_path {
+        let files = db::asset::list_files(&app.db, group.id).await?;
+        return Ok(HttpResponse::Ok().json(AssetAdminResponse {
+            code: AssetAdminResult::Ok,
+            group,
+            files,
+        }));
+    }
+
+    let files = db::asset::list_files(&app.db, group.id).await?;
+    let affected = files
+        .iter()
+        .filter(|file| is_path_in_folder(&file.relative_path, &folder_path))
+        .cloned()
+        .collect::<Vec<_>>();
+    if affected.is_empty() {
+        return RbError::not_found()
+            .code(AssetAdminResult::NotFound.into())
+            .http_err();
+    }
+
+    if files
+        .iter()
+        .filter(|file| !is_path_in_folder(&file.relative_path, &folder_path))
+        .any(|file| {
+            file.relative_path == new_folder_path
+                || is_path_in_folder(&file.relative_path, &new_folder_path)
+        })
+    {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    }
+
+    let old_fs_path = app.storage.object_path(&group.object_key, &folder_path);
+    let new_fs_path = app.storage.object_path(&group.object_key, &new_folder_path);
+    if let Some(parent) = new_fs_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|_| RbError::internal("failed to create asset directory"))?;
+    }
+
+    tokio::fs::rename(&old_fs_path, &new_fs_path)
+        .await
+        .map_err(|_| RbError::internal("failed to rename asset folder"))?;
+
+    let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
+    let mut update_failed = false;
+    for file in &affected {
+        let suffix = file
+            .relative_path
+            .strip_prefix(&folder_path)
+            .unwrap_or_default();
+        let relative_path = format!("{new_folder_path}{suffix}");
+        if db::asset::admin_update_file_path(&mut *tx, group.id, file.id, &relative_path)
+            .await?
+            .is_none()
+        {
+            update_failed = true;
+            break;
+        }
+    }
+
+    if update_failed {
+        let _ = tx.rollback().await;
+        let _ = tokio::fs::rename(&new_fs_path, &old_fs_path).await;
+        return RbError::not_found()
+            .code(AssetAdminResult::NotFound.into())
+            .http_err();
+    }
+
+    tx.commit().await.map_err(RbInternalError::from)?;
+    let files = db::asset::list_files(&app.db, group.id).await?;
+    let group = recompute_group_metadata(&app, group, &files).await?;
+
+    Ok(HttpResponse::Ok().json(AssetAdminResponse {
+        code: AssetAdminResult::Ok,
+        group,
+        files,
+    }))
+}
+
+async fn delete_file(
+    path: web::Path<AssetFilePathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let group = db::asset::admin_get_group(&app.db, path.group_id)
+        .await?
+        .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    let file = db::asset::admin_get_file(&app.db, path.group_id, path.file_id)
+        .await?
+        .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    let files = db::asset::list_files(&app.db, group.id).await?;
+
+    if files.len() <= 1 {
+        let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
+        let deleted = db::asset::admin_delete_group(&mut *tx, group.id).await?;
+        if !deleted {
+            return RbError::not_found()
+                .code(AssetAdminResult::NotFound.into())
+                .http_err();
+        }
+        tx.commit().await.map_err(RbInternalError::from)?;
+
+        tokio::fs::remove_dir_all(app.storage.object_dir(&group.object_key))
+            .await
+            .map_err(|_| RbError::internal("failed to remove asset group files"))?;
+
+        return Ok(HttpResponse::Ok().json(AssetAdminFileDeleteResponse {
+            code: AssetAdminResult::Ok,
+            deleted_group: true,
+            group: None,
+            files: Vec::new(),
+        }));
+    }
+
+    let file_path = app
+        .storage
+        .object_path(&group.object_key, &file.relative_path);
+    tokio::fs::remove_file(&file_path)
+        .await
+        .map_err(|_| RbError::internal("failed to remove asset file"))?;
+
+    match db::asset::admin_delete_file(&app.db, group.id, file.id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return RbError::not_found()
+                .code(AssetAdminResult::NotFound.into())
+                .http_err();
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let files = db::asset::list_files(&app.db, group.id).await?;
+    let group = recompute_group_metadata(&app, group, &files).await?;
+
+    Ok(HttpResponse::Ok().json(AssetAdminFileDeleteResponse {
+        code: AssetAdminResult::Ok,
+        deleted_group: false,
+        group: Some(group),
+        files,
+    }))
+}
+
 async fn delete(path: web::Path<AssetPathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let Some(group) = db::asset::admin_get_group(&app.db, path.group_id).await? else {
         return RbError::not_found()
@@ -264,6 +639,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("assets")
             .route("", web::get().to(list))
             .route("", web::post().to(append))
+            .route("/{group_id}", web::patch().to(patch))
+            .route("/{group_id}/files/{file_id}", web::patch().to(patch_file))
+            .route("/{group_id}/files/{file_id}", web::delete().to(delete_file))
+            .route("/{group_id}/folders", web::patch().to(patch_folder))
             .route("/{group_id}", web::delete().to(delete)),
     );
 }

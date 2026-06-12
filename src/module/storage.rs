@@ -48,6 +48,11 @@ pub struct StoredAssetGroup {
     pub files: Vec<StoredAssetFile>,
 }
 
+pub struct StoredAssetGroupSummary {
+    pub size: u64,
+    pub sha256: String,
+}
+
 impl LocalStorage {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
@@ -201,6 +206,31 @@ impl LocalStorage {
 
         Ok(files)
     }
+
+    pub async fn summarize_existing_group_files(
+        &self,
+        object_key: &str,
+        relative_paths: &[String],
+    ) -> Result<StoredAssetGroupSummary, RbInternalError> {
+        let mut group_hasher = Sha256::new();
+        let mut group_size = 0_u64;
+
+        for relative_path in relative_paths {
+            let file_path = self.object_path(object_key, relative_path);
+            let bytes = fs::read(&file_path).await?;
+            let file_size = bytes.len() as u64;
+            group_hasher.update(relative_path.as_bytes());
+            group_hasher.update([0]);
+            group_hasher.update(file_size.to_le_bytes());
+            group_hasher.update(&bytes);
+            group_size += file_size;
+        }
+
+        Ok(StoredAssetGroupSummary {
+            size: group_size,
+            sha256: format!("{:x}", group_hasher.finalize()),
+        })
+    }
 }
 
 pub fn build_public_path(object_key: &str, original_name: &str) -> String {
@@ -234,10 +264,8 @@ pub fn sanitize_relative_path(value: &str) -> String {
 fn sanitize_filename(value: &str) -> String {
     let mut result = String::with_capacity(value.len());
     for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+        if ch != '\0' && ch != '/' && ch != '\\' {
             result.push(ch);
-        } else {
-            result.push('_');
         }
     }
     if result.is_empty() {

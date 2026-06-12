@@ -106,6 +106,47 @@ pub async fn list_files(
     Ok(result)
 }
 
+pub async fn admin_get_file(
+    pool: &DbPool,
+    group_id: i32,
+    file_id: i32,
+) -> Result<Option<RbAssetFileAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbAssetFileAdminData,
+        "SELECT id, group_id, relative_path, mime_type, size, sha256, ctime_at
+        FROM rb_asset_file
+        WHERE group_id = $1 AND id = $2;",
+        group_id,
+        file_id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_file_path_exists(
+    pool: &DbPool,
+    group_id: i32,
+    relative_path: &str,
+    except_file_id: i32,
+) -> Result<bool, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        "SELECT EXISTS (
+            SELECT 1
+            FROM rb_asset_file
+            WHERE group_id = $1 AND relative_path = $2 AND id <> $3
+        );",
+        group_id,
+        relative_path,
+        except_file_id
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(result.unwrap_or(false))
+}
+
 pub async fn create_group<'e, E>(
     executor: E,
     data: CreateAssetGroupData<'_>,
@@ -180,6 +221,99 @@ pub async fn admin_get_group(
     .await?;
 
     Ok(result)
+}
+
+pub async fn admin_update_group_name<'e, E>(
+    executor: E,
+    group_id: i32,
+    original_name: &str,
+) -> Result<Option<RbAssetGroupAdminData>, RbInternalError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let result = sqlx::query_as!(
+        RbAssetGroupAdminData,
+        "UPDATE rb_asset_group
+        SET original_name = $2
+        WHERE id = $1
+        RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
+        group_id,
+        original_name
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_update_group_metadata<'e, E>(
+    executor: E,
+    group_id: i32,
+    size: i64,
+    sha256: &str,
+) -> Result<Option<RbAssetGroupAdminData>, RbInternalError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let result = sqlx::query_as!(
+        RbAssetGroupAdminData,
+        "UPDATE rb_asset_group
+        SET size = $2, sha256 = $3
+        WHERE id = $1
+        RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
+        group_id,
+        size,
+        sha256
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_update_file_path<'e, E>(
+    executor: E,
+    group_id: i32,
+    file_id: i32,
+    relative_path: &str,
+) -> Result<Option<RbAssetFileAdminData>, RbInternalError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let result = sqlx::query_as!(
+        RbAssetFileAdminData,
+        "UPDATE rb_asset_file
+        SET relative_path = $3
+        WHERE group_id = $1 AND id = $2
+        RETURNING id, group_id, relative_path, mime_type, size, sha256, ctime_at;",
+        group_id,
+        file_id,
+        relative_path
+    )
+    .fetch_optional(executor)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn admin_delete_file<'e, E>(
+    executor: E,
+    group_id: i32,
+    file_id: i32,
+) -> Result<bool, RbInternalError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let result = sqlx::query!(
+        "DELETE FROM rb_asset_file
+        WHERE group_id = $1 AND id = $2;",
+        group_id,
+        file_id
+    )
+    .execute(executor)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn admin_delete_group<'e, E>(executor: E, group_id: i32) -> Result<bool, RbInternalError>

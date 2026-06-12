@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at\n            FROM rb_asset_group\n            WHERE game_id = $1 AND puzzle_id = $2\n            ORDER BY ctime_at DESC, id DESC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "backend",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "object_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "original_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "mime_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "sha256",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f07e7a94505728977738d2161b89b9e758a4196e5b794ad4ac29d9448835c7e0"
+}

@@ -153,6 +153,38 @@ WHERE slug IS NOT NULL;
 ALTER TABLE rb_puzzle ADD CONSTRAINT rb_ck_puzzle_slug_atom
 CHECK (slug IS NULL OR slug ~ '^[A-Za-z_][A-Za-z0-9_-]*$');
 
+-- asset group
+
+CREATE TABLE rb_asset_group (
+    id              SERIAL PRIMARY KEY,
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
+    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    backend         VARCHAR(32) NOT NULL,
+    object_key      TEXT NOT NULL UNIQUE,
+    original_name   VARCHAR(255) NOT NULL,
+    mime_type       VARCHAR(120) NOT NULL,
+    size            BIGINT NOT NULL,
+    sha256          CHAR(64) NOT NULL,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX rb_idx_asset_group_game_puzzle_ctime
+ON rb_asset_group(game_id, puzzle_id, ctime_at DESC);
+
+CREATE TABLE rb_asset_file (
+    id              SERIAL PRIMARY KEY,
+    group_id        INT NOT NULL REFERENCES rb_asset_group(id) ON DELETE CASCADE,
+    relative_path   TEXT NOT NULL,
+    mime_type       VARCHAR(120) NOT NULL,
+    size            BIGINT NOT NULL,
+    sha256          CHAR(64) NOT NULL,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (group_id, relative_path)
+);
+
+CREATE INDEX rb_idx_asset_file_group_path
+ON rb_asset_file(group_id, relative_path);
+
 ALTER TABLE rb_round ADD CONSTRAINT rb_fk_round_puzzle
 FOREIGN KEY (puzzle) REFERENCES rb_puzzle(id) ON DELETE SET NULL;
 

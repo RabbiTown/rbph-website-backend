@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub bind_addr: (String, u16),
     pub db_addr: String,
     pub kv_addr: String,
+    pub asset_root: String,
 
     pub secret_key: String,
 }

@@ -3,6 +3,7 @@ production = false
 bind_addr = ["127.0.0.1", 9999]
 db_addr = "postgres://postgres:123456@localhost/rbph"
 kv_addr = "redis://localhost/1"
+asset_root = "./assets"
 secret_key = "cmJwaDIwMjZAZGV2"
 
 [auth]

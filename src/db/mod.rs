@@ -1,4 +1,5 @@
 pub mod anmt;
+pub mod asset;
 pub mod board;
 pub mod cache;
 pub mod game;

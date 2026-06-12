@@ -1,4 +1,5 @@
 mod api;
+mod asset;
 mod config;
 mod db;
 mod error;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub settings: Settings,
     pub sync_hub: Arc<SyncHub>,
     pub email: Option<Arc<EmailService>>,
+    pub storage: module::storage::LocalStorage,
 }
 
 #[actix_web::main]
@@ -75,12 +77,15 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
+    let storage = module::storage::LocalStorage::new(config.asset_root.clone());
+
     let app_state = AppState {
         db: db_pool,
         kv: kv_pool,
         settings,
         sync_hub: sync_hub.clone(),
         email: email_service.clone(),
+        storage,
     };
     let app_state_data = web::Data::new(app_state);
 
@@ -97,6 +102,7 @@ async fn main() -> std::io::Result<()> {
                     .cookie_name("rbph_session".to_string())
                     .build(),
             )
+            .configure(asset::config)
             .service(web::scope("/api").configure(api::config))
     })
     .bind((host.as_str(), port))?

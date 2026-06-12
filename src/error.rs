@@ -125,6 +125,8 @@ impl ResponseError for RbError {
 pub enum RbInternalError {
     Sql(sqlx::Error),
     Bcrypt(bcrypt::BcryptError),
+    Io(std::io::Error),
+    Zip(zip::result::ZipError),
     Redis(RedisError),
     RedisPool(deadpool::managed::PoolError<RedisError>),
     Json(serde_json::Error),
@@ -140,6 +142,8 @@ impl ResponseError for RbInternalError {
         match self {
             RbInternalError::Sql(err) => RbError::internal(err).resp(),
             RbInternalError::Bcrypt(err) => RbError::internal(err).resp(),
+            RbInternalError::Io(err) => RbError::internal(err).resp(),
+            RbInternalError::Zip(err) => RbError::internal(err).resp(),
             RbInternalError::RedisPool(err) => RbError::internal(err).resp(),
             RbInternalError::Redis(err) => RbError::internal(err).resp(),
             RbInternalError::Json(err) => RbError::internal(err).resp(),
@@ -161,6 +165,18 @@ impl From<sqlx::Error> for RbInternalError {
 impl From<bcrypt::BcryptError> for RbInternalError {
     fn from(value: bcrypt::BcryptError) -> Self {
         RbInternalError::Bcrypt(value)
+    }
+}
+
+impl From<std::io::Error> for RbInternalError {
+    fn from(value: std::io::Error) -> Self {
+        RbInternalError::Io(value)
+    }
+}
+
+impl From<zip::result::ZipError> for RbInternalError {
+    fn from(value: zip::result::ZipError) -> Self {
+        RbInternalError::Zip(value)
     }
 }
 

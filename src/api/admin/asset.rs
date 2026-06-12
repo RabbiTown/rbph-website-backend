@@ -7,7 +7,10 @@ use serde_repr::Serialize_repr;
 
 use crate::{
     AppState,
-    db::{self, asset::{RbAssetFileAdminData, RbAssetGroupAdminData, RbAssetGroupWithFilesAdminData}},
+    db::{
+        self,
+        asset::{RbAssetFileAdminData, RbAssetGroupAdminData, RbAssetGroupWithFilesAdminData},
+    },
     error::{RbError, RbInternalError},
     module::storage::{AssetUploadFile, LocalStorage, StoredAssetGroup},
 };
@@ -88,7 +91,8 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
                 return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
             }
             file_name = Some(disposition_name.unwrap_or_else(|| "file".to_string()));
-            file_mime = Some(content_type.unwrap_or_else(|| "application/octet-stream".to_string()));
+            file_mime =
+                Some(content_type.unwrap_or_else(|| "application/octet-stream".to_string()));
             file_bytes = Some(bytes);
             continue;
         }
@@ -124,7 +128,9 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     };
     if let Some(puzzle_id) = puzzle_id {
         let Some(puzzle_game_id) = db::puzzle::get_puzzle_game(&app.db, puzzle_id).await? else {
-            return RbError::not_found().code(AssetAdminResult::NotFound.into()).http_err();
+            return RbError::not_found()
+                .code(AssetAdminResult::NotFound.into())
+                .http_err();
         };
         if puzzle_game_id != game_id {
             return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
@@ -137,7 +143,8 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     let file_mime = file_mime.unwrap_or_else(|| "application/octet-stream".to_string());
 
     let files = if matches!(mode, UploadMode::Group) {
-        let is_zip = file_mime == "application/zip" || file_name.to_ascii_lowercase().ends_with(".zip");
+        let is_zip =
+            file_mime == "application/zip" || file_name.to_ascii_lowercase().ends_with(".zip");
         if !is_zip {
             return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
         }
@@ -163,7 +170,11 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
         file_mime.clone()
     };
 
-    let StoredAssetGroup { size: group_size, sha256: group_sha256, files: stored_files } = app
+    let StoredAssetGroup {
+        size: group_size,
+        sha256: group_sha256,
+        files: stored_files,
+    } = app
         .storage
         .store_group_files(&object_key, &files)
         .await
@@ -173,14 +184,16 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     let result = async {
         let group = db::asset::create_group(
             &mut *tx,
-            game_id,
-            puzzle_id,
-            "local",
-            &object_key,
-            &group_name,
-            &group_mime,
-            group_size as i64,
-            &group_sha256,
+            db::asset::CreateAssetGroupData {
+                game_id,
+                puzzle_id,
+                backend: "local",
+                object_key: &object_key,
+                original_name: &group_name,
+                mime_type: &group_mime,
+                size: group_size as i64,
+                sha256: &group_sha256,
+            },
         )
         .await?;
 

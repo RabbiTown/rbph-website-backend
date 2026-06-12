@@ -3,15 +3,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use actix::{Actor, Addr, Handler, Message};
 use actix_web::{HttpRequest, HttpResponse, web::Payload};
-use actix_web_actors::ws::{self, CloseCode, ProtocolError, WsResponseBuilder};
+use actix_ws::{CloseCode, Message, MessageStream, Session};
 use dashmap::DashMap;
 use num_enum::IntoPrimitive;
 use serde::Serialize;
 use serde_json::json;
 use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::{
     DbPool, db,
@@ -26,7 +26,7 @@ use crate::{
 
 #[derive(Default)]
 pub struct SyncHub {
-    users: DashMap<i32, Vec<Addr<WsSession>>>,
+    users: DashMap<i32, Vec<WsSessionHandle>>,
 }
 
 impl SyncHub {
@@ -36,9 +36,10 @@ impl SyncHub {
         stream: Payload,
         user_id: i32,
     ) -> actix_web::Result<HttpResponse> {
-        let (addr, resp) =
-            WsResponseBuilder::new(WsSession::new(), &req, stream).start_with_addr()?;
-        self.users.entry(user_id).or_default().push(addr);
+        let (resp, session, stream) = actix_ws::handle(&req, stream)?;
+        let (handle, rx) = WsSessionHandle::new();
+        self.users.entry(user_id).or_default().push(handle);
+        actix_web::rt::spawn(WsSession::new(session, stream, rx).run());
         Ok(resp)
     }
 
@@ -47,8 +48,8 @@ impl SyncHub {
             let envelope = WsEnvelope { msg_type, data };
             if let Ok(json) = serde_json::to_string(&envelope) {
                 let arc_json = Arc::new(json);
-                for addr in addrs.iter() {
-                    addr.do_send(WsPush(arc_json.clone()));
+                for session in addrs.iter() {
+                    let _ = session.push(arc_json.clone());
                 }
             }
         }
@@ -60,8 +61,8 @@ impl SyncHub {
             let arc_json = Arc::new(json);
             for user_id in users {
                 if let Some(addrs) = self.users.get(user_id) {
-                    for addr in addrs.iter() {
-                        addr.do_send(WsPush(arc_json.clone()));
+                    for session in addrs.iter() {
+                        let _ = session.push(arc_json.clone());
                     }
                 }
             }
@@ -211,19 +212,19 @@ impl SyncHub {
     }
 
     pub fn cleanup(&self) {
-        self.users.retain(|_, addrs| {
-            addrs.retain(|addr| addr.connected());
-            for addr in addrs.iter() {
-                let _ = addr.try_send(WsCheckAlive);
+        self.users.retain(|_, sessions| {
+            sessions.retain(|session| !session.is_closed());
+            for session in sessions.iter() {
+                let _ = session.check_alive();
             }
-            !addrs.is_empty()
+            !sessions.is_empty()
         });
     }
 
     pub async fn invalidate(&self, user_id: i32) {
-        if let Some((_, addrs)) = self.users.remove(&user_id) {
-            for addr in addrs.iter() {
-                let _ = addr.try_send(WsClose);
+        if let Some((_, sessions)) = self.users.remove(&user_id) {
+            for session in sessions.iter() {
+                let _ = session.close();
             }
         }
     }
@@ -260,15 +261,59 @@ pub struct PuzzleUnlockInfo {
     pub round_slug: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct WsSessionHandle {
+    tx: UnboundedSender<WsCommand>,
+}
+
+impl WsSessionHandle {
+    fn new() -> (Self, UnboundedReceiver<WsCommand>) {
+        let (tx, rx) = unbounded_channel();
+        (Self { tx }, rx)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
+
+    fn push(&self, msg: Arc<String>) -> Result<(), WsCommand> {
+        self.tx.send(WsCommand::Push(msg)).map_err(|e| e.0)
+    }
+
+    fn check_alive(&self) -> Result<(), WsCommand> {
+        self.tx.send(WsCommand::CheckAlive).map_err(|e| e.0)
+    }
+
+    fn close(&self) -> Result<(), WsCommand> {
+        self.tx.send(WsCommand::Close).map_err(|e| e.0)
+    }
+}
+
+enum WsCommand {
+    Push(Arc<String>),
+    CheckAlive,
+    Close,
+}
+
 pub struct WsSession {
+    session: Session,
+    stream: MessageStream,
+    commands: UnboundedReceiver<WsCommand>,
     last_heartbeat: Instant,
 }
 
 impl WsSession {
     const CLIENT_TIMEOUT: Duration = Duration::from_secs(60);
 
-    fn new() -> Self {
+    fn new(
+        session: Session,
+        stream: MessageStream,
+        commands: UnboundedReceiver<WsCommand>,
+    ) -> Self {
         WsSession {
+            session,
+            stream,
+            commands,
             last_heartbeat: Instant::now(),
         }
     }
@@ -276,78 +321,78 @@ impl WsSession {
     fn heartbeat(&mut self) {
         self.last_heartbeat = Instant::now();
     }
-}
 
-impl Actor for WsSession {
-    type Context = ws::WebsocketContext<Self>;
-}
+    async fn run(mut self) {
+        loop {
+            tokio::select! {
+                msg = self.stream.recv() => {
+                    let Some(msg) = msg else {
+                        break;
+                    };
 
-impl actix::StreamHandler<Result<ws::Message, ProtocolError>> for WsSession {
-    fn handle(
-        &mut self,
-        msg: Result<ws::Message, ProtocolError>,
-        ctx: &mut ws::WebsocketContext<Self>,
-    ) {
+                    if self.handle_message(msg).await {
+                        break;
+                    }
+                }
+                command = self.commands.recv() => {
+                    let Some(command) = command else {
+                        break;
+                    };
+
+                    if self.handle_command(command).await {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn handle_message(&mut self, msg: Result<Message, actix_ws::ProtocolError>) -> bool {
         match msg {
-            Ok(ws::Message::Ping(msg)) => {
+            Ok(Message::Ping(msg)) => {
                 self.heartbeat();
-                ctx.pong(&msg);
+                self.session.pong(&msg).await.is_err()
             }
-            Ok(ws::Message::Pong(_)) => {
+            Ok(Message::Pong(_)) | Ok(Message::Text(_)) | Ok(Message::Binary(_)) => {
                 self.heartbeat();
+                false
             }
-            Ok(ws::Message::Text(_)) => {
-                self.heartbeat();
-            }
-            Ok(ws::Message::Binary(_)) => {
-                self.heartbeat();
-            }
-            Ok(ws::Message::Close(reason)) => {
-                ctx.close(reason);
+            Ok(Message::Close(reason)) => {
+                let _ = self.session.clone().close(reason).await;
+                true
             }
             Err(e) => {
                 log::warn!("ws error: {:?}", e);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
-}
 
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct WsPush(pub Arc<String>);
-
-impl Handler<WsPush> for WsSession {
-    type Result = ();
-
-    fn handle(&mut self, msg: WsPush, ctx: &mut Self::Context) -> Self::Result {
-        ctx.text(msg.0.as_str());
-    }
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct WsCheckAlive;
-
-impl Handler<WsCheckAlive> for WsSession {
-    type Result = ();
-
-    fn handle(&mut self, _: WsCheckAlive, ctx: &mut Self::Context) -> Self::Result {
-        if self.last_heartbeat.elapsed() > Self::CLIENT_TIMEOUT {
-            ctx.close(Some(CloseCode::Normal.into()));
+    async fn handle_command(&mut self, command: WsCommand) -> bool {
+        match command {
+            WsCommand::Push(msg) => self.session.text(msg.as_str()).await.is_err(),
+            WsCommand::CheckAlive => {
+                if self.last_heartbeat.elapsed() > Self::CLIENT_TIMEOUT {
+                    let _ = self
+                        .session
+                        .clone()
+                        .close(Some(CloseCode::Normal.into()))
+                        .await;
+                    true
+                } else {
+                    false
+                }
+            }
+            WsCommand::Close => {
+                let _ = self
+                    .session
+                    .clone()
+                    .close(Some(CloseCode::Normal.into()))
+                    .await;
+                true
+            }
         }
-    }
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct WsClose;
-
-impl Handler<WsClose> for WsSession {
-    type Result = ();
-
-    fn handle(&mut self, _: WsClose, ctx: &mut Self::Context) -> Self::Result {
-        ctx.close(Some(CloseCode::Normal.into()));
     }
 }
 

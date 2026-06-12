@@ -128,10 +128,10 @@ async fn validate_update(
     };
 
     let cost_id = data.cost_id.unwrap_or(current.cost_id);
-    if let Some(cost_id) = cost_id {
-        if cost_id <= 0 || !db::game::currency_belongs_to_game(&app.db, game_id, cost_id).await? {
-            return Ok(false);
-        }
+    if let Some(cost_id) = cost_id
+        && (cost_id <= 0 || !db::game::currency_belongs_to_game(&app.db, game_id, cost_id).await?)
+    {
+        return Ok(false);
     }
 
     Ok(true)

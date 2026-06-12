@@ -2,7 +2,7 @@ use serde::Serialize;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
-use sqlx::{Postgres, Executor};
+use sqlx::{Executor, Postgres};
 
 use crate::{DbPool, error::RbInternalError};
 
@@ -37,6 +37,17 @@ pub struct RbAssetFileAdminData {
 pub struct RbAssetGroupWithFilesAdminData {
     pub group: RbAssetGroupAdminData,
     pub files: Vec<RbAssetFileAdminData>,
+}
+
+pub struct CreateAssetGroupData<'a> {
+    pub game_id: i32,
+    pub puzzle_id: Option<i32>,
+    pub backend: &'a str,
+    pub object_key: &'a str,
+    pub original_name: &'a str,
+    pub mime_type: &'a str,
+    pub size: i64,
+    pub sha256: &'a str,
 }
 
 pub async fn list_by_scope(
@@ -77,7 +88,10 @@ pub async fn list_by_scope(
     Ok(result)
 }
 
-pub async fn list_files(pool: &DbPool, group_id: i32) -> Result<Vec<RbAssetFileAdminData>, RbInternalError> {
+pub async fn list_files(
+    pool: &DbPool,
+    group_id: i32,
+) -> Result<Vec<RbAssetFileAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetFileAdminData,
         "SELECT id, group_id, relative_path, mime_type, size, sha256, ctime_at
@@ -94,16 +108,8 @@ pub async fn list_files(pool: &DbPool, group_id: i32) -> Result<Vec<RbAssetFileA
 
 pub async fn create_group<'e, E>(
     executor: E,
-    game_id: i32,
-    puzzle_id: Option<i32>,
-    backend: &str,
-    object_key: &str,
-    original_name: &str,
-    mime_type: &str,
-    size: i64,
-    sha256: &str,
-)
--> Result<RbAssetGroupAdminData, RbInternalError>
+    data: CreateAssetGroupData<'_>,
+) -> Result<RbAssetGroupAdminData, RbInternalError>
 where
     E: Executor<'e, Database = Postgres>,
 {
@@ -114,14 +120,14 @@ where
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
-        game_id,
-        puzzle_id,
-        backend,
-        object_key,
-        original_name,
-        mime_type,
-        size,
-        sha256
+        data.game_id,
+        data.puzzle_id,
+        data.backend,
+        data.object_key,
+        data.original_name,
+        data.mime_type,
+        data.size,
+        data.sha256
     )
     .fetch_one(executor)
     .await?;
@@ -159,7 +165,10 @@ where
     Ok(result)
 }
 
-pub async fn admin_get_group(pool: &DbPool, group_id: i32) -> Result<Option<RbAssetGroupAdminData>, RbInternalError> {
+pub async fn admin_get_group(
+    pool: &DbPool,
+    group_id: i32,
+) -> Result<Option<RbAssetGroupAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetGroupAdminData,
         "SELECT id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at

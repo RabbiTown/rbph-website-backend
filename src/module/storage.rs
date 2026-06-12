@@ -50,7 +50,9 @@ pub struct StoredAssetGroup {
 
 impl LocalStorage {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: Arc::new(root.into()) }
+        Self {
+            root: Arc::new(root.into()),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -66,14 +68,20 @@ impl LocalStorage {
     }
 
     pub fn object_path(&self, object_key: &str, relative_path: &str) -> PathBuf {
-        self.object_dir(object_key).join(sanitize_relative_path(relative_path))
+        self.object_dir(object_key)
+            .join(sanitize_relative_path(relative_path))
     }
 
     pub fn temp_path(&self, object_key: &str) -> PathBuf {
         self.root().join(format!("{object_key}.tmp"))
     }
 
-    pub async fn store(&self, bytes: &[u8], original_name: &str, mime_type: &str) -> Result<StoredAsset, RbInternalError> {
+    pub async fn store(
+        &self,
+        bytes: &[u8],
+        original_name: &str,
+        mime_type: &str,
+    ) -> Result<StoredAsset, RbInternalError> {
         fs::create_dir_all(self.root()).await?;
 
         let object_key = format!("local-{}", uuid::Uuid::new_v4());
@@ -103,7 +111,11 @@ impl LocalStorage {
         })
     }
 
-    pub async fn store_group_files(&self, object_key: &str, files: &[AssetUploadFile]) -> Result<StoredAssetGroup, RbInternalError> {
+    pub async fn store_group_files(
+        &self,
+        object_key: &str,
+        files: &[AssetUploadFile],
+    ) -> Result<StoredAssetGroup, RbInternalError> {
         fs::create_dir_all(self.root()).await?;
 
         let tmp_dir = self.temp_path(object_key);
@@ -121,7 +133,10 @@ impl LocalStorage {
         let mut group_hasher = Sha256::new();
         let mut group_size: u64 = 0;
         for file in files {
-            let relative_path = uniquify_relative_path(sanitize_relative_path(&file.relative_path), &mut used_paths);
+            let relative_path = uniquify_relative_path(
+                sanitize_relative_path(&file.relative_path),
+                &mut used_paths,
+            );
             let file_path = tmp_dir.join(&relative_path);
             if let Some(parent) = file_path.parent() {
                 fs::create_dir_all(parent).await?;
@@ -270,7 +285,9 @@ fn uniquify_relative_path(path: String, used_paths: &mut HashMap<String, usize>)
         None => (None, path),
     };
     let (stem, ext) = match file.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => (stem.to_string(), Some(ext.to_string())),
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => {
+            (stem.to_string(), Some(ext.to_string()))
+        }
         _ => (file, None),
     };
 

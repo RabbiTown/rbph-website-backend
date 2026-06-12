@@ -1,5 +1,5 @@
-mod game;
 mod asset;
+mod game;
 mod hint;
 mod puzzle;
 mod round;

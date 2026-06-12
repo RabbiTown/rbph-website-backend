@@ -106,6 +106,7 @@ async fn judge_puzzle(
             cooldown_till,
             update,
         } => {
+            let update = *update.0;
             let unlock_rows = sqlx::query_as!(
                 PuzzleUnlockInfo,
                 "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug

@@ -375,12 +375,15 @@ pub async fn get_puzzle_show_str_for_team(
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SubmitStateUpdate {
     pub state: Option<RbPuzzleTeamStateShowData>,
     pub currency: Vec<db::team::RbCurrencyShowData>,
     pub currency_penalty: Vec<CurrencyPenaltyShowData>,
 }
+
+#[derive(Clone)]
+pub struct SubmitStateBox(pub Box<SubmitStateUpdate>);
 
 #[derive(Clone, Serialize)]
 pub struct CurrencyPenaltyShowData {
@@ -529,7 +532,7 @@ pub enum SubmitAnswerResult {
         solved: bool,
         unlocks: Vec<i32>,
         cooldown_till: Option<OffsetDateTime>,
-        update: SubmitStateUpdate,
+        update: SubmitStateBox,
     },
     Locked,
     Duplicate,
@@ -727,8 +730,7 @@ pub async fn submit_answer(
                     RbPuzzlePenaltyType::Currency => {
                         if let Some(currency_id) = rule.args.first()
                             && let Some(amount) = rule.args.get(1)
-                        {
-                            if let Some(penalty) = sqlx::query_as!(
+                            && let Some(penalty) = sqlx::query_as!(
                                 CurrencyPenaltyShowData,
                                 r#"UPDATE rb_team_currency tc
                                 SET utime_at = NOW(), amount = LEAST(
@@ -750,7 +752,6 @@ pub async fn submit_answer(
                                 currency_updated = true;
                                 currency_penalty.push(penalty);
                             }
-                        }
                     }
                     _ => {}
                 }
@@ -790,7 +791,7 @@ pub async fn submit_answer(
     } else {
         vec![]
     };
-    let update = SubmitStateUpdate {
+    let update = SubmitStateBox(Box::new(SubmitStateUpdate {
         state: get_puzzle_team_state(&app.db, team_id, puzzle_id).await?,
         currency: if currency_updated || matches!(result.action, RbJudgeAction::StartGame) {
             db::team::get_currency_info(&app.db, team_id).await?
@@ -798,7 +799,7 @@ pub async fn submit_answer(
             vec![]
         },
         currency_penalty,
-    };
+    }));
 
     Ok(SubmitAnswerResult::Ok {
         result,

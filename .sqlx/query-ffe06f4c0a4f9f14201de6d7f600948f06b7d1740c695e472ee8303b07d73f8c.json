@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_team_puzzle\n        WHERE puzzle_id = $1\n        RETURNING team_id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ffe06f4c0a4f9f14201de6d7f600948f06b7d1740c695e472ee8303b07d73f8c"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_team_hint th\n        USING rb_hint h\n        WHERE th.hint_id = h.id AND h.puzzle_id = $1\n        RETURNING th.team_id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7f683cc2ffbc3ca59a4c9f8ce57f8677a79452e17f130f1edc308c69d4a8aa29"
+}

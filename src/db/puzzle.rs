@@ -944,6 +944,207 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
     Ok(unlocks)
 }
 
+pub async fn admin_unlock_puzzle_for_eligible_teams(
+    app: &AppState,
+    puzzle_id: i32,
+    game_id: i32,
+    unlock_cond: &str,
+) -> Result<Vec<i32>, RbInternalError> {
+    let round_rows = sqlx::query!(
+        "SELECT id, slug
+        FROM rb_round
+        WHERE game_id = $1;",
+        game_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    let puzzle_rows = sqlx::query!(
+        "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE r.game_id = $1
+        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+        game_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    let mut round_slugs: HashMap<String, u32> = HashMap::new();
+    for row in round_rows {
+        if let Some(slug) = row.slug {
+            round_slugs.insert(slug, row.id.try_into().unwrap_or(0));
+        }
+    }
+
+    let mut puzzle_slugs: HashMap<String, u32> = HashMap::new();
+    let mut round_puzzles: HashMap<u32, Vec<u32>> = HashMap::new();
+    for row in puzzle_rows {
+        let row_id = row.id;
+        let current_puzzle_id = row_id.try_into().unwrap_or(0);
+        if let Some(slug) = row.slug {
+            puzzle_slugs.insert(slug, current_puzzle_id);
+        }
+        if row.round_puzzle_id != Some(row_id) {
+            round_puzzles
+                .entry(row.round_id.try_into().unwrap_or(0))
+                .or_default()
+                .push(current_puzzle_id);
+        }
+    }
+
+    let compiled_unlock_cond = if unlock_cond == "default" {
+        None
+    } else {
+        Some(expr::compile_gate_expr(unlock_cond).map_err(RbInternalError::Other)?)
+    };
+
+    let candidate_rows = sqlx::query!(
+        "SELECT t.id, t.state, solved.puzzle_id AS \"solved_puzzle_id?\"
+        FROM rb_team t
+        LEFT JOIN rb_team_puzzle current
+            ON current.team_id = t.id AND current.puzzle_id = $1
+        LEFT JOIN rb_team_puzzle solved
+            ON solved.team_id = t.id AND solved.state >= 1
+        WHERE t.game_id = $2 AND current.team_id IS NULL
+        ORDER BY t.id;",
+        puzzle_id,
+        game_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    let mut eligible_team_ids = Vec::new();
+    let mut current_team_id: Option<i32> = None;
+    let mut current_team_state = 0_i16;
+    let mut solved = HashSet::new();
+
+    let mut flush_team = |team_id: Option<i32>, team_state: i16, solved: &HashSet<i32>| {
+        let Some(team_id) = team_id else {
+            return;
+        };
+        let state = RbPuzzleStates {
+            solved: solved.clone(),
+            puzzle_slugs: puzzle_slugs.clone(),
+            round_slugs: round_slugs.clone(),
+            round_puzzles: round_puzzles.clone(),
+            game_started: team_state > 0,
+        };
+        let eligible = compiled_unlock_cond
+            .as_ref()
+            .is_none_or(|cond| expr::ast::eval_compiled(&state, cond));
+        if eligible {
+            eligible_team_ids.push(team_id);
+        }
+    };
+
+    for row in candidate_rows {
+        if current_team_id != Some(row.id) {
+            flush_team(current_team_id, current_team_state, &solved);
+            current_team_id = Some(row.id);
+            current_team_state = row.state;
+            solved.clear();
+        }
+
+        if let Some(solved_puzzle_id) = row.solved_puzzle_id {
+            solved.insert(solved_puzzle_id);
+        }
+    }
+    flush_team(current_team_id, current_team_state, &solved);
+
+    if eligible_team_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let inserted_team_ids = sqlx::query_scalar!(
+        "INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
+        SELECT x.team_id, $2, 0
+        FROM UNNEST($1::int[]) AS x(team_id)
+        ON CONFLICT DO NOTHING
+        RETURNING team_id;",
+        &eligible_team_ids,
+        puzzle_id
+    )
+    .fetch_all(&app.db)
+    .await?;
+
+    Ok(inserted_team_ids)
+}
+
+#[derive(Serialize)]
+pub struct AdminClearPuzzleTeamStatesResult {
+    pub team_count: usize,
+    pub puzzle_states: usize,
+    pub submissions: usize,
+    pub hints: usize,
+    pub tickets: usize,
+    pub team_ids: Vec<i32>,
+}
+
+pub async fn admin_clear_puzzle_team_states(
+    pool: &DbPool,
+    puzzle_id: i32,
+) -> Result<AdminClearPuzzleTeamStatesResult, RbInternalError> {
+    let mut tx = pool.begin().await?;
+
+    let puzzle_state_team_ids = sqlx::query_scalar!(
+        "DELETE FROM rb_team_puzzle
+        WHERE puzzle_id = $1
+        RETURNING team_id;",
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let submission_team_ids = sqlx::query_scalar!(
+        "DELETE FROM rb_submission
+        WHERE puzzle_id = $1
+        RETURNING team_id;",
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let hint_team_ids = sqlx::query_scalar!(
+        "DELETE FROM rb_team_hint th
+        USING rb_hint h
+        WHERE th.hint_id = h.id AND h.puzzle_id = $1
+        RETURNING th.team_id;",
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let ticket_team_ids = sqlx::query_scalar!(
+        "DELETE FROM rb_ticket
+        WHERE puzzle_id = $1
+        RETURNING team_id;",
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let mut team_ids = HashSet::new();
+    team_ids.extend(puzzle_state_team_ids.iter().copied());
+    team_ids.extend(submission_team_ids.iter().copied());
+    team_ids.extend(hint_team_ids.iter().copied());
+    team_ids.extend(ticket_team_ids.iter().copied());
+
+    let mut team_ids = team_ids.into_iter().collect::<Vec<_>>();
+    team_ids.sort_unstable();
+
+    Ok(AdminClearPuzzleTeamStatesResult {
+        team_count: team_ids.len(),
+        puzzle_states: puzzle_state_team_ids.len(),
+        submissions: submission_team_ids.len(),
+        hints: hint_team_ids.len(),
+        tickets: ticket_team_ids.len(),
+        team_ids,
+    })
+}
+
 #[derive(FromRow, Serialize)]
 pub struct RbHintShowData {
     pub id: i32,

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_asset_file\n        WHERE group_id = $1 AND id = $2;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "752375487079ef90c6e48eb1857c229b0ecf04739deb678d1ff53ef342ef0c27"
+}

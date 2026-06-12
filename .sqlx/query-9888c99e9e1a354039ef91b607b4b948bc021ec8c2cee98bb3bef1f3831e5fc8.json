@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.state, solved.puzzle_id AS \"solved_puzzle_id?\"\n        FROM rb_team t\n        LEFT JOIN rb_team_puzzle current\n            ON current.team_id = t.id AND current.puzzle_id = $1\n        LEFT JOIN rb_team_puzzle solved\n            ON solved.team_id = t.id AND solved.state >= 1\n        WHERE t.game_id = $2 AND current.team_id IS NULL\n        ORDER BY t.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "solved_puzzle_id?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9888c99e9e1a354039ef91b607b4b948bc021ec8c2cee98bb3bef1f3831e5fc8"
+}

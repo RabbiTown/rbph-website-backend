@@ -65,6 +65,18 @@ struct PuzzleAdminDeleteResponse {
     code: PuzzleAdminResult,
 }
 
+#[derive(Serialize)]
+struct PuzzleAdminUnlockCheckResponse {
+    code: PuzzleAdminResult,
+    unlocked: usize,
+}
+
+#[derive(Serialize)]
+struct PuzzleAdminClearStatesResponse {
+    code: PuzzleAdminResult,
+    result: db::puzzle::AdminClearPuzzleTeamStatesResult,
+}
+
 fn validate_json_shape(data: &RbPuzzleCreateData) -> bool {
     data.judge.is_object() || data.judge.is_array()
 }
@@ -238,6 +250,10 @@ async fn invalidate_round_state_cache(app: &AppState, round_id: i32) {
     let _ = db::cache::del_pattern(&app.kv, &format!("round:{round_id}:team:*:full_state")).await;
 }
 
+async fn invalidate_puzzle_team_state_cache(app: &AppState, puzzle_id: i32) {
+    let _ = db::cache::del_pattern(&app.kv, &format!("puzzle:{puzzle_id}:team:*:full_state")).await;
+}
+
 async fn list(
     query: web::Query<PuzzleListQuery>,
     app: web::Data<AppState>,
@@ -391,6 +407,68 @@ async fn delete(path: web::Path<PuzzlePathInfo>, app: web::Data<AppState>) -> Re
     }))
 }
 
+async fn unlock_check(
+    path: web::Path<PuzzlePathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let puzzle = db::puzzle::admin_get(&app.db, path.puzzle_id).await?;
+    let Some(puzzle) = puzzle else {
+        return RbError::not_found()
+            .code(PuzzleAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    let unlocked_team_ids = db::puzzle::admin_unlock_puzzle_for_eligible_teams(
+        &app,
+        puzzle.id,
+        puzzle.game_id,
+        &puzzle.unlock_cond,
+    )
+    .await?;
+
+    if !unlocked_team_ids.is_empty() {
+        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
+        invalidate_round_state_cache(&app, puzzle.round_id).await;
+    }
+
+    Ok(HttpResponse::Ok().json(PuzzleAdminUnlockCheckResponse {
+        code: PuzzleAdminResult::Ok,
+        unlocked: unlocked_team_ids.len(),
+    }))
+}
+
+async fn clear_states(
+    path: web::Path<PuzzlePathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let puzzle = db::puzzle::admin_get(&app.db, path.puzzle_id).await?;
+    let Some(puzzle) = puzzle else {
+        return RbError::not_found()
+            .code(PuzzleAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    let result = db::puzzle::admin_clear_puzzle_team_states(&app.db, puzzle.id).await?;
+
+    if !result.team_ids.is_empty() {
+        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
+        let _ =
+            db::cache::del_pattern(&app.kv, &format!("puzzle:{}:team:*:hints", puzzle.id)).await;
+        invalidate_round_state_cache(&app, puzzle.round_id).await;
+
+        for team_id in &result.team_ids {
+            db::board::LEADER_BOARD_CACHE
+                .update_team(&app.db, *team_id, true)
+                .await?;
+        }
+    }
+
+    Ok(HttpResponse::Ok().json(PuzzleAdminClearStatesResponse {
+        code: PuzzleAdminResult::Ok,
+        result,
+    }))
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("puzzles")
@@ -398,6 +476,8 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("", web::post().to(append))
             .route("/{puzzle_id}", web::get().to(get))
             .route("/{puzzle_id}", web::patch().to(edit))
+            .route("/{puzzle_id}/unlock-check", web::post().to(unlock_check))
+            .route("/{puzzle_id}/clear-states", web::post().to(clear_states))
             .route("/{puzzle_id}", web::delete().to(delete)),
     );
 }

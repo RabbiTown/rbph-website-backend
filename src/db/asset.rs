@@ -33,6 +33,17 @@ pub struct RbAssetFileAdminData {
     pub ctime_at: OffsetDateTime,
 }
 
+#[derive(Clone, Serialize)]
+pub struct RbAssetReadableFile {
+    pub group_id: i32,
+    pub object_key: String,
+    pub original_name: String,
+    pub relative_path: String,
+    pub mime_type: String,
+    pub size: i64,
+    pub sha256: String,
+}
+
 #[derive(Serialize)]
 pub struct RbAssetGroupWithFilesAdminData {
     pub group: RbAssetGroupAdminData,
@@ -101,6 +112,60 @@ pub async fn list_files(
         group_id
     )
     .fetch_all(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn list_readable_files_by_object_key(
+    pool: &DbPool,
+    game_id: i32,
+    puzzle_id: i32,
+    object_key: &str,
+) -> Result<Vec<RbAssetReadableFile>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbAssetReadableFile,
+        r#"SELECT f.group_id, g.object_key, g.original_name,
+            f.relative_path, f.mime_type, f.size, f.sha256
+        FROM rb_asset_file f
+        JOIN rb_asset_group g ON g.id = f.group_id
+        WHERE g.object_key = $1
+            AND g.game_id = $2
+            AND (g.puzzle_id = $3 OR g.puzzle_id IS NULL)
+        ORDER BY f.relative_path ASC, f.id ASC;"#,
+        object_key,
+        game_id,
+        puzzle_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn get_readable_file_by_object_key(
+    pool: &DbPool,
+    game_id: i32,
+    puzzle_id: i32,
+    object_key: &str,
+    relative_path: &str,
+) -> Result<Option<RbAssetReadableFile>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbAssetReadableFile,
+        r#"SELECT f.group_id, g.object_key, g.original_name,
+            f.relative_path, f.mime_type, f.size, f.sha256
+        FROM rb_asset_file f
+        JOIN rb_asset_group g ON g.id = f.group_id
+        WHERE g.object_key = $1
+            AND f.relative_path = $2
+            AND g.game_id = $3
+            AND (g.puzzle_id = $4 OR g.puzzle_id IS NULL);"#,
+        object_key,
+        relative_path,
+        game_id,
+        puzzle_id
+    )
+    .fetch_optional(pool)
     .await?;
 
     Ok(result)

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_store_doc\n            (puzzle_id, collection, team_id, user_id, value)\n        VALUES ($1, $2, $3, $4, $5)\n        RETURNING id, collection, team_id, user_id, value, ctime_at, utime_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "collection",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "user_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int4",
+        "Int4",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "93707471d0a6b2ff920c97def48627aa0be7262a3570527ad1afa1fb3ff9a33f"
+}

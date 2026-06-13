@@ -449,6 +449,7 @@ async fn clear_states(
     };
 
     let result = db::puzzle::admin_clear_puzzle_team_states(&app.db, puzzle.id).await?;
+    let _ = db::puzzle_backend::clear_puzzle_team_kv(&app.db, puzzle.id).await?;
 
     if !result.team_ids.is_empty() {
         invalidate_puzzle_team_state_cache(&app, puzzle.id).await;

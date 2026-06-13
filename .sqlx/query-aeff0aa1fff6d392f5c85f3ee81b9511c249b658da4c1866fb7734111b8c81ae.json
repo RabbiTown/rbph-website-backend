@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_submission\n            (team_id, user_id, puzzle_id, user_answer, norm_answer, saction, sresult, real_answer, ignored)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n        RETURNING id, team_id, user_id, puzzle_id, user_answer, norm_answer,\n            saction, sresult, real_answer, ignored, ctime_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "user_answer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "norm_answer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "saction",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "sresult",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "real_answer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "ignored",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text",
+        "Int2",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "aeff0aa1fff6d392f5c85f3ee81b9511c249b658da4c1866fb7734111b8c81ae"
+}

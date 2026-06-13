@@ -2,6 +2,7 @@ mod asset;
 mod game;
 mod hint;
 mod puzzle;
+mod puzzle_backend;
 mod round;
 
 use actix_web::web;
@@ -16,6 +17,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     )
     .configure(asset::config)
     .configure(hint::config)
+    .configure(puzzle_backend::config)
     .configure(puzzle::config)
     .configure(round::config);
 }

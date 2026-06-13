@@ -386,6 +386,160 @@ pub struct SubmitStateUpdate {
 pub struct SubmitStateBox(pub Box<SubmitStateUpdate>);
 
 #[derive(Clone, Serialize)]
+pub struct BackendSubmissionInput {
+    pub user_answer: String,
+    pub norm_answer: Option<String>,
+    pub saction: RbJudgeAction,
+    pub sresult: Option<String>,
+    pub real_answer: Option<String>,
+    pub ignored: bool,
+}
+
+#[derive(FromRow, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendSubmissionShowData {
+    pub id: i32,
+    pub team_id: i32,
+    pub user_id: i32,
+    pub puzzle_id: i32,
+    pub user_answer: String,
+    pub norm_answer: String,
+    pub saction: RbJudgeAction,
+    pub sresult: Option<String>,
+    pub real_answer: Option<String>,
+    pub ignored: bool,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}
+
+pub async fn add_backend_submission(
+    pool: &DbPool,
+    team_id: i32,
+    user_id: i32,
+    puzzle_id: i32,
+    data: &BackendSubmissionInput,
+) -> Result<BackendSubmissionShowData, RbInternalError> {
+    let norm_answer = data
+        .norm_answer
+        .clone()
+        .unwrap_or_else(|| normalize_answer(&data.user_answer));
+
+    let row = sqlx::query_as!(
+        BackendSubmissionShowData,
+        r#"INSERT INTO rb_submission
+            (team_id, user_id, puzzle_id, user_answer, norm_answer, saction, sresult, real_answer, ignored)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, team_id, user_id, puzzle_id, user_answer, norm_answer,
+            saction, sresult, real_answer, ignored, ctime_at"#,
+        team_id,
+        user_id,
+        puzzle_id,
+        data.user_answer,
+        norm_answer,
+        i16::from(data.saction),
+        data.sresult,
+        data.real_answer,
+        data.ignored
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn add_backend_submission_and_invalidate(
+    app: &AppState,
+    team_id: i32,
+    user_id: i32,
+    puzzle_id: i32,
+    data: &BackendSubmissionInput,
+) -> Result<BackendSubmissionShowData, RbInternalError> {
+    let row = add_backend_submission(&app.db, team_id, user_id, puzzle_id, data).await?;
+    invalidate_team_puzzle_state_cache(app, team_id, puzzle_id).await?;
+    Ok(row)
+}
+
+pub async fn solve_backend_puzzle(
+    app: &AppState,
+    team_id: i32,
+    user_id: i32,
+    puzzle_id: i32,
+    submission_id: i32,
+) -> Result<bool, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+
+    let submission = sqlx::query_as!(
+        BackendSubmissionShowData,
+        r#"SELECT id, team_id, user_id, puzzle_id, user_answer, norm_answer,
+            saction, sresult, real_answer, ignored, ctime_at
+        FROM rb_submission
+        WHERE id = $1 AND team_id = $2 AND puzzle_id = $3
+        FOR UPDATE;"#,
+        submission_id,
+        team_id,
+        puzzle_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let solved = sqlx::query!(
+        "UPDATE rb_team_puzzle SET state = 1, solve_at = NOW()
+        WHERE team_id = $1 AND puzzle_id = $2 AND state = 0",
+        team_id,
+        puzzle_id
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        > 0;
+
+    if matches!(submission.saction, RbJudgeAction::FinishGame) {
+        sqlx::query!(
+            "UPDATE rb_team SET state = 2, finish_at = NOW()
+            WHERE id = $1 AND state = 1;",
+            team_id
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    if solved {
+        db::ticket::close_puzzle_tickets_on_solve(&mut tx, team_id, puzzle_id, user_id).await?;
+    }
+
+    tx.commit().await?;
+
+    db::cache::invalidate_team_puzzle(app, team_id, puzzle_id).await?;
+    if solved {
+        db::cache::invalidate_team_puzzle_solved(app, team_id, puzzle_id).await?;
+        if matches!(submission.saction, RbJudgeAction::FinishGame) {
+            db::cache::invalidate_team_info(app, team_id).await?;
+        }
+        let _ = unlock_new_puzzles(app, team_id).await?;
+    }
+
+    Ok(solved)
+}
+
+pub async fn solve_backend_puzzle_with_submission(
+    app: &AppState,
+    team_id: i32,
+    user_id: i32,
+    puzzle_id: i32,
+    submission: &BackendSubmissionShowData,
+) -> Result<bool, RbInternalError> {
+    if submission.team_id != team_id
+        || submission.user_id != user_id
+        || submission.puzzle_id != puzzle_id
+    {
+        return Err(RbInternalError::Other(
+            "submission does not match current runtime".to_string(),
+        ));
+    }
+    solve_backend_puzzle(app, team_id, user_id, puzzle_id, submission.id).await
+}
+
+#[derive(Clone, Serialize)]
 pub struct CurrencyPenaltyShowData {
     pub currency_id: i32,
     pub name: String,

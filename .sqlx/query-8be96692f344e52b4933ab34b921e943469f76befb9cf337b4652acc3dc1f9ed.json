@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_kv (puzzle_id, team_id, key, value)\n            VALUES ($1, $2, $3, $4)\n            ON CONFLICT (puzzle_id, key) WHERE team_id IS NULL\n            DO UPDATE SET value = EXCLUDED.value, utime_at = CURRENT_TIMESTAMP\n            RETURNING value",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8be96692f344e52b4933ab34b921e943469f76befb9cf337b4652acc3dc1f9ed"
+}

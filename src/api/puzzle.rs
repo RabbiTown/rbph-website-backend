@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 
 use crate::{
     AppState,
-    api::{error_handler, ticket},
+    api::{error_handler, puzzle_backend, ticket},
     db::{self},
     error::{RbError, RbInternalError},
     extractor::auth::AuthUser,
@@ -329,6 +329,7 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
             .route("/submit", web::post().to(judge_puzzle))
             .route("/hints", web::get().to(get_puzzle_hints))
             .route("/submissions", web::get().to(get_puzzle_submissions))
+            .configure(puzzle_backend::config)
             .service(
                 web::scope("/tickets")
                     .configure(ticket::puzzles_config)

@@ -6,7 +6,10 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
-use tokio::{fs, io::AsyncWriteExt};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 use zip::read::ZipArchive;
 
 use crate::error::RbInternalError;
@@ -230,6 +233,27 @@ impl LocalStorage {
             size: group_size,
             sha256: format!("{:x}", group_hasher.finalize()),
         })
+    }
+
+    pub async fn read_object_file_limited(
+        &self,
+        object_key: &str,
+        relative_path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, RbInternalError> {
+        let file_path = self.object_path(object_key, relative_path);
+        let metadata = fs::metadata(&file_path).await?;
+        if metadata.len() > max_bytes {
+            return Err(RbInternalError::Other(format!(
+                "asset file is too large: {} bytes",
+                metadata.len()
+            )));
+        }
+
+        let mut file = fs::File::open(file_path).await?;
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.read_to_end(&mut bytes).await?;
+        Ok(bytes)
     }
 }
 

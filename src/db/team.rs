@@ -417,6 +417,7 @@ pub struct RbCurrencyShowData {
     growth: i32,
     prec: i32,
     amount: i32,
+    current_amount: i32,
     max_amount: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     utime_at: OffsetDateTime,
@@ -429,7 +430,12 @@ pub async fn get_currency_info(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
-                c.prec, tc.amount, c.max_amount, tc.utime_at
+                c.prec, tc.amount,
+                LEAST(
+                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                    c.max_amount
+                ) AS \"current_amount!\",
+                c.max_amount, tc.utime_at
         FROM rb_currency c
         JOIN rb_team_currency tc ON tc.currency_id = c.id
         WHERE tc.team_id = $1;",
@@ -439,6 +445,129 @@ pub async fn get_currency_info(
     .await?;
 
     Ok(result)
+}
+
+pub async fn get_currency_info_one(
+    db_pool: &DbPool,
+    team_id: i32,
+    currency_id: i32,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbCurrencyShowData,
+        "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+                c.prec, tc.amount,
+                LEAST(
+                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                    c.max_amount
+                ) AS \"current_amount!\",
+                c.max_amount, tc.utime_at
+        FROM rb_currency c
+        JOIN rb_team_currency tc ON tc.currency_id = c.id
+        WHERE tc.team_id = $1 AND c.id = $2;",
+        team_id,
+        currency_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    Ok(result)
+}
+
+#[derive(sqlx::FromRow)]
+struct CurrencyRuntimeRow {
+    current_amount: i32,
+    max_amount: i32,
+}
+
+async fn lock_currency_runtime(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: i32,
+    currency_id: i32,
+) -> Result<Option<CurrencyRuntimeRow>, RbInternalError> {
+    let row = sqlx::query_as!(
+        CurrencyRuntimeRow,
+        r#"SELECT
+            LEAST(
+                tc.amount
+                    + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                c.max_amount
+            ) AS "current_amount!",
+            c.max_amount AS "max_amount!"
+        FROM rb_team_currency tc
+        JOIN rb_currency c ON tc.currency_id = c.id
+        WHERE tc.team_id = $1 AND tc.currency_id = $2
+        FOR UPDATE;"#,
+        team_id,
+        currency_id
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn cost_currency(
+    db_pool: &DbPool,
+    team_id: i32,
+    currency_id: i32,
+    delta: i32,
+) -> Result<bool, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
+        tx.commit().await?;
+        return Ok(false);
+    };
+
+    let next_amount = i64::from(row.current_amount) + i64::from(delta);
+    if next_amount < 0 || next_amount > i64::from(row.max_amount) {
+        tx.commit().await?;
+        return Ok(false);
+    }
+
+    sqlx::query!(
+        r#"UPDATE rb_team_currency
+        SET amount = $3, utime_at = NOW()
+        WHERE team_id = $1 AND currency_id = $2;"#,
+        team_id,
+        currency_id,
+        next_amount as i32
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub async fn add_currency(
+    db_pool: &DbPool,
+    team_id: i32,
+    currency_id: i32,
+    delta: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let next_amount = i64::from(row.current_amount) + i64::from(delta);
+    let stored_amount = next_amount.min(i64::from(row.max_amount));
+    let actual_growth = stored_amount - i64::from(row.current_amount);
+
+    sqlx::query!(
+        r#"UPDATE rb_team_currency
+        SET amount = $3, utime_at = NOW()
+        WHERE team_id = $1 AND currency_id = $2;"#,
+        team_id,
+        currency_id,
+        stored_amount as i32
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(actual_growth as i32))
 }
 
 pub async fn get_member_id(db_pool: &DbPool, team_id: i32) -> Result<Vec<i32>, RbInternalError> {

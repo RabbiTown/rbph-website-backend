@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id, d.collection, d.team_id, t.name AS team_name,\n            d.user_id, u.nickname AS user_nickname, d.value, d.ctime_at, d.utime_at\n        FROM rb_puzzle_store_doc d\n        LEFT JOIN rb_team t ON t.id = d.team_id\n        LEFT JOIN rb_user u ON u.id = d.user_id\n        WHERE d.puzzle_id = $1 AND d.collection = $2 AND d.id = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "collection",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "team_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "user_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "user_nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f3af3af253d1cbde15854b1c43afc34e1f474a171e6d40b53e37ff004d47d0fe"
+}

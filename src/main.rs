@@ -50,16 +50,20 @@ async fn main() -> std::io::Result<()> {
     }
 
     let settings = settings.unwrap();
-    let config = settings.app.clone();
+    let app_config = settings.app.clone();
+    let db_config = settings.db.clone();
+    let storage_config = settings.storage.clone();
 
-    let db_pool = db::create_pool(&config.db_addr).await.unwrap();
+    let db_pool = db::create_pool(&db_config.addr, db_config.max_connections)
+        .await
+        .unwrap();
 
-    let kv_pool = deadpool_redis::Config::from_url(&config.kv_addr)
+    let kv_pool = deadpool_redis::Config::from_url(&app_config.kv_addr)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .unwrap();
 
-    let session_store = RedisSessionStore::new(&config.kv_addr).await.unwrap();
-    let secret_key = Key::from(&config.get_secret_key());
+    let session_store = RedisSessionStore::new(&app_config.kv_addr).await.unwrap();
+    let secret_key = Key::from(&app_config.get_secret_key());
 
     let sync_hub = Arc::new(SyncHub::default());
 
@@ -77,7 +81,7 @@ async fn main() -> std::io::Result<()> {
         None
     };
 
-    let storage = module::storage::LocalStorage::new(config.asset_root.clone());
+    let storage = module::storage::LocalStorage::new(storage_config.asset_root.clone());
 
     let app_state = AppState {
         db: db_pool,
@@ -89,14 +93,14 @@ async fn main() -> std::io::Result<()> {
     };
     let app_state_data = web::Data::new(app_state);
 
-    let (host, port) = (&config.bind_addr.0, config.bind_addr.1);
+    let (host, port) = (&app_config.bind_addr.0, app_config.bind_addr.1);
     let server = HttpServer::new(move || {
         App::new()
             .app_data(app_state_data.clone())
             .wrap(Logger::default())
             .wrap(
                 SessionMiddleware::builder(session_store.clone(), secret_key.clone())
-                    .cookie_secure(config.production)
+                    .cookie_secure(app_config.production)
                     .cookie_http_only(true)
                     .cookie_same_site(actix_web::cookie::SameSite::Lax)
                     .cookie_name("rbph_session".to_string())
@@ -124,7 +128,7 @@ async fn main() -> std::io::Result<()> {
         "Running on http://{}:{} ({})",
         host,
         port,
-        if config.production {
+        if app_config.production {
             "PRODUCTION"
         } else {
             "DEVELOP"

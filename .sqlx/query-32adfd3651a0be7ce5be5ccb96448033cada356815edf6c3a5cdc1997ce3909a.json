@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_puzzle_backend\n        WHERE puzzle_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "32adfd3651a0be7ce5be5ccb96448033cada356815edf6c3a5cdc1997ce3909a"
+}

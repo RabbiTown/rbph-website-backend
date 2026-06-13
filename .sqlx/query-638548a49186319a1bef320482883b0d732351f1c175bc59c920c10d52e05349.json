@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT key, value, utime_at\n            FROM rb_puzzle_kv\n            WHERE puzzle_id = $1\n                AND team_id IS NOT DISTINCT FROM $2\n                AND key LIKE $3\n            ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "638548a49186319a1bef320482883b0d732351f1c175bc59c920c10d52e05349"
+}

@@ -9,7 +9,7 @@ SELECT setval('rb_game_id_seq', 100);
 -- round
 
 INSERT INTO rb_round (id, title, content, content_type, game_id)
-VALUES (1, '序幕', '提交「START」开始游戏。', 0, 1);
+VALUES (1, '序幕', E'请提交「START」以开始游戏。\n\n**注意：**开始游戏后，不再能退出、解散队伍。', 0, 1);
 
 INSERT INTO rb_round (id, title, content, content_type, game_id)
 VALUES (2, '最终谜题', '', 0, 1);
@@ -19,17 +19,17 @@ SELECT setval('rb_round_id_seq', 100);
 -- puzzle
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (1, '序幕', 1, E'请提交「START」以开始游戏。\n\n**注意：**开始游戏后，不再能退出、解散队伍。', 0,
+VALUES (1, '序幕', 1, E'', 0,
         '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"bili20fans","action":"easter_egg","result":"我的 B 站 20 粉丝啦，哇！"}]',
         '[{"type":1,"args":[10]}]', NULL, 'default', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (2, '命名毋以讹传之', 1, E'<div class="text-center">\n\n*只有起错的名字，没有叫错的外号。*\n\n</div>\n\n题目内容略。', 0,
+VALUES (2, '命名毋以讹传之', 1, E'::align{textAlign="center"}\n*只有起错的名字，没有叫错的外号。*\n::\n\n题目内容略。', 0,
         '[{"type":"exact","text":"ORME SHOE","action":"correct"}]',
         '[{"type":2,"args":[10]}]', NULL, '(game-started)', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (3, '只说明书', 1, E'<div class="text-center">\n\n*不讲暗话，只说明书。*\n\n</div>\n\n题目内容略，请提交「MILESTONE」。', 0,
+VALUES (3, '只说明书', 1, E'::align{textAlign="center"}\n*不讲暗话，只说明书。*\n::\n\n题目内容略，请提交「MILESTONE」。', 0,
         '[{"type":"exact","text":"MILESTONE","action":"milestone","result":"本题答案是【BRUSH】"},{"type":"exact","text":"BRUSH","action":"correct"}]',
         '[{"type":1,"args":[10]},{"type":3,"args":[1,10]}]', 20, '(game-started)', 1);
 

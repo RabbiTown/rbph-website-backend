@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT f.group_id, g.object_key, g.original_name,\n            f.relative_path, f.mime_type, f.size, f.sha256\n        FROM rb_asset_file f\n        JOIN rb_asset_group g ON g.id = f.group_id\n        WHERE g.object_key = $1\n            AND g.game_id = $2\n            AND (g.puzzle_id = $3 OR g.puzzle_id IS NULL)\n        ORDER BY f.relative_path ASC, f.id ASC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "object_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "original_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "relative_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "mime_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "sha256",
+        "type_info": "Bpchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cea8a669bc0a84ca7573333ebaa669664b086979f843e21cc0949b3378e750c7"
+}

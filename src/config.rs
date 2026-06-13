@@ -7,9 +7,7 @@ pub struct AppConfig {
     pub production: bool,
 
     pub bind_addr: (String, u16),
-    pub db_addr: String,
     pub kv_addr: String,
-    pub asset_root: String,
 
     pub secret_key: String,
 }
@@ -32,6 +30,28 @@ impl AppConfig {
     }
 }
 
+#[derive(Deserialize, Clone)]
+pub struct DbConfig {
+    pub addr: String,
+    #[serde(default = "default_db_max_connections")]
+    pub max_connections: u32,
+}
+
+const fn default_db_max_connections() -> u32 {
+    32
+}
+
+#[derive(Deserialize, Clone)]
+pub struct StorageConfig {
+    #[serde(default = "default_storage_kind")]
+    pub kind: String,
+    pub asset_root: String,
+}
+
+fn default_storage_kind() -> String {
+    "local".to_string()
+}
+
 #[derive(Deserialize)]
 pub struct AuthConfig {
     pub max_session: usize,
@@ -45,6 +65,8 @@ pub struct CaptchaConfig {}
 #[derive(Deserialize)]
 pub struct Settings {
     pub app: AppConfig,
+    pub db: DbConfig,
+    pub storage: StorageConfig,
     pub auth: AuthConfig,
 }
 

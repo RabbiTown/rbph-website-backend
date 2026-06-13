@@ -10,7 +10,7 @@ This project is in the very early stages of development. Version migrations are 
 2. Install the Rust toolchain and `sqlx-cli`.
 3. Copy `.env.example` to `.env` and change the required configuration values.
 4. Edit `config.toml` and adjust the necessary options.  
-   Ensure `db_addr` matches `DATABASE_URL` in `.env`.
+   Ensure `[db].addr` matches `DATABASE_URL` in `.env`.
 5. `sqlx migrate run` - Run database migrations.
 6. `cargo run` - Start the application.
 

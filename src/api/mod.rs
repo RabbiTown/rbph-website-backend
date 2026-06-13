@@ -2,6 +2,7 @@ mod admin;
 mod auth;
 mod game;
 mod puzzle;
+mod puzzle_backend;
 mod round;
 mod sync;
 mod team;

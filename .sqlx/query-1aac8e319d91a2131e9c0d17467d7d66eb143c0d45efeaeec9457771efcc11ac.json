@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_backend (puzzle_id, enabled, source)\n        VALUES ($1, FALSE, $2)\n        ON CONFLICT (puzzle_id)\n        DO UPDATE SET\n            source = EXCLUDED.source,\n            utime_at = CURRENT_TIMESTAMP\n        RETURNING puzzle_id, enabled, source, ctime_at, utime_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1aac8e319d91a2131e9c0d17467d7d66eb143c0d45efeaeec9457771efcc11ac"
+}

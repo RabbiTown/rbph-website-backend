@@ -28,6 +28,7 @@ use crate::{
 pub type DbPool = PgPool;
 pub type KvPool = deadpool_redis::Pool;
 
+#[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
     pub kv: KvPool,

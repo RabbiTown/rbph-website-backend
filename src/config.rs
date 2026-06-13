@@ -52,17 +52,17 @@ fn default_storage_kind() -> String {
     "local".to_string()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct AuthConfig {
     pub max_session: usize,
     pub captcha: CaptchaConfig,
     pub email: EmailConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct CaptchaConfig {}
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Settings {
     pub app: AppConfig,
     pub db: DbConfig,
@@ -70,7 +70,7 @@ pub struct Settings {
     pub auth: AuthConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct EmailConfig {
     pub enabled: bool,
     pub sender: String,
@@ -80,7 +80,7 @@ pub struct EmailConfig {
     pub url: UrlConfig,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct UrlConfig {
     pub verify: String,
 }

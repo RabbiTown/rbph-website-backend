@@ -54,6 +54,9 @@ async fn call(
     if !backend.enabled {
         return RbError::not_found().http_err();
     }
+    if !backend.callable_function(&path.api_name) {
+        return RbError::not_found().http_err();
+    }
 
     let query_value = query
         .into_inner()
@@ -63,7 +66,7 @@ async fn call(
 
     let body = body.map(|body| body.into_inner()).unwrap_or(Value::Null);
     let result = puzzle_backend_js::execute_api(
-        app.clone(),
+        &app,
         backend,
         path.api_name.clone(),
         puzzle_backend_js::RuntimeContext {

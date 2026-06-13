@@ -85,10 +85,21 @@ fn validate_judge_action(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Array(items) => items.iter().all(validate_judge_action),
         serde_json::Value::Object(map) => {
+            let rule_type = map.get("type").and_then(serde_json::Value::as_str);
             if map
                 .get("action")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|action| action == "pending")
+            {
+                return false;
+            }
+
+            if matches!(rule_type, Some("custom"))
+                && !["function", "backend", "text"].iter().any(|key| {
+                    map.get(*key)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                })
             {
                 return false;
             }

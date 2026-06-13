@@ -19,22 +19,22 @@ SELECT setval('rb_round_id_seq', 100);
 -- puzzle
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (1, '序幕', 1, E'', 0,
+VALUES (1, '序幕', 0, E'', 0,
         '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"bili20fans","action":"easter_egg","result":"我的 B 站 20 粉丝啦，哇！"}]',
         '[{"type":1,"args":[10]}]', NULL, 'default', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (2, '命名毋以讹传之', 1, E'::align{textAlign="center"}\n*只有起错的名字，没有叫错的外号。*\n::\n\n题目内容略。', 0,
+VALUES (2, '命名毋以讹传之', 0, E'::align{textAlign="center"}\n*只有起错的名字，没有叫错的外号。*\n::\n\n题目内容略。', 0,
         '[{"type":"exact","text":"ORME SHOE","action":"correct"}]',
         '[{"type":2,"args":[10]}]', NULL, '(game-started)', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (3, '只说明书', 1, E'::align{textAlign="center"}\n*不讲暗话，只说明书。*\n::\n\n题目内容略，请提交「MILESTONE」。', 0,
+VALUES (3, '只说明书', 0, E'::align{textAlign="center"}\n*不讲暗话，只说明书。*\n::\n\n题目内容略，请提交「MILESTONE」。', 0,
         '[{"type":"exact","text":"MILESTONE","action":"milestone","result":"本题答案是【BRUSH】"},{"type":"exact","text":"BRUSH","action":"correct"}]',
         '[{"type":1,"args":[10]},{"type":3,"args":[1,10]}]', 20, '(game-started)', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (4, '最终谜题', 1, E'<div class="text-center">\n\n*最终谜题*\n\n</div><hr>\n\n题目内容略。', 0,
+VALUES (4, '最终谜题', 0, E'<div class="text-center">\n\n*最终谜题*\n\n</div><hr>\n\n题目内容略。', 0,
         '[{"type":"exact","text":"FINAL ANSWER","action":"finish_game"}]',
         '[{"type":1,"args":[10]}]', 20, '(ge (solved-count (round 1)) 2)', 2);
 
@@ -45,8 +45,8 @@ WHERE id = 1;
 
 -- currency
 
-INSERT INTO rb_currency (id, cname, growth, max_amount, prec, game_id)
-VALUES (1, '提示点', 10, 1000000, 1, 1);
+INSERT INTO rb_currency (id, cname, slug, growth, init_amount, max_amount, prec, game_id)
+VALUES (1, '提示点', 'hint', 10, 0, 1000000, 1, 1);
 
 -- hint
 

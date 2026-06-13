@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1;",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1;",
   "describe": {
     "columns": [
       {
@@ -10,36 +10,41 @@
       },
       {
         "ordinal": 1,
-        "name": "name",
+        "name": "slug",
         "type_info": "Varchar"
       },
       {
         "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
         "name": "growth!",
         "type_info": "Int4"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "prec",
         "type_info": "Int4"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "amount",
         "type_info": "Int4"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "current_amount!",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "max_amount",
         "type_info": "Int4"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -52,6 +57,7 @@
     "nullable": [
       false,
       false,
+      false,
       null,
       false,
       false,
@@ -60,5 +66,5 @@
       false
     ]
   },
-  "hash": "03f5c77a4ab9a1ed894af2fbd4d0da88a2ead52ddafab7a17cc21f8805bfbee7"
+  "hash": "850fb71caeaf7c81f29e76f496b50537c9815d57d80f02deea24d4c8265595e3"
 }

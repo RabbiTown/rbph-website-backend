@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.id = $2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "growth!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "prec",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "current_amount!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "max_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "80ebed4beb74a2d0db739df0ca123d227a442d39b3357954f38b440f1ddfa04b"
+}

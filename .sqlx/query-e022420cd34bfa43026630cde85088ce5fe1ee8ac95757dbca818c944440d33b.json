@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT puzzle_id, enabled, source, ctime_at, utime_at\n        FROM rb_puzzle_backend\n        WHERE puzzle_id = $1",
+  "query": "SELECT puzzle_id, enabled, source, functions, ctime_at, utime_at\n        FROM rb_puzzle_backend\n        WHERE puzzle_id = $1",
   "describe": {
     "columns": [
       {
@@ -20,11 +20,16 @@
       },
       {
         "ordinal": 3,
+        "name": "functions",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -39,8 +44,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "59c1ac62160bb6b4897aca319cb0f5f405ae7c53fa819b0924e7b52ffb4bedcb"
+  "hash": "e022420cd34bfa43026630cde85088ce5fe1ee8ac95757dbca818c944440d33b"
 }

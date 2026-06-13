@@ -7,7 +7,7 @@ use crate::{
     AppState,
     db::{
         self,
-        game::{RbCurrencyAdminData, RbGameUpdateData},
+        game::{RbCurrencyAdminData, RbCurrencyCreateData, RbCurrencyUpdateData, RbGameUpdateData},
     },
     error::RbError,
     model::game::{RbGame, RbGameSettings},
@@ -18,9 +18,16 @@ struct PathInfo {
     game_id: i32,
 }
 
+#[derive(Deserialize)]
+struct CurrencyPathInfo {
+    game_id: i32,
+    currency_id: i32,
+}
+
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum GameAdminResult {
+    Conflict = -3,
     Invalid = -2,
     NotFound = -1,
     Ok = 0,
@@ -42,6 +49,31 @@ struct GameAdminListResponse {
 struct CurrencyAdminListResponse {
     code: GameAdminResult,
     currencies: Vec<RbCurrencyAdminData>,
+}
+
+#[derive(Serialize)]
+struct CurrencyAdminResponse {
+    code: GameAdminResult,
+    currency: RbCurrencyAdminData,
+}
+
+fn currency_data_valid(
+    name: &str,
+    slug: &str,
+    prec: i32,
+    init_amount: i32,
+    max_amount: i32,
+) -> bool {
+    db::game::valid_currency_data(name, slug, prec, init_amount, max_amount)
+}
+
+fn is_unique_violation(error: &crate::error::RbInternalError) -> bool {
+    match error {
+        crate::error::RbInternalError::Sql(sqlx::Error::Database(err)) => {
+            err.code().as_deref() == Some("23505")
+        }
+        _ => false,
+    }
 }
 
 async fn list(app: web::Data<AppState>) -> Result<HttpResponse> {
@@ -82,6 +114,96 @@ async fn list_currency(
     Ok(HttpResponse::Ok().json(CurrencyAdminListResponse {
         code: GameAdminResult::Ok,
         currencies,
+    }))
+}
+
+async fn create_currency(
+    path: web::Path<PathInfo>,
+    req: web::Json<RbCurrencyCreateData>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !currency_data_valid(
+        &req.name,
+        &req.slug,
+        req.prec,
+        req.init_amount,
+        req.max_amount,
+    ) {
+        return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
+    }
+
+    let currency = match db::game::create_currency(&app.db, path.game_id, &req).await {
+        Ok(currency) => currency,
+        Err(error) if is_unique_violation(&error) => {
+            return RbError::conflict(GameAdminResult::Conflict.into()).http_err();
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    let Some(currency) = currency else {
+        return RbError::not_found()
+            .code(GameAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    Ok(HttpResponse::Ok().json(CurrencyAdminResponse {
+        code: GameAdminResult::Ok,
+        currency,
+    }))
+}
+
+async fn edit_currency(
+    path: web::Path<CurrencyPathInfo>,
+    req: web::Json<RbCurrencyUpdateData>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !currency_data_valid(
+        &req.name,
+        &req.slug,
+        req.prec,
+        req.init_amount,
+        req.max_amount,
+    ) {
+        return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
+    }
+
+    let currency =
+        match db::game::update_currency(&app.db, path.game_id, path.currency_id, &req).await {
+            Ok(currency) => currency,
+            Err(error) if is_unique_violation(&error) => {
+                return RbError::conflict(GameAdminResult::Conflict.into()).http_err();
+            }
+            Err(error) => return Err(error.into()),
+        };
+
+    let Some(currency) = currency else {
+        return RbError::not_found()
+            .code(GameAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    Ok(HttpResponse::Ok().json(CurrencyAdminResponse {
+        code: GameAdminResult::Ok,
+        currency,
+    }))
+}
+
+async fn delete_currency(
+    path: web::Path<CurrencyPathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let currency = db::game::get_currency(&app.db, path.game_id, path.currency_id).await?;
+    let Some(currency) = currency else {
+        return RbError::not_found()
+            .code(GameAdminResult::NotFound.into())
+            .http_err();
+    };
+
+    db::game::delete_currency(&app.db, path.game_id, path.currency_id).await?;
+
+    Ok(HttpResponse::Ok().json(CurrencyAdminResponse {
+        code: GameAdminResult::Ok,
+        currency,
     }))
 }
 
@@ -132,5 +254,14 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         .route("", web::post().to(append))
         .route("/{game_id}", web::get().to(get))
         .route("/{game_id}/currencies", web::get().to(list_currency))
+        .route("/{game_id}/currencies", web::post().to(create_currency))
+        .route(
+            "/{game_id}/currencies/{currency_id}",
+            web::patch().to(edit_currency),
+        )
+        .route(
+            "/{game_id}/currencies/{currency_id}",
+            web::delete().to(delete_currency),
+        )
         .route("/{game_id}", web::patch().to(edit));
 }

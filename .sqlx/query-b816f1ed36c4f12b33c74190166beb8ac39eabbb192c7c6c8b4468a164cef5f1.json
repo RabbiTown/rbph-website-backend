@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_currency\n        WHERE id = $1 AND game_id = $2;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b816f1ed36c4f12b33c74190166beb8ac39eabbb192c7c6c8b4468a164cef5f1"
+}

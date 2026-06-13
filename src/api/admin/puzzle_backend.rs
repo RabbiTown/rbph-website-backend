@@ -29,6 +29,11 @@ struct PuzzleBackendSourceInput {
     source: String,
 }
 
+#[derive(Deserialize)]
+struct PuzzleBackendFunctionsInput {
+    functions: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct PuzzleBackendResponse {
     code: i32,
@@ -102,6 +107,42 @@ async fn update_backend_source(
     }))
 }
 
+async fn update_backend_functions(
+    path: web::Path<PuzzleBackendPathInfo>,
+    req: web::Json<PuzzleBackendFunctionsInput>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !puzzle_exists(&app, path.puzzle_id).await? {
+        return RbError::not_found().http_err();
+    }
+
+    let mut functions = Vec::new();
+    for name in &req.functions {
+        if name.trim().is_empty() || name.len() > 64 {
+            return RbError::bad_req(-2).http_err();
+        }
+        if !name.chars().enumerate().all(|(index, c)| {
+            c == '_'
+                || c.is_ascii_alphanumeric()
+                || c == '-'
+                || index == 0 && c.is_ascii_alphabetic()
+        }) {
+            return RbError::bad_req(-2).http_err();
+        }
+        if !functions.iter().any(|item| item == name) {
+            functions.push(name.clone());
+        }
+    }
+
+    let backend =
+        db::puzzle_backend::update_backend_functions(&app.db, path.puzzle_id, &functions).await?;
+
+    Ok(HttpResponse::Ok().json(PuzzleBackendResponse {
+        code: 0,
+        backend: Some(backend),
+    }))
+}
+
 async fn delete_backend(
     path: web::Path<PuzzleBackendPathInfo>,
     app: web::Data<AppState>,
@@ -154,6 +195,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("", web::get().to(get_backend))
             .route("", web::put().to(upsert_backend))
             .route("/source", web::patch().to(update_backend_source))
+            .route("/functions", web::patch().to(update_backend_functions))
             .route("", web::delete().to(delete_backend))
             .route("/kv", web::get().to(list_kv))
             .route("/kv/{key}", web::delete().to(delete_kv)),

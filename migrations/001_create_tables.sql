@@ -224,10 +224,13 @@ WHERE ignored = FALSE;
 CREATE TABLE rb_currency (
     id              SERIAL PRIMARY KEY,
     cname           VARCHAR(40) NOT NULL,
+    slug            VARCHAR(40) NOT NULL,
     growth          INT NOT NULL,
+    init_amount     INT NOT NULL DEFAULT 0,
     max_amount      INT NOT NULL DEFAULT 2147483647,
     prec            INT NOT NULL,
-    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
+    UNIQUE (game_id, slug)
 );
 
 CREATE TABLE rb_team_currency (

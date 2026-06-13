@@ -413,6 +413,7 @@ pub async fn get_by_id_show(
 #[derive(Clone, Serialize)]
 pub struct RbCurrencyShowData {
     pub id: i32,
+    slug: String,
     name: String,
     growth: i32,
     prec: i32,
@@ -429,7 +430,7 @@ pub async fn get_currency_info(
 ) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbCurrencyShowData,
-        "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+        "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
                 c.prec, tc.amount,
                 LEAST(
                     tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
@@ -454,7 +455,7 @@ pub async fn get_currency_info_one(
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbCurrencyShowData,
-        "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+        "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
                 c.prec, tc.amount,
                 LEAST(
                     tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
@@ -466,6 +467,34 @@ pub async fn get_currency_info_one(
         WHERE tc.team_id = $1 AND c.id = $2;",
         team_id,
         currency_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn get_currency_info_one_by_slug(
+    db_pool: &DbPool,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbCurrencyShowData,
+        "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+                c.prec, tc.amount,
+                LEAST(
+                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                    c.max_amount
+                ) AS \"current_amount!\",
+                c.max_amount, tc.utime_at
+        FROM rb_currency c
+        JOIN rb_team_currency tc ON tc.currency_id = c.id
+        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3;",
+        team_id,
+        game_id,
+        slug
     )
     .fetch_optional(db_pool)
     .await?;
@@ -506,6 +535,35 @@ async fn lock_currency_runtime(
     Ok(row)
 }
 
+async fn lock_currency_runtime_by_slug(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+) -> Result<Option<CurrencyRuntimeRow>, RbInternalError> {
+    let row = sqlx::query_as!(
+        CurrencyRuntimeRow,
+        r#"SELECT
+            LEAST(
+                tc.amount
+                    + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                c.max_amount
+            ) AS "current_amount!",
+            c.max_amount AS "max_amount!"
+        FROM rb_team_currency tc
+        JOIN rb_currency c ON tc.currency_id = c.id
+        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3
+        FOR UPDATE;"#,
+        team_id,
+        game_id,
+        slug
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    Ok(row)
+}
+
 pub async fn cost_currency(
     db_pool: &DbPool,
     team_id: i32,
@@ -539,6 +597,45 @@ pub async fn cost_currency(
     Ok(true)
 }
 
+pub async fn cost_currency_by_slug(
+    db_pool: &DbPool,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+    delta: i32,
+) -> Result<bool, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
+        tx.commit().await?;
+        return Ok(false);
+    };
+
+    let next_amount = i64::from(row.current_amount) + i64::from(delta);
+    if next_amount < 0 || next_amount > i64::from(row.max_amount) {
+        tx.commit().await?;
+        return Ok(false);
+    }
+
+    sqlx::query!(
+        r#"UPDATE rb_team_currency tc
+        SET amount = $4, utime_at = NOW()
+        FROM rb_currency c
+        WHERE tc.currency_id = c.id
+            AND tc.team_id = $1
+            AND c.game_id = $2
+            AND c.slug = $3;"#,
+        team_id,
+        game_id,
+        slug,
+        next_amount as i32
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
 pub async fn add_currency(
     db_pool: &DbPool,
     team_id: i32,
@@ -561,6 +658,43 @@ pub async fn add_currency(
         WHERE team_id = $1 AND currency_id = $2;"#,
         team_id,
         currency_id,
+        stored_amount as i32
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(actual_growth as i32))
+}
+
+pub async fn add_currency_by_slug(
+    db_pool: &DbPool,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+    delta: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    let next_amount = i64::from(row.current_amount) + i64::from(delta);
+    let stored_amount = next_amount.min(i64::from(row.max_amount));
+    let actual_growth = stored_amount - i64::from(row.current_amount);
+
+    sqlx::query!(
+        r#"UPDATE rb_team_currency tc
+        SET amount = $4, utime_at = NOW()
+        FROM rb_currency c
+        WHERE tc.currency_id = c.id
+            AND tc.team_id = $1
+            AND c.game_id = $2
+            AND c.slug = $3;"#,
+        team_id,
+        game_id,
+        slug,
         stored_amount as i32
     )
     .execute(&mut *tx)

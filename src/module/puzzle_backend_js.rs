@@ -29,6 +29,26 @@ pub struct RuntimeContext {
 }
 
 #[derive(Clone)]
+pub struct JudgeRuntimeContext {
+    pub puzzle_id: i32,
+    pub game_id: i32,
+    pub puzzle_title: String,
+    pub team_id: i32,
+    pub team_name: String,
+    pub user_id: i32,
+    pub user_nickname: String,
+    pub user_answer: String,
+    pub norm_answer: String,
+    pub submission: crate::db::puzzle::BackendSubmissionShowData,
+}
+
+#[derive(Clone)]
+pub struct RuntimeServices {
+    pub app: AppState,
+    pub asset_runtime: AssetRuntime,
+}
+
+#[derive(Clone)]
 pub struct AssetRuntime {
     pub db: DbPool,
     pub storage: LocalStorage,
@@ -86,6 +106,27 @@ fn js_string_arg(value: Option<JsString>, message: &str) -> Result<String, JsErr
     value
         .map(|v| v.to_std_string_escaped())
         .ok_or_else(|| js_err(message))
+}
+
+enum CurrencyRef {
+    Id(i32),
+    Slug(String),
+}
+
+fn currency_ref_arg(value: Option<&JsValue>, message: &str) -> Result<CurrencyRef, JsError> {
+    let Some(value) = value else {
+        return Err(js_err(message));
+    };
+
+    if let Some(id) = value.as_number() {
+        return Ok(CurrencyRef::Id(id as i32));
+    }
+
+    if let Some(slug) = value.as_string() {
+        return Ok(CurrencyRef::Slug(slug.to_std_string_escaped()));
+    }
+
+    Err(js_err(message))
 }
 
 fn block_on_db<T>(
@@ -193,6 +234,126 @@ fn build_ctx_arg(context: &mut Context) -> Result<JsValue, RbInternalError> {
         .property(
             js_string!("apiName"),
             JsValue::from(JsString::from(runtime.api_name)),
+            Attribute::all(),
+        )
+        .build();
+
+    Ok(ctx.into())
+}
+
+fn build_judge_ctx_arg(
+    context: &mut Context,
+    runtime: &JudgeRuntimeContext,
+) -> Result<JsValue, RbInternalError> {
+    let request = ObjectInitializer::new(context)
+        .property(
+            js_string!("userAnswer"),
+            JsValue::from(JsString::from(runtime.user_answer.clone())),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("normAnswer"),
+            JsValue::from(JsString::from(runtime.norm_answer.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let puzzle = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.puzzle_id, Attribute::all())
+        .property(js_string!("gameId"), runtime.game_id, Attribute::all())
+        .property(
+            js_string!("title"),
+            JsValue::from(JsString::from(runtime.puzzle_title.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let team = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.team_id, Attribute::all())
+        .property(
+            js_string!("name"),
+            JsValue::from(JsString::from(runtime.team_name.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let user = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.user_id, Attribute::all())
+        .property(
+            js_string!("nickname"),
+            JsValue::from(JsString::from(runtime.user_nickname.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let submission = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.submission.id, Attribute::all())
+        .property(
+            js_string!("teamId"),
+            runtime.submission.team_id,
+            Attribute::all(),
+        )
+        .property(
+            js_string!("userId"),
+            runtime.submission.user_id,
+            Attribute::all(),
+        )
+        .property(
+            js_string!("puzzleId"),
+            runtime.submission.puzzle_id,
+            Attribute::all(),
+        )
+        .property(
+            js_string!("userAnswer"),
+            JsValue::from(JsString::from(runtime.submission.user_answer.clone())),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("normAnswer"),
+            JsValue::from(JsString::from(runtime.submission.norm_answer.clone())),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("saction"),
+            i16::from(runtime.submission.saction),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("sresult"),
+            runtime
+                .submission
+                .sresult
+                .as_ref()
+                .map(|value| JsValue::from(JsString::from(value.clone())))
+                .unwrap_or_else(JsValue::null),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("realAnswer"),
+            runtime
+                .submission
+                .real_answer
+                .as_ref()
+                .map(|value| JsValue::from(JsString::from(value.clone())))
+                .unwrap_or_else(JsValue::null),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("ignored"),
+            runtime.submission.ignored,
+            Attribute::all(),
+        )
+        .build();
+
+    let ctx = ObjectInitializer::new(context)
+        .property(js_string!("request"), request, Attribute::all())
+        .property(js_string!("puzzle"), puzzle, Attribute::all())
+        .property(js_string!("team"), team, Attribute::all())
+        .property(js_string!("user"), user, Attribute::all())
+        .property(js_string!("submission"), submission, Attribute::all())
+        .property(
+            js_string!("apiName"),
+            JsValue::from(JsString::from("judge")),
             Attribute::all(),
         )
         .build();
@@ -458,9 +619,10 @@ fn configure_runtime_limits(context: &mut Context) {
 
 pub fn register_ctx(
     context: &mut Context,
-    app: actix_web::web::Data<AppState>,
-    asset_runtime: AssetRuntime,
+    services: RuntimeServices,
 ) -> Result<(), RbInternalError> {
+    let app = services.app;
+    let asset_runtime = services.asset_runtime;
     let db = app.db.clone();
     let kv_get_db = db.clone();
     let kv_set_db = db.clone();
@@ -660,16 +822,36 @@ pub fn register_ctx(
                             as i32;
                         let currency_id = args
                             .get(1)
-                            .and_then(|value| value.as_number())
-                            .map(|v| v as i32);
+                            .map(|value| {
+                                currency_ref_arg(
+                                    Some(value),
+                                    "$util.queryCurrency requires currency id or slug",
+                                )
+                            })
+                            .transpose()?;
                         match currency_id {
-                            Some(currency_id) => {
+                            Some(CurrencyRef::Id(currency_id)) => {
                                 let row = block_on_db(crate::db::team::get_currency_info_one(
                                     &currency_query_db_for_query,
                                     team_id,
                                     currency_id,
                                 ))
                                 .map_err(|e| js_err(e.to_string()))?;
+                                let json =
+                                    serde_json::to_value(row).map_err(|e| js_err(e.to_string()))?;
+                                json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
+                            }
+                            Some(CurrencyRef::Slug(slug)) => {
+                                let runtime = with_runtime_context(|ctx| ctx.clone())
+                                    .map_err(|e| js_err(e.to_string()))?;
+                                let row =
+                                    block_on_db(crate::db::team::get_currency_info_one_by_slug(
+                                        &currency_query_db_for_query,
+                                        team_id,
+                                        runtime.game_id,
+                                        &slug,
+                                    ))
+                                    .map_err(|e| js_err(e.to_string()))?;
                                 let json =
                                     serde_json::to_value(row).map_err(|e| js_err(e.to_string()))?;
                                 json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
@@ -703,21 +885,43 @@ pub fn register_ctx(
                             as i32;
                         let currency_id = args
                             .get(1)
-                            .and_then(|value| value.as_number())
-                            .ok_or_else(|| js_err("$util.costCurrency requires currency id"))?
-                            as i32;
+                            .map(|value| {
+                                currency_ref_arg(
+                                    Some(value),
+                                    "$util.costCurrency requires currency id or slug",
+                                )
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                js_err("$util.costCurrency requires currency id or slug")
+                            })?;
                         let amount = args
                             .get(2)
                             .and_then(|value| value.as_number())
                             .ok_or_else(|| js_err("$util.costCurrency requires amount"))?
                             as i32;
 
-                        let updated = block_on_db(crate::db::team::cost_currency(
-                            &currency_cost_db_for_cost,
-                            team_id,
-                            currency_id,
-                            -amount,
-                        ))
+                        let updated = match currency_id {
+                            CurrencyRef::Id(currency_id) => {
+                                block_on_db(crate::db::team::cost_currency(
+                                    &currency_cost_db_for_cost,
+                                    team_id,
+                                    currency_id,
+                                    -amount,
+                                ))
+                            }
+                            CurrencyRef::Slug(slug) => {
+                                let runtime = with_runtime_context(|ctx| ctx.clone())
+                                    .map_err(|e| js_err(e.to_string()))?;
+                                block_on_db(crate::db::team::cost_currency_by_slug(
+                                    &currency_cost_db_for_cost,
+                                    team_id,
+                                    runtime.game_id,
+                                    &slug,
+                                    -amount,
+                                ))
+                            }
+                        }
                         .map_err(|e| js_err(e.to_string()))?;
                         Ok(JsValue::from(updated))
                     },
@@ -738,21 +942,43 @@ pub fn register_ctx(
                             as i32;
                         let currency_id = args
                             .get(1)
-                            .and_then(|value| value.as_number())
-                            .ok_or_else(|| js_err("$util.addCurrency requires currency id"))?
-                            as i32;
+                            .map(|value| {
+                                currency_ref_arg(
+                                    Some(value),
+                                    "$util.addCurrency requires currency id or slug",
+                                )
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                js_err("$util.addCurrency requires currency id or slug")
+                            })?;
                         let amount = args
                             .get(2)
                             .and_then(|value| value.as_number())
                             .ok_or_else(|| js_err("$util.addCurrency requires amount"))?
                             as i32;
 
-                        let updated = block_on_db(crate::db::team::add_currency(
-                            &currency_query_db_for_add,
-                            team_id,
-                            currency_id,
-                            amount,
-                        ))
+                        let updated = match currency_id {
+                            CurrencyRef::Id(currency_id) => {
+                                block_on_db(crate::db::team::add_currency(
+                                    &currency_query_db_for_add,
+                                    team_id,
+                                    currency_id,
+                                    amount,
+                                ))
+                            }
+                            CurrencyRef::Slug(slug) => {
+                                let runtime = with_runtime_context(|ctx| ctx.clone())
+                                    .map_err(|e| js_err(e.to_string()))?;
+                                block_on_db(crate::db::team::add_currency_by_slug(
+                                    &currency_query_db_for_add,
+                                    team_id,
+                                    runtime.game_id,
+                                    &slug,
+                                    amount,
+                                ))
+                            }
+                        }
                         .map_err(|e| js_err(e.to_string()))?;
                         Ok(match updated {
                             Some(delta) => JsValue::from(delta),
@@ -780,7 +1006,7 @@ pub fn register_ctx(
                             .map_err(|e| js_err(e.to_string()))?;
                         let row =
                             block_on_db(crate::db::puzzle::add_backend_submission_and_invalidate(
-                                backend_app.as_ref(),
+                                &backend_app,
                                 runtime.team_id,
                                 runtime.user_id,
                                 runtime.puzzle_id,
@@ -811,7 +1037,7 @@ pub fn register_ctx(
                             .map_err(|e| js_err(e.to_string()))?;
                         let solved =
                             block_on_db(crate::db::puzzle::solve_backend_puzzle_with_submission(
-                                util_app.as_ref(),
+                                &util_app,
                                 runtime.team_id,
                                 runtime.user_id,
                                 runtime.puzzle_id,
@@ -1107,11 +1333,12 @@ pub fn register_ctx(
 }
 
 pub async fn execute_api(
-    app: actix_web::web::Data<AppState>,
+    app: &AppState,
     backend: crate::db::puzzle_backend::PuzzleBackend,
     api_name: String,
     runtime: RuntimeContext,
 ) -> Result<Value, RbInternalError> {
+    let app = app.clone();
     tokio::task::spawn_blocking(move || {
         RUNTIME_CONTEXT.with(|slot| {
             *slot.borrow_mut() = Some(runtime);
@@ -1122,11 +1349,13 @@ pub async fn execute_api(
         configure_runtime_limits(&mut context);
         register_ctx(
             &mut context,
-            app.clone(),
-            AssetRuntime {
-                db: app.db.clone(),
-                storage: app.storage.clone(),
-                max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+            RuntimeServices {
+                app: app.clone(),
+                asset_runtime: AssetRuntime {
+                    db: app.db.clone(),
+                    storage: app.storage.clone(),
+                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+                },
             },
         )?;
 
@@ -1171,6 +1400,97 @@ pub async fn execute_api(
         let json = js_to_json(&result, &mut context)?;
 
         Ok::<_, RbInternalError>(json)
+    })
+    .await
+    .map_err(|e| internal_err(e.to_string()))?
+}
+
+pub async fn execute_judge(
+    app: &AppState,
+    backend: crate::db::puzzle_backend::PuzzleBackend,
+    function_name: String,
+    runtime: JudgeRuntimeContext,
+) -> Result<crate::game::judge::JudgeBackendOutput, RbInternalError> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        RUNTIME_CONTEXT.with(|slot| {
+            *slot.borrow_mut() = Some(RuntimeContext {
+                game_id: runtime.game_id,
+                method: "JUDGE".to_string(),
+                puzzle_id: runtime.puzzle_id,
+                team_id: runtime.team_id,
+                user_id: runtime.user_id,
+                api_name: function_name.clone(),
+                query: Value::Null,
+                body: Value::Null,
+                puzzle_title: runtime.puzzle_title.clone(),
+                user_nickname: runtime.user_nickname.clone(),
+                team_name: runtime.team_name.clone(),
+            });
+        });
+        let _guard = RuntimeContextGuard;
+
+        let mut context = Context::default();
+        configure_runtime_limits(&mut context);
+        register_ctx(
+            &mut context,
+            RuntimeServices {
+                app: app.clone(),
+                asset_runtime: AssetRuntime {
+                    db: app.db.clone(),
+                    storage: app.storage.clone(),
+                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+                },
+            },
+        )?;
+
+        let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let promise = module.load_link_evaluate(&mut context);
+        context
+            .run_jobs()
+            .map_err(|e| internal_err(e.to_string()))?;
+        if let Some(err) = promise.state().as_rejected() {
+            return Err(internal_err(format!("module rejected: {}", err.display())));
+        }
+
+        let namespace = module.namespace(&mut context);
+        let value = namespace
+            .get(js_string!(function_name.as_str()), &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let function = value
+            .as_function()
+            .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
+
+        let ctx_arg = build_judge_ctx_arg(&mut context, &runtime)?;
+        let result = function
+            .call(&JsValue::undefined(), &[ctx_arg], &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let result = if let Some(promise) = result.as_promise() {
+            context
+                .run_jobs()
+                .map_err(|e| internal_err(e.to_string()))?;
+            match promise.state() {
+                boa_engine::builtins::promise::PromiseState::Fulfilled(value) => value.clone(),
+                boa_engine::builtins::promise::PromiseState::Rejected(reason) => {
+                    return Err(internal_err(format!("api rejected: {}", reason.display())));
+                }
+                boa_engine::builtins::promise::PromiseState::Pending => {
+                    return Err(internal_err("api promise is still pending"));
+                }
+            }
+        } else {
+            result
+        };
+        let json = js_to_json(&result, &mut context)?;
+        let output: crate::game::judge::JudgeBackendOutput =
+            serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
+
+        if output.ignored.is_some() && output.action.is_none() {
+            return Err(internal_err("judge output ignored requires action"));
+        }
+
+        Ok::<_, RbInternalError>(output)
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?

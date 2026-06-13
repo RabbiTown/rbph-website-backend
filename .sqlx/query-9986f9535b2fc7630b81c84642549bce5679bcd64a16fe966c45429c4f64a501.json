@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.id = $2;",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3;",
   "describe": {
     "columns": [
       {
@@ -10,36 +10,41 @@
       },
       {
         "ordinal": 1,
-        "name": "name",
+        "name": "slug",
         "type_info": "Varchar"
       },
       {
         "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
         "name": "growth!",
         "type_info": "Int4"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "prec",
         "type_info": "Int4"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "amount",
         "type_info": "Int4"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "current_amount!",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "max_amount",
         "type_info": "Int4"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -47,10 +52,12 @@
     "parameters": {
       "Left": [
         "Int4",
-        "Int4"
+        "Int4",
+        "Text"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       null,
@@ -61,5 +68,5 @@
       false
     ]
   },
-  "hash": "800662a66c9b2a8485a0cb8a67a316960314bb1cb41555612454f59aa6fc747e"
+  "hash": "9986f9535b2fc7630b81c84642549bce5679bcd64a16fe966c45429c4f64a501"
 }

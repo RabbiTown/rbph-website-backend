@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, cname AS name, growth, prec, max_amount\n        FROM rb_currency\n        WHERE game_id = $1\n        ORDER BY id;",
+  "query": "SELECT id, cname AS name, slug, growth, init_amount, prec, max_amount\n        FROM rb_currency\n        WHERE id = $1 AND game_id = $2;",
   "describe": {
     "columns": [
       {
@@ -15,22 +15,33 @@
       },
       {
         "ordinal": 2,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
         "name": "growth",
         "type_info": "Int4"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
+        "name": "init_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
         "name": "prec",
         "type_info": "Int4"
       },
       {
-        "ordinal": 4,
+        "ordinal": 6,
         "name": "max_amount",
         "type_info": "Int4"
       }
     ],
     "parameters": {
       "Left": [
+        "Int4",
         "Int4"
       ]
     },
@@ -39,8 +50,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "e92771ce9c3eac715fe5f05eafd66d2f4ff502f6425aa67a1a8c7e721cc75421"
+  "hash": "69aed5291d6d7a8d8f4cbf8e5af22cea09ac23acad6472f090066f216d89bf0c"
 }

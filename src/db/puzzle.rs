@@ -43,6 +43,31 @@ pub async fn get_puzzle_game(
     Ok(result)
 }
 
+#[derive(FromRow)]
+pub struct PuzzleJudgeInfo {
+    pub id: i32,
+    pub game_id: i32,
+    pub title: String,
+}
+
+pub async fn get_puzzle_judge_info(
+    db_pool: &DbPool,
+    puzzle_id: i32,
+) -> Result<Option<PuzzleJudgeInfo>, RbInternalError> {
+    let result = sqlx::query_as!(
+        PuzzleJudgeInfo,
+        "SELECT p.id, r.game_id, p.title
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE p.id = $1;",
+        puzzle_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    Ok(result)
+}
+
 pub async fn get_puzzle_id_by_game_ref(
     db_pool: &DbPool,
     game_id: i32,
@@ -772,7 +797,63 @@ pub async fn submit_answer(
     }
 
     let rules = judge.unwrap();
-    let result = game::judge::judge_by_rules(&rules, &norm_answer)?;
+    let custom_rule = game::judge::find_custom_rule(&rules);
+    let result = if let Some(rule) = custom_rule {
+        let backend_name = rule
+            .function
+            .as_ref()
+            .ok_or_else(|| RbInternalError::Other("custom judge function is missing".to_string()))?
+            .clone();
+        let backend = db::puzzle_backend::get_backend(&app.db, puzzle_id)
+            .await?
+            .ok_or(RbInternalError::Other("backend not found".to_string()))?;
+        let puzzle_info = get_puzzle_judge_info(&app.db, puzzle_id)
+            .await?
+            .ok_or(RbInternalError::Other("puzzle not found".to_string()))?;
+        let user_info = db::user::get_display_by_id(&app.db, user.uid).await?;
+        let team_info = db::team::get_by_id_show(&app.db, team_id).await?;
+
+        let submit_row = sqlx::query_as!(
+            BackendSubmissionShowData,
+            r#"SELECT id, team_id, user_id, puzzle_id, user_answer, norm_answer,
+                saction, sresult, real_answer, ignored, ctime_at
+            FROM rb_submission
+            WHERE id = $1"#,
+            submit_id
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let team_info = team_info.ok_or(RbInternalError::Other("team not found".to_string()))?;
+
+        let output = crate::module::puzzle_backend_js::execute_judge(
+            app,
+            backend,
+            backend_name,
+            crate::module::puzzle_backend_js::JudgeRuntimeContext {
+                puzzle_id: puzzle_info.id,
+                game_id: puzzle_info.game_id,
+                puzzle_title: puzzle_info.title.clone(),
+                team_id,
+                team_name: team_info.name.clone(),
+                user_id: user.uid,
+                user_nickname: user_info.nickname.clone(),
+                user_answer: answer.to_string(),
+                norm_answer: norm_answer.clone(),
+                submission: submit_row,
+            },
+        )
+        .await?;
+
+        JudgeResult {
+            action: output.action.unwrap_or(RbJudgeAction::Fail),
+            result: output.result,
+            answer: output.answer,
+            ignored: output.ignored.unwrap_or(false),
+        }
+    } else {
+        game::judge::judge_by_rules(&rules, &norm_answer)?
+    };
 
     sqlx::query!(
         "UPDATE rb_submission
@@ -782,7 +863,7 @@ pub async fn submit_answer(
         result.result,
         result.answer,
         submit_id,
-        matches!(result.action, RbJudgeAction::Error)
+        result.ignored || matches!(result.action, RbJudgeAction::Error)
     )
     .execute(&mut *tx)
     .await?;
@@ -833,8 +914,8 @@ pub async fn submit_answer(
 
             if result.rows_affected() > 0 {
                 sqlx::query!(
-                    "INSERT INTO rb_team_currency (team_id, currency_id)
-                    SELECT t.id AS team_id, c.id AS currency_id
+                    "INSERT INTO rb_team_currency (team_id, currency_id, amount)
+                    SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount
                     FROM rb_team t
                     JOIN rb_currency c ON c.game_id = t.game_id
                     WHERE t.id = $1

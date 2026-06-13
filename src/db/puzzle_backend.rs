@@ -1,3 +1,5 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::FromRow;
@@ -10,6 +12,7 @@ pub struct PuzzleBackend {
     pub puzzle_id: i32,
     pub enabled: bool,
     pub source: String,
+    pub functions: Value,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
@@ -21,6 +24,83 @@ pub struct PuzzleBackendInput {
     #[serde(default)]
     pub enabled: Option<bool>,
     pub source: String,
+    #[serde(default)]
+    pub functions: Vec<String>,
+}
+
+static EXPORT_FUNCTION_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?m)^export\s+(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+        .expect("valid export function regex")
+});
+
+static EXPORT_CONST_FUNCTION_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?m)^export\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?(?:function|\()")
+        .expect("valid export const function regex")
+});
+
+fn is_valid_backend_function_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.len() <= 64
+}
+
+fn normalize_functions(value: &Value) -> Vec<String> {
+    let Some(items) = value.as_array() else {
+        return vec![];
+    };
+
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(name) = item.as_str() else {
+            continue;
+        };
+        if !result.iter().any(|existing| existing == name) {
+            result.push(name.to_string());
+        }
+    }
+    result
+}
+
+pub fn parse_export_functions(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for pattern in [&*EXPORT_FUNCTION_PATTERN, &*EXPORT_CONST_FUNCTION_PATTERN] {
+        for capture in pattern.captures_iter(source) {
+            let Some(name) = capture.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            if is_valid_backend_function_name(name)
+                && !names.iter().any(|existing| existing == name)
+            {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+impl PuzzleBackend {
+    pub fn functions_list(&self) -> Vec<String> {
+        normalize_functions(&self.functions)
+    }
+
+    pub fn function_enabled(&self, name: &str) -> bool {
+        self.functions_list().iter().any(|value| value == name)
+    }
+
+    pub fn export_enabled(&self, name: &str) -> bool {
+        parse_export_functions(&self.source)
+            .iter()
+            .any(|value| value == name)
+    }
+
+    pub fn callable_function(&self, name: &str) -> bool {
+        self.function_enabled(name) && self.export_enabled(name)
+    }
 }
 
 #[derive(Clone, FromRow, Serialize)]
@@ -134,7 +214,7 @@ pub async fn get_backend(
 ) -> Result<Option<PuzzleBackend>, RbInternalError> {
     let row = sqlx::query_as!(
         PuzzleBackend,
-        r#"SELECT puzzle_id, enabled, source, ctime_at, utime_at
+        r#"SELECT puzzle_id, enabled, source, functions, ctime_at, utime_at
         FROM rb_puzzle_backend
         WHERE puzzle_id = $1"#,
         puzzle_id
@@ -155,17 +235,25 @@ pub async fn upsert_backend(
     let row = sqlx::query_as!(
         PuzzleBackend,
         r#"INSERT INTO rb_puzzle_backend
-            (puzzle_id, enabled, source)
-        VALUES ($1, $2, $3)
+            (puzzle_id, enabled, source, functions)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (puzzle_id)
         DO UPDATE SET
             enabled = EXCLUDED.enabled,
             source = EXCLUDED.source,
+            functions = EXCLUDED.functions,
             utime_at = CURRENT_TIMESTAMP
-        RETURNING puzzle_id, enabled, source, ctime_at, utime_at"#,
+        RETURNING puzzle_id, enabled, source, functions, ctime_at, utime_at"#,
         puzzle_id,
         enabled,
-        &data.source
+        &data.source,
+        serde_json::Value::Array(
+            data.functions
+                .iter()
+                .cloned()
+                .map(serde_json::Value::String)
+                .collect(),
+        )
     )
     .fetch_one(db_pool)
     .await?;
@@ -180,15 +268,42 @@ pub async fn update_backend_source(
 ) -> Result<PuzzleBackend, RbInternalError> {
     let row = sqlx::query_as!(
         PuzzleBackend,
-        r#"INSERT INTO rb_puzzle_backend (puzzle_id, enabled, source)
-        VALUES ($1, FALSE, $2)
+        r#"INSERT INTO rb_puzzle_backend (puzzle_id, enabled, source, functions)
+        VALUES ($1, FALSE, $2, '[]'::JSONB)
         ON CONFLICT (puzzle_id)
         DO UPDATE SET
             source = EXCLUDED.source,
             utime_at = CURRENT_TIMESTAMP
-        RETURNING puzzle_id, enabled, source, ctime_at, utime_at"#,
+        RETURNING puzzle_id, enabled, source, functions, ctime_at, utime_at"#,
         puzzle_id,
         source
+    )
+    .fetch_one(db_pool)
+    .await?;
+
+    Ok(row)
+}
+
+pub async fn update_backend_functions(
+    db_pool: &DbPool,
+    puzzle_id: i32,
+    functions: &[String],
+) -> Result<PuzzleBackend, RbInternalError> {
+    let functions = serde_json::Value::Array(
+        functions
+            .iter()
+            .cloned()
+            .map(serde_json::Value::String)
+            .collect(),
+    );
+    let row = sqlx::query_as!(
+        PuzzleBackend,
+        r#"UPDATE rb_puzzle_backend
+        SET functions = $2, utime_at = CURRENT_TIMESTAMP
+        WHERE puzzle_id = $1
+        RETURNING puzzle_id, enabled, source, functions, ctime_at, utime_at"#,
+        puzzle_id,
+        functions
     )
     .fetch_one(db_pool)
     .await?;

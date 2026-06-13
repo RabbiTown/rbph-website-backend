@@ -4,12 +4,16 @@ CREATE TABLE rb_puzzle_backend (
     puzzle_id       INT PRIMARY KEY REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     enabled         BOOLEAN NOT NULL DEFAULT FALSE,
     source          TEXT NOT NULL DEFAULT '',
+    functions       JSONB NOT NULL DEFAULT '[]'::JSONB,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 ALTER TABLE rb_puzzle_backend ADD CONSTRAINT rb_ck_puzzle_backend_source_not_blank
 CHECK (NOT enabled OR length(btrim(source)) > 0);
+
+ALTER TABLE rb_puzzle_backend ADD CONSTRAINT rb_ck_puzzle_backend_functions_array
+CHECK (jsonb_typeof(functions) = 'array');
 
 CREATE TABLE rb_puzzle_kv (
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,

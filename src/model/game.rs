@@ -179,7 +179,7 @@ impl<'q> Encode<'q, Postgres> for RbGameSettings {
     }
 }
 
-#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbTeamState {
@@ -206,7 +206,7 @@ pub struct RbTeam {
     pub finish_at: Option<OffsetDateTime>,
 }
 
-#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbPuzzleType {
@@ -270,7 +270,7 @@ impl RbTeamPuzzleState {
     }
 }
 
-#[derive(Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
 #[repr(i16)]
 #[serde(into = "i16")]
 pub enum RbJudgeAction {

@@ -75,9 +75,55 @@ pub struct RbGameUpdateData {
 pub struct RbCurrencyAdminData {
     pub id: i32,
     pub name: String,
+    pub slug: String,
     pub growth: i32,
+    pub init_amount: i32,
     pub prec: i32,
     pub max_amount: i32,
+}
+
+#[derive(Deserialize)]
+pub struct RbCurrencyCreateData {
+    pub name: String,
+    pub slug: String,
+    pub growth: i32,
+    pub init_amount: i32,
+    pub prec: i32,
+    pub max_amount: i32,
+}
+
+#[derive(Deserialize)]
+pub struct RbCurrencyUpdateData {
+    pub name: String,
+    pub slug: String,
+    pub growth: i32,
+    pub init_amount: i32,
+    pub prec: i32,
+    pub max_amount: i32,
+}
+
+pub fn valid_currency_slug(slug: &str) -> bool {
+    let len = slug.len();
+    (1..=40).contains(&len)
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+pub fn valid_currency_data(
+    name: &str,
+    slug: &str,
+    prec: i32,
+    init_amount: i32,
+    max_amount: i32,
+) -> bool {
+    !name.trim().is_empty()
+        && name.chars().count() <= 40
+        && valid_currency_slug(slug)
+        && (0..=6).contains(&prec)
+        && init_amount >= 0
+        && max_amount >= 0
+        && init_amount <= max_amount
 }
 
 // TODO : add kv cache
@@ -157,13 +203,32 @@ pub async fn list_currency(
 ) -> Result<Vec<RbCurrencyAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbCurrencyAdminData,
-        "SELECT id, cname AS name, growth, prec, max_amount
+        "SELECT id, cname AS name, slug, growth, init_amount, prec, max_amount
         FROM rb_currency
         WHERE game_id = $1
         ORDER BY id;",
         game_id
     )
     .fetch_all(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn get_currency(
+    pool: &DbPool,
+    game_id: i32,
+    currency_id: i32,
+) -> Result<Option<RbCurrencyAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbCurrencyAdminData,
+        "SELECT id, cname AS name, slug, growth, init_amount, prec, max_amount
+        FROM rb_currency
+        WHERE id = $1 AND game_id = $2;",
+        currency_id,
+        game_id
+    )
+    .fetch_optional(pool)
     .await?;
 
     Ok(result)
@@ -186,6 +251,100 @@ pub async fn currency_belongs_to_game(
     .await?;
 
     Ok(result.unwrap_or(false))
+}
+
+pub async fn create_currency(
+    pool: &DbPool,
+    game_id: i32,
+    data: &RbCurrencyCreateData,
+) -> Result<Option<RbCurrencyAdminData>, RbInternalError> {
+    let mut tx = pool.begin().await?;
+
+    let Some(currency) = sqlx::query_as!(
+        RbCurrencyAdminData,
+        "INSERT INTO rb_currency (cname, slug, growth, init_amount, prec, max_amount, game_id)
+        SELECT $2, $3, $4, $5, $6, $7, g.id
+        FROM rb_game g
+        WHERE g.id = $1
+        RETURNING id, cname AS name, slug, growth, init_amount, prec, max_amount;",
+        game_id,
+        data.name.trim(),
+        data.slug.trim(),
+        data.growth,
+        data.init_amount,
+        data.prec,
+        data.max_amount
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    sqlx::query!(
+        "INSERT INTO rb_team_currency (team_id, currency_id, amount)
+        SELECT id, $2, $3 FROM rb_team
+        WHERE game_id = $1
+        ON CONFLICT (team_id, currency_id) DO NOTHING;",
+        game_id,
+        currency.id,
+        currency.init_amount
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Some(currency))
+}
+
+pub async fn update_currency(
+    pool: &DbPool,
+    game_id: i32,
+    currency_id: i32,
+    data: &RbCurrencyUpdateData,
+) -> Result<Option<RbCurrencyAdminData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbCurrencyAdminData,
+        "UPDATE rb_currency
+        SET cname = $3,
+            slug = $4,
+            growth = $5,
+            init_amount = $6,
+            prec = $7,
+            max_amount = $8
+        WHERE id = $1 AND game_id = $2
+        RETURNING id, cname AS name, slug, growth, init_amount, prec, max_amount;",
+        currency_id,
+        game_id,
+        data.name.trim(),
+        data.slug.trim(),
+        data.growth,
+        data.init_amount,
+        data.prec,
+        data.max_amount
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result)
+}
+
+pub async fn delete_currency(
+    pool: &DbPool,
+    game_id: i32,
+    currency_id: i32,
+) -> Result<bool, RbInternalError> {
+    let result = sqlx::query!(
+        "DELETE FROM rb_currency
+        WHERE id = $1 AND game_id = $2;",
+        currency_id,
+        game_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, RbInternalError> {

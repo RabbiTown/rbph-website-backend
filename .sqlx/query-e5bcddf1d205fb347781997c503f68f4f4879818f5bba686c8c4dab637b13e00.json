@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            title_hidden = COALESCE($4, h.title_hidden),\n            content = COALESCE($5, h.content),\n            content_type = COALESCE($6, h.content_type),\n            cooldown = COALESCE($7, h.cooldown),\n            cost_id = CASE WHEN $8 THEN $9 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $8 AND $9::INT IS NULL THEN 0\n                ELSE COALESCE($10, h.cost_amount)\n            END,\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $11::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($11::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $11::INT\n            ))\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n            cost_amount, puzzle_id, ctime_at;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "title_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "cost_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Bool",
+        "Text",
+        "Int2",
+        "Int4",
+        "Bool",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e5bcddf1d205fb347781997c503f68f4f4879818f5bba686c8c4dab637b13e00"
+}

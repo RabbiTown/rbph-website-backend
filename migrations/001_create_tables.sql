@@ -248,6 +248,7 @@ CREATE TABLE rb_hint (
     id              SERIAL PRIMARY KEY,
     sort            INT NOT NULL DEFAULT 0,
     title           VARCHAR(120) NOT NULL,
+    title_hidden    BOOLEAN NOT NULL DEFAULT TRUE,
     content         TEXT NOT NULL,
     content_type    SMALLINT NOT NULL DEFAULT 0,
     cooldown        INT NOT NULL DEFAULT 0,

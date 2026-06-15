@@ -138,10 +138,6 @@ async fn validate_update(
 }
 
 async fn invalidate_hint_cache(app: &AppState, puzzle_id: i32) {
-    if let Ok(mut conn) = app.kv.get().await {
-        use deadpool_redis::redis::AsyncCommands;
-        let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:hints")).await;
-    }
     let _ = db::cache::del_pattern(&app.kv, &format!("puzzle:{puzzle_id}:team:*:hints")).await;
 }
 

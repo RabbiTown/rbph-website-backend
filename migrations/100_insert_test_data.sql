@@ -34,7 +34,7 @@ VALUES (3, '只说明书', 0, E'::align{textAlign="center"}\n*不讲暗话，只
         '[{"type":1,"args":[10]},{"type":3,"args":[1,10]}]', 20, '(game-started)', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
-VALUES (4, '最终谜题', 0, E'<div class="text-center">\n\n*最终谜题*\n\n</div><hr>\n\n题目内容略。', 0,
+VALUES (4, '最终谜题', 0, E'::align{textAlign="center"}\n*最终谜题*\n::\n\n题目内容略。', 0,
         '[{"type":"exact","text":"FINAL ANSWER","action":"finish_game"}]',
         '[{"type":1,"args":[10]}]', 20, '(ge (solved-count (round 1)) 2)', 2);
 

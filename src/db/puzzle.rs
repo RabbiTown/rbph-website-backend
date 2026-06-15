@@ -1376,23 +1376,35 @@ pub async fn admin_clear_puzzle_team_states(
 #[derive(FromRow, Serialize)]
 pub struct RbHintShowData {
     pub id: i32,
-    pub title: String,
+    pub title: Option<String>,
+    pub title_hidden: bool,
     pub cooldown: i32,
     pub cost_id: Option<i32>,
     pub cost_amount: i32,
 }
 
-pub async fn get_hints_show(
+pub async fn get_hints_show_for_team(
     db_pool: &DbPool,
+    team_id: i32,
     puzzle_id: i32,
 ) -> Result<Vec<RbHintShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbHintShowData,
-        "SELECT h.id, h.title, h.cooldown, h.cost_id, h.cost_amount
+        "SELECT h.id,
+            CASE
+                WHEN h.title_hidden
+                    AND NOW() < tp.ctime_at + (h.cooldown * INTERVAL '1 second')
+                THEN NULL
+                ELSE h.title
+            END AS \"title?\",
+            h.title_hidden,
+            h.cooldown, h.cost_id, h.cost_amount
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        WHERE p.id = $1
+        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
+        WHERE p.id = $2
         ORDER BY h.sort, h.id;",
+        team_id,
         puzzle_id
     )
     .fetch_all(db_pool)
@@ -1401,34 +1413,10 @@ pub async fn get_hints_show(
     Ok(result)
 }
 
-pub async fn get_hints_show_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    puzzle_id: i32,
-) -> Result<String, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:hints");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok(cache);
-    }
-
-    let result = get_hints_show(db_pool, puzzle_id).await?;
-    let result = serde_json::to_string(&result)?;
-
-    let kv_pool = kv_pool.clone();
-    let result_clone = result.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, 60 * 60).await;
-    });
-
-    Ok(result)
-}
-
 #[derive(FromRow, Serialize)]
 pub struct RbHintTeamStateShowData {
     pub id: i32,
+    pub title: String,
     pub content: String,
     pub content_type: RbContentType,
 }
@@ -1440,7 +1428,7 @@ pub async fn get_hints_team_state(
 ) -> Result<Vec<RbHintTeamStateShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbHintTeamStateShowData,
-        "SELECT h.id, h.content, h.content_type
+        "SELECT h.id, h.title, h.content, h.content_type
         FROM rb_hint h
         JOIN rb_team_hint th ON th.hint_id = h.id
         WHERE th.team_id = $1 AND h.puzzle_id = $2 AND th.unlocked;",
@@ -1453,41 +1441,45 @@ pub async fn get_hints_team_state(
     Ok(result)
 }
 
-pub async fn get_hints_team_state_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    team_id: i32,
-    puzzle_id: i32,
-) -> Result<String, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:team:{team_id}:hints");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok(cache);
-    }
-
-    let result = get_hints_team_state(db_pool, team_id, puzzle_id).await?;
-    let result = serde_json::to_string(&result)?;
-
-    let kv_pool = kv_pool.clone();
-    let result_clone = result.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, 60 * 60).await;
-    });
-
-    Ok(result)
+#[derive(Serialize)]
+pub struct RbPuzzleHintTeamData {
+    pub data: Vec<RbHintShowData>,
+    pub state: Vec<RbHintTeamStateShowData>,
 }
 
-pub async fn get_hints_show_str_for_team(
+pub async fn get_hints_view_for_team(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     team_id: i32,
     puzzle_id: i32,
-) -> Result<String, RbInternalError> {
-    let show_str = get_hints_show_str(db_pool, kv_pool, puzzle_id).await?;
-    let state_str = get_hints_team_state_str(db_pool, kv_pool, team_id, puzzle_id).await?;
-    Ok(format!("{{\"data\":{show_str},\"state\":{state_str}}}"))
+) -> Result<RbPuzzleHintTeamData, RbInternalError> {
+    Ok(RbPuzzleHintTeamData {
+        data: get_hints_show_for_team(db_pool, team_id, puzzle_id).await?,
+        state: get_hints_team_state(db_pool, team_id, puzzle_id).await?,
+    })
+}
+
+pub async fn sync_due_hints(
+    db_pool: &DbPool,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<Option<OffsetDateTime>, RbInternalError> {
+    let _ = get_hints_view_for_team(db_pool, team_id, puzzle_id).await?;
+
+    let next_unlock_at = sqlx::query!(
+        "SELECT MIN(tp.ctime_at + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
+        FROM rb_hint h
+        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
+        WHERE h.puzzle_id = $2
+            AND h.title_hidden
+            AND tp.ctime_at + (h.cooldown * INTERVAL '1 second') > NOW();",
+        team_id,
+        puzzle_id
+    )
+    .fetch_one(db_pool)
+    .await?
+    .next_unlock_at;
+
+    Ok(next_unlock_at)
 }
 
 pub enum PurchaseHintResult {
@@ -1558,7 +1550,7 @@ pub async fn purchase_hint(
             DO UPDATE SET unlocked = TRUE
             RETURNING hint_id
         )
-        SELECT h.id, h.content, h.content_type
+        SELECT h.id, h.title, h.content, h.content_type
         FROM rb_hint h
         JOIN upserted u ON h.id = u.hint_id",
         info.team_id,
@@ -1829,6 +1821,7 @@ pub struct RbHintAdminData {
     pub id: i32,
     pub sort: i32,
     pub title: String,
+    pub title_hidden: bool,
     pub content: String,
     pub content_type: i16,
     pub cooldown: i32,
@@ -1844,6 +1837,8 @@ pub struct RbHintCreateData {
     #[serde(default)]
     pub sort: i32,
     pub title: String,
+    #[serde(default)]
+    pub title_hidden: bool,
     pub content: String,
     #[serde(default)]
     pub content_type: i16,
@@ -1859,6 +1854,7 @@ pub struct RbHintCreateData {
 pub struct RbHintUpdateData {
     pub sort: Option<i32>,
     pub title: Option<String>,
+    pub title_hidden: Option<bool>,
     pub content: Option<String>,
     pub content_type: Option<i16>,
     pub cooldown: Option<i32>,
@@ -1878,7 +1874,7 @@ pub async fn admin_list_hints(
     let result = if let Some(puzzle_id) = puzzle_id {
         sqlx::query_as!(
             RbHintAdminData,
-            "SELECT id, sort, title, content, content_type, cooldown, cost_id,
+            "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
                 cost_amount, puzzle_id, ctime_at
             FROM rb_hint
             WHERE puzzle_id = $1
@@ -1890,7 +1886,7 @@ pub async fn admin_list_hints(
     } else {
         sqlx::query_as!(
             RbHintAdminData,
-            "SELECT id, sort, title, content, content_type, cooldown, cost_id,
+            "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
                 cost_amount, puzzle_id, ctime_at
             FROM rb_hint
             ORDER BY puzzle_id, sort, id;"
@@ -1908,7 +1904,7 @@ pub async fn admin_get_hint(
 ) -> Result<Option<RbHintAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbHintAdminData,
-        "SELECT id, sort, title, content, content_type, cooldown, cost_id,
+        "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
             cost_amount, puzzle_id, ctime_at
         FROM rb_hint
         WHERE id = $1;",
@@ -1927,16 +1923,17 @@ pub async fn admin_create_hint(
     let result = sqlx::query_as!(
         RbHintAdminData,
         "INSERT INTO rb_hint (
-            sort, title, content, content_type, cooldown, cost_id, cost_amount, puzzle_id
+            sort, title, title_hidden, content, content_type, cooldown, cost_id, cost_amount, puzzle_id
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, p.id
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, p.id
         FROM rb_puzzle p
         WHERE p.id = $1
-        RETURNING id, sort, title, content, content_type, cooldown, cost_id,
+        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
             cost_amount, puzzle_id, ctime_at;",
         data.puzzle_id,
         data.sort,
         data.title,
+        data.title_hidden,
         data.content,
         data.content_type,
         data.cooldown,
@@ -1962,26 +1959,28 @@ pub async fn admin_update_hint(
         "UPDATE rb_hint h
         SET sort = COALESCE($2, h.sort),
             title = COALESCE($3, h.title),
-            content = COALESCE($4, h.content),
-            content_type = COALESCE($5, h.content_type),
-            cooldown = COALESCE($6, h.cooldown),
-            cost_id = CASE WHEN $7 THEN $8 ELSE h.cost_id END,
+            title_hidden = COALESCE($4, h.title_hidden),
+            content = COALESCE($5, h.content),
+            content_type = COALESCE($6, h.content_type),
+            cooldown = COALESCE($7, h.cooldown),
+            cost_id = CASE WHEN $8 THEN $9 ELSE h.cost_id END,
             cost_amount = CASE
-                WHEN $7 AND $8::INT IS NULL THEN 0
-                ELSE COALESCE($9, h.cost_amount)
+                WHEN $8 AND $9::INT IS NULL THEN 0
+                ELSE COALESCE($10, h.cost_amount)
             END,
             puzzle_id = COALESCE((
-                SELECT p.id FROM rb_puzzle p WHERE p.id = $10::INT
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $11::INT
             ), h.puzzle_id)
         WHERE h.id = $1
-            AND ($10::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_puzzle p WHERE p.id = $10::INT
+            AND ($11::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $11::INT
             ))
-        RETURNING id, sort, title, content, content_type, cooldown, cost_id,
+        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
             cost_amount, puzzle_id, ctime_at;",
         hint_id,
         data.sort,
         data.title,
+        data.title_hidden,
         data.content,
         data.content_type,
         data.cooldown,

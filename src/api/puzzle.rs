@@ -175,17 +175,10 @@ async fn get_puzzle_hints(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let result = db::puzzle::get_hints_show_str_for_team(
-        &app.db,
-        &app.kv,
-        user.req_team_id()?.ok_or(RbError::forbid())?,
-        path.puzzle_id,
-    )
-    .await?;
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let result = db::puzzle::get_hints_view_for_team(&app.db, team_id, path.puzzle_id).await?;
 
-    Ok(HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body(result))
+    Ok(HttpResponse::Ok().json(result))
 }
 
 #[repr(i32)]
@@ -194,6 +187,28 @@ pub enum PurchaseHintResult {
     Insufficient = -2,
     Unavailable = -1,
     Ok = 0,
+}
+
+#[derive(Serialize)]
+struct SyncDueHintsResponse {
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    server_time: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    next_unlock_at: Option<OffsetDateTime>,
+}
+
+async fn sync_due_hints(
+    path: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let next_unlock_at = db::puzzle::sync_due_hints(&app.db, team_id, path.puzzle_id).await?;
+
+    Ok(HttpResponse::Ok().json(SyncDueHintsResponse {
+        server_time: OffsetDateTime::now_utc(),
+        next_unlock_at,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -328,6 +343,7 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
             .route("", web::get().to(get_puzzle))
             .route("/submit", web::post().to(judge_puzzle))
             .route("/hints", web::get().to(get_puzzle_hints))
+            .route("/hints/sync", web::post().to(sync_due_hints))
             .route("/submissions", web::get().to(get_puzzle_submissions))
             .configure(puzzle_backend::config)
             .service(

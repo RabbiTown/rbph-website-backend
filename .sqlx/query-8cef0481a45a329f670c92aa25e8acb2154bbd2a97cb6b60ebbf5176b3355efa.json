@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        WITH upserted AS (\n            INSERT INTO rb_team_hint (team_id, hint_id, unlocked)\n            VALUES ($1, $2, TRUE)\n            ON CONFLICT (team_id, hint_id)\n            DO UPDATE SET unlocked = TRUE\n            RETURNING hint_id\n        )\n        SELECT h.id, h.title, h.content, h.content_type\n        FROM rb_hint h\n        JOIN upserted u ON h.id = u.hint_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "content_type",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8cef0481a45a329f670c92aa25e8acb2154bbd2a97cb6b60ebbf5176b3355efa"
+}

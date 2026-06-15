@@ -102,6 +102,15 @@ fn js_to_json(value: &JsValue, context: &mut Context) -> Result<Value, RbInterna
         .ok_or_else(|| internal_err("value is undefined"))
 }
 
+fn js_to_json_optional(
+    value: &JsValue,
+    context: &mut Context,
+) -> Result<Option<Value>, RbInternalError> {
+    value
+        .to_json(context)
+        .map_err(|e| internal_err(e.to_string()))
+}
+
 fn js_string_arg(value: Option<JsString>, message: &str) -> Result<String, JsError> {
     value
         .map(|v| v.to_std_string_escaped())
@@ -1410,7 +1419,7 @@ pub async fn execute_judge(
     backend: crate::db::puzzle_backend::PuzzleBackend,
     function_name: String,
     runtime: JudgeRuntimeContext,
-) -> Result<crate::game::judge::JudgeBackendOutput, RbInternalError> {
+) -> Result<Option<crate::game::judge::JudgeBackendOutput>, RbInternalError> {
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
         RUNTIME_CONTEXT.with(|slot| {
@@ -1482,7 +1491,9 @@ pub async fn execute_judge(
         } else {
             result
         };
-        let json = js_to_json(&result, &mut context)?;
+        let Some(json) = js_to_json_optional(&result, &mut context)? else {
+            return Ok::<_, RbInternalError>(None);
+        };
         let output: crate::game::judge::JudgeBackendOutput =
             serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
 
@@ -1490,7 +1501,7 @@ pub async fn execute_judge(
             return Err(internal_err("judge output ignored requires action"));
         }
 
-        Ok::<_, RbInternalError>(output)
+        Ok::<_, RbInternalError>(Some(output))
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?

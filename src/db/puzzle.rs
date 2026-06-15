@@ -18,7 +18,7 @@ use crate::{
     extractor::auth::AuthUser,
     game::{
         self,
-        judge::{JudgeResult, JudgeRule, normalize_answer},
+        judge::{JudgeResult, JudgeRule, judge_by_rules, normalize_answer},
     },
     model::game::{
         RbContentType, RbJudgeAction, RbPuzzlePenaltyType, RbPuzzleType, RbTeamPuzzleState,
@@ -772,11 +772,13 @@ pub async fn submit_answer(
         return Ok(SubmitAnswerResult::Locked);
     }
 
-    let submit_id = sqlx::query_scalar!(
-        "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
+    let submit_row = sqlx::query_as!(
+        BackendSubmissionShowData,
+        r#"INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT DO NOTHING
-        RETURNING id",
+        RETURNING id, team_id, user_id, puzzle_id, user_answer, norm_answer,
+            saction, sresult, real_answer, ignored, ctime_at"#,
         team_id,
         user.uid,
         puzzle_id,
@@ -786,10 +788,11 @@ pub async fn submit_answer(
     .fetch_optional(&mut *tx)
     .await?;
 
-    if submit_id.is_none() {
+    if submit_row.is_none() {
         return Ok(SubmitAnswerResult::Duplicate);
     }
-    let submit_id = submit_id.unwrap();
+    let submit_row = submit_row.unwrap();
+    let submit_id = submit_row.id;
 
     let judge = get_judge_rules(&app.db, puzzle_id).await?;
     if judge.is_none() {
@@ -797,63 +800,53 @@ pub async fn submit_answer(
     }
 
     let rules = judge.unwrap();
-    let custom_rule = game::judge::find_custom_rule(&rules);
-    let result = if let Some(rule) = custom_rule {
-        let backend_name = rule
-            .function
-            .as_ref()
-            .ok_or_else(|| RbInternalError::Other("custom judge function is missing".to_string()))?
-            .clone();
-        let backend = db::puzzle_backend::get_backend(&app.db, puzzle_id)
-            .await?
-            .ok_or(RbInternalError::Other("backend not found".to_string()))?;
-        let puzzle_info = get_puzzle_judge_info(&app.db, puzzle_id)
-            .await?
-            .ok_or(RbInternalError::Other("puzzle not found".to_string()))?;
-        let user_info = db::user::get_display_by_id(&app.db, user.uid).await?;
-        let team_info = db::team::get_by_id_show(&app.db, team_id).await?;
+    let norm_answer_for_rules = norm_answer.clone();
+    let norm_answer_for_custom = norm_answer.clone();
 
-        let submit_row = sqlx::query_as!(
-            BackendSubmissionShowData,
-            r#"SELECT id, team_id, user_id, puzzle_id, user_answer, norm_answer,
-                saction, sresult, real_answer, ignored, ctime_at
-            FROM rb_submission
-            WHERE id = $1"#,
-            submit_id
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+    let result = judge_by_rules(&rules, &norm_answer_for_rules, move |rule| {
+        let app = app.clone();
+        let submit_row = submit_row.clone();
+        let backend_name = rule.function.clone();
+        let norm_answer = norm_answer_for_custom.clone();
+        async move {
+            let backend_name = backend_name.ok_or_else(|| {
+                RbInternalError::Other("custom judge function is missing".to_string())
+            })?;
+            let backend = db::puzzle_backend::get_backend(&app.db, puzzle_id)
+                .await?
+                .ok_or(RbInternalError::Other("backend not found".to_string()))?;
+            let puzzle_info = get_puzzle_judge_info(&app.db, puzzle_id)
+                .await?
+                .ok_or(RbInternalError::Other("puzzle not found".to_string()))?;
+            let user_info = db::user::get_display_by_id(&app.db, user.uid).await?;
+            let team_info = db::team::get_by_id_show(&app.db, team_id).await?;
+            let submit_row = submit_row.clone();
+            let team_info =
+                team_info.ok_or(RbInternalError::Other("team not found".to_string()))?;
 
-        let team_info = team_info.ok_or(RbInternalError::Other("team not found".to_string()))?;
+            let output = crate::module::puzzle_backend_js::execute_judge(
+                &app,
+                backend,
+                backend_name,
+                crate::module::puzzle_backend_js::JudgeRuntimeContext {
+                    puzzle_id: puzzle_info.id,
+                    game_id: puzzle_info.game_id,
+                    puzzle_title: puzzle_info.title,
+                    team_id,
+                    team_name: team_info.name,
+                    user_id: user.uid,
+                    user_nickname: user_info.nickname,
+                    user_answer: answer.to_string(),
+                    norm_answer,
+                    submission: submit_row,
+                },
+            )
+            .await?;
 
-        let output = crate::module::puzzle_backend_js::execute_judge(
-            app,
-            backend,
-            backend_name,
-            crate::module::puzzle_backend_js::JudgeRuntimeContext {
-                puzzle_id: puzzle_info.id,
-                game_id: puzzle_info.game_id,
-                puzzle_title: puzzle_info.title.clone(),
-                team_id,
-                team_name: team_info.name.clone(),
-                user_id: user.uid,
-                user_nickname: user_info.nickname.clone(),
-                user_answer: answer.to_string(),
-                norm_answer: norm_answer.clone(),
-                submission: submit_row,
-            },
-        )
-        .await?;
-
-        JudgeResult {
-            action: output.action.unwrap_or(RbJudgeAction::Fail),
-            result: output.result,
-            answer: output.answer,
-            ignored: output.ignored.unwrap_or(false),
+            Ok(output)
         }
-    } else {
-        game::judge::judge_by_rules(&rules, &norm_answer)?
-    };
+    })
+    .await?;
 
     sqlx::query!(
         "UPDATE rb_submission

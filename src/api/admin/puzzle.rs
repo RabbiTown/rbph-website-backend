@@ -95,11 +95,10 @@ fn validate_judge_action(value: &serde_json::Value) -> bool {
             }
 
             if matches!(rule_type, Some("custom"))
-                && !["function", "backend", "text"].iter().any(|key| {
-                    map.get(*key)
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|value| !value.is_empty())
-                })
+                && map
+                    .get("function")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|value| value.is_empty())
             {
                 return false;
             }

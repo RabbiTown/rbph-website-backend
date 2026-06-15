@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, team_id, user_id, puzzle_id, user_answer, norm_answer,\n                saction, sresult, real_answer, ignored, ctime_at\n            FROM rb_submission\n            WHERE id = $1",
+  "query": "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)\n        VALUES ($1, $2, $3, $4, $5)\n        ON CONFLICT DO NOTHING\n        RETURNING id, team_id, user_id, puzzle_id, user_answer, norm_answer,\n            saction, sresult, real_answer, ignored, ctime_at",
   "describe": {
     "columns": [
       {
@@ -61,7 +61,11 @@
     ],
     "parameters": {
       "Left": [
-        "Int4"
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Text"
       ]
     },
     "nullable": [
@@ -78,5 +82,5 @@
       false
     ]
   },
-  "hash": "5c1c42cb294a768c9eba50a41adfe4e8303ac10f67cbb0e53997f0a9ddb27d2b"
+  "hash": "ec386f864324dada3e7187771190d4cb23596d7f06baa0ba3187f82b30fd0956"
 }

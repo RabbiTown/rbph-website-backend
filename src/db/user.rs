@@ -159,6 +159,28 @@ pub async fn get_display_by_id(
     Ok(result)
 }
 
+pub async fn update_profile(
+    pool: &DbPool,
+    user_id: i32,
+    nickname: &str,
+    bio: Option<&str>,
+) -> Result<RbUserDisplayData, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbUserDisplayData,
+        "UPDATE rb_user
+        SET nickname = $2, bio = $3
+        WHERE id = $1
+        RETURNING id, email, urole, nickname, bio, ctime_at;",
+        user_id,
+        nickname,
+        bio
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(result)
+}
+
 // TODO : add redis cache
 pub async fn get_role_by_id(
     pool: &DbPool,

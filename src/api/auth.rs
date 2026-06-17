@@ -3,6 +3,7 @@ use actix_session::Session;
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_repr::Serialize_repr;
 use validator::{Validate, ValidationError};
 
@@ -92,6 +93,19 @@ async fn login(
     session::append(&app.kv, &sess, user.id, app.settings.auth.max_session).await?;
     sess.renew();
 
+    db::event_log::insert_pool(
+        &app.db,
+        db::event_log::EventLogInput {
+            event_type: "auth.login",
+            event_scope: i16::from(db::event_log::EventScope::Security),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            user_id: Some(user.id),
+            data: json!({}),
+            ..Default::default()
+        },
+    )
+    .await?;
+
     Ok(HttpResponse::Ok().json(UserLoginResponse {
         code: UserLoginResult::Ok,
         uid: user.id,
@@ -170,12 +184,36 @@ async fn register(
             )
             .await?;
 
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "auth.register_requested",
+                event_scope: i16::from(db::event_log::EventScope::Security),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                data: json!({ "email": req.email }),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         Ok(HttpResponse::Ok().json(UserRegisterResponse {
             code: UserRegisterResult::EmailSent,
             uid: None,
         }))
     } else {
         let uid = db::user::register(&app.db, &req.email, &req.password).await?;
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "auth.registered",
+                event_scope: i16::from(db::event_log::EventScope::Security),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                user_id: Some(uid),
+                data: json!({}),
+                ..Default::default()
+            },
+        )
+        .await?;
         Ok(HttpResponse::Ok().json(UserRegisterResponse {
             code: UserRegisterResult::Ok,
             uid: Some(uid),
@@ -211,9 +249,22 @@ async fn verify(
     if result.is_none() {
         RbError::bad_req(UserVerifyResult::Invalid.into()).err()?
     }
+    let uid = result.unwrap();
+    db::event_log::insert_pool(
+        &app.db,
+        db::event_log::EventLogInput {
+            event_type: "auth.verified",
+            event_scope: i16::from(db::event_log::EventScope::Security),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            user_id: Some(uid),
+            data: json!({}),
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(HttpResponse::Ok().json(UserVerifyResponse {
         code: UserVerifyResult::Ok,
-        uid: result.unwrap(),
+        uid,
     }))
 }
 
@@ -231,8 +282,22 @@ enum UserLogoutResult {
 }
 
 async fn logout(sess: Session, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let user_id = sess.get::<i32>("user_id").ok().flatten();
     session::invalidate(&app.kv, &sess).await?;
     sess.purge();
+
+    db::event_log::insert_pool(
+        &app.db,
+        db::event_log::EventLogInput {
+            event_type: "auth.logout",
+            event_scope: i16::from(db::event_log::EventScope::Security),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            user_id,
+            data: json!({}),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     Ok(HttpResponse::Ok().json(UserLogoutResponse {
         code: UserLogoutResult::Ok,

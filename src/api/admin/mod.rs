@@ -1,6 +1,7 @@
 mod asset;
 mod game;
 mod hint;
+mod log;
 mod puzzle;
 mod puzzle_backend;
 mod round;
@@ -17,6 +18,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     )
     .configure(asset::config)
     .configure(hint::config)
+    .configure(log::config)
     .configure(puzzle_backend::config)
     .configure(puzzle::config)
     .configure(round::config);

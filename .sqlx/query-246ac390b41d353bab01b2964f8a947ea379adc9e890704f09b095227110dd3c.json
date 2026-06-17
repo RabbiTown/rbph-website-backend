@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.game_id, tm.team_id, h.puzzle_id, p.round_id, p.title AS puzzle_title,\n            h.title AS hint_title, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND tp.ctime_at <= NOW() - (h.cooldown * INTERVAL '1 second');",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "puzzle_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "hint_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "cost_amount",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "246ac390b41d353bab01b2964f8a947ea379adc9e890704f09b095227110dd3c"
+}

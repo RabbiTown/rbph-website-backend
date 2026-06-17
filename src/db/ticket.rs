@@ -1,5 +1,6 @@
 use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
 
@@ -831,6 +832,22 @@ pub async fn close_ticket(
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
 
+    let info = sqlx::query!(
+        r#"SELECT t.team_id, t.puzzle_id, tm.game_id,
+            p.round_id AS "round_id?", p.title AS "puzzle_title?"
+        FROM rb_ticket t
+        JOIN rb_team tm ON tm.id = t.team_id
+        LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id
+        WHERE t.id = $1;"#,
+        ticket_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(info) = info else {
+        return Ok(false);
+    };
+
     let updated = sqlx::query_scalar!(
         "UPDATE rb_ticket SET state = $1
         WHERE id = $2 AND state <> $1
@@ -859,6 +876,31 @@ pub async fn close_ticket(
             message_id
         )
         .execute(&mut *tx)
+        .await?;
+
+        crate::db::event_log::insert_tx(
+            &mut tx,
+            crate::db::event_log::EventLogInput {
+                event_type: "ticket.closed",
+                event_scope: i16::from(crate::db::event_log::EventScope::TeamActivity),
+                severity: i16::from(crate::db::event_log::EventSeverity::Info),
+                game_id: Some(info.game_id),
+                team_id: Some(info.team_id),
+                user_id: Some(actor_id),
+                puzzle_id: info.puzzle_id,
+                round_id: info.round_id,
+                ticket_id: Some(ticket_id),
+                data: json!({
+                    "staff": matches!(actor_type, RbTicketSenderType::Host),
+                    "ticket": { "id": ticket_id },
+                    "puzzle": {
+                        "id": info.puzzle_id,
+                        "title": info.puzzle_title
+                    }
+                }),
+                ..Default::default()
+            },
+        )
         .await?;
     }
 
@@ -917,12 +959,16 @@ pub async fn purchase_ticket_message(
     let mut tx = app.db.begin().await?;
 
     let info = sqlx::query!(
-        "SELECT t.team_id, m.cost_id, m.cost_amount
+        r#"SELECT t.team_id, t.puzzle_id, tm.game_id,
+            p.round_id AS "round_id?", p.title AS "puzzle_title?",
+            m.cost_id, m.cost_amount
         FROM rb_message m
         JOIN rb_ticket t ON t.id = m.ticket_id
+        JOIN rb_team tm ON tm.id = t.team_id
+        LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id
         WHERE m.id = $1 AND t.id = $2
             AND NOT m.unlocked
-        FOR UPDATE OF m;",
+        FOR UPDATE OF m;"#,
         message_id,
         ticket_id
     )
@@ -933,33 +979,58 @@ pub async fn purchase_ticket_message(
         return Ok(PurchaseTicketMessageResult::Unavailable);
     };
 
+    let mut currency_event: Option<crate::db::event_log::CurrencyEventData> = None;
+
     if info.cost_id.is_some() && needs_pay {
         let result = sqlx::query!(
-            "UPDATE rb_team_currency tc
-            SET utime_at = NOW(), amount = LEAST(
-                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                c.max_amount
-            ) - $3
-            FROM rb_currency c
-            WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
-                AND c.game_id = (
-                    SELECT tm.game_id
-                    FROM rb_team_member tm
-                    WHERE tm.team_id = $1 AND tm.user_id = $4
-                )
-                AND ($3 <= 0 OR LEAST(
-                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                    c.max_amount
-                ) >= $3);",
+            r#"WITH current AS (
+                SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,
+                    LEAST(
+                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                        c.max_amount
+                    ) AS current_amount
+                FROM rb_team_currency tc
+                JOIN rb_currency c ON tc.currency_id = c.id
+                WHERE tc.team_id = $1 AND c.id = $2
+                    AND c.game_id = (
+                        SELECT tm.game_id
+                        FROM rb_team_member tm
+                        WHERE tm.team_id = $1 AND tm.user_id = $4
+                    )
+                    AND ($3 <= 0 OR LEAST(
+                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                        c.max_amount
+                    ) >= $3)
+                FOR UPDATE
+            ), updated AS (
+                UPDATE rb_team_currency tc
+                SET utime_at = NOW(), amount = current.current_amount - $3
+                FROM current
+                WHERE tc.team_id = current.team_id AND tc.currency_id = current.id
+                RETURNING current.id, current.slug, current.cname, current.prec,
+                    current.current_amount, tc.amount
+            )
+            SELECT id AS "id!", slug AS "slug!", cname AS "name!", prec AS "prec!",
+                current_amount AS "before!", amount AS "after!"
+            FROM updated;"#,
             info.team_id,
             info.cost_id,
             info.cost_amount,
             user_id
         )
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        if result.rows_affected() == 0 {
+        if let Some(currency) = result {
+            currency_event = Some(crate::db::event_log::CurrencyEventData {
+                id: currency.id,
+                slug: currency.slug,
+                name: currency.name,
+                prec: currency.prec,
+                before: currency.before,
+                after: currency.after,
+            });
+        } else {
             return Ok(PurchaseTicketMessageResult::Insufficient);
         }
     }
@@ -978,6 +1049,47 @@ pub async fn purchase_ticket_message(
     if updated.is_none() {
         return Ok(PurchaseTicketMessageResult::Unavailable);
     }
+
+    crate::db::event_log::insert_tx(
+        &mut tx,
+        crate::db::event_log::EventLogInput {
+            event_type: "ticket.message_purchased",
+            event_scope: i16::from(crate::db::event_log::EventScope::TeamActivity),
+            severity: i16::from(crate::db::event_log::EventSeverity::Info),
+            game_id: Some(info.game_id),
+            team_id: Some(info.team_id),
+            user_id: Some(user_id),
+            puzzle_id: info.puzzle_id,
+            round_id: info.round_id,
+            ticket_id: Some(ticket_id),
+            currency_id: currency_event.as_ref().map(|currency| currency.id),
+            delta_amount: currency_event.as_ref().map(|currency| currency.delta()),
+            data: json!({
+                "staff": !needs_pay,
+                "ticket": { "id": ticket_id },
+                "message": { "id": message_id },
+                "puzzle": {
+                    "id": info.puzzle_id,
+                    "title": info.puzzle_title
+                },
+                "cost": {
+                    "currency_id": info.cost_id,
+                    "amount": info.cost_amount
+                },
+                "currency": currency_event.as_ref().map(|currency| json!({
+                    "id": currency.id,
+                    "slug": currency.slug,
+                    "name": currency.name,
+                    "prec": currency.prec
+                })),
+                "delta": currency_event.as_ref().map(|currency| currency.delta()),
+                "before": currency_event.as_ref().map(|currency| currency.before),
+                "after": currency_event.as_ref().map(|currency| currency.after)
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -1024,13 +1136,14 @@ pub async fn open_puzzle_ticket(
 
     // check puzzle ticket availability
     let ticket_availability = sqlx::query!(
-        "SELECT p.ticket_enabled,
+        "SELECT p.ticket_enabled, p.title AS puzzle_title, p.round_id, r.game_id,
             EXISTS (
                 SELECT 1 FROM rb_team_puzzle tp
                 WHERE tp.puzzle_id = p.id AND tp.team_id = $1
                     AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS cooldown_ready
         FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
         WHERE p.id = $2;",
         team_id,
         puzzle_id
@@ -1069,6 +1182,30 @@ pub async fn open_puzzle_ticket(
         message_id
     )
     .execute(&mut *tx)
+    .await?;
+
+    crate::db::event_log::insert_tx(
+        &mut tx,
+        crate::db::event_log::EventLogInput {
+            event_type: "ticket.opened",
+            event_scope: i16::from(crate::db::event_log::EventScope::TeamActivity),
+            severity: i16::from(crate::db::event_log::EventSeverity::Info),
+            game_id: Some(ticket_availability.game_id),
+            team_id: Some(team_id),
+            user_id: Some(message.sender_id),
+            puzzle_id: Some(puzzle_id),
+            round_id: Some(ticket_availability.round_id),
+            ticket_id: Some(ticket_id),
+            data: json!({
+                "ticket": { "id": ticket_id },
+                "puzzle": {
+                    "id": puzzle_id,
+                    "title": ticket_availability.puzzle_title
+                }
+            }),
+            ..Default::default()
+        },
+    )
     .await?;
 
     tx.commit().await?;

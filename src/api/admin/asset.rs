@@ -19,6 +19,7 @@ use crate::{
 struct AssetListQuery {
     game_id: i32,
     puzzle_id: Option<i32>,
+    round_id: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -134,7 +135,12 @@ fn is_path_in_folder(path: &str, folder: &str) -> bool {
 }
 
 async fn list(query: web::Query<AssetListQuery>, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let groups = db::asset::list_by_scope(&app.db, query.game_id, query.puzzle_id).await?;
+    if query.puzzle_id.is_some() && query.round_id.is_some() {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    }
+
+    let groups =
+        db::asset::list_by_scope(&app.db, query.game_id, query.puzzle_id, query.round_id).await?;
     Ok(HttpResponse::Ok().json(AssetAdminListResponse {
         code: AssetAdminResult::Ok,
         groups,
@@ -144,6 +150,7 @@ async fn list(query: web::Query<AssetListQuery>, app: web::Data<AppState>) -> Re
 async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<HttpResponse> {
     let mut game_id: Option<i32> = None;
     let mut puzzle_id: Option<i32> = None;
+    let mut round_id: Option<i32> = None;
     let mut mode = UploadMode::File;
     let mut file_name: Option<String> = None;
     let mut file_mime: Option<String> = None;
@@ -194,6 +201,7 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
         match name.as_str() {
             "game_id" => game_id = text.trim().parse::<i32>().ok(),
             "puzzle_id" => puzzle_id = text.trim().parse::<i32>().ok(),
+            "round_id" => round_id = text.trim().parse::<i32>().ok(),
             _ => {}
         }
     }
@@ -201,6 +209,14 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     let Some(game_id) = game_id else {
         return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
     };
+    if !db::game::exists(&app.db, game_id, crate::model::user::RbUserRole::Admin).await? {
+        return RbError::not_found()
+            .code(AssetAdminResult::NotFound.into())
+            .http_err();
+    }
+    if puzzle_id.is_some() && round_id.is_some() {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    }
     if let Some(puzzle_id) = puzzle_id {
         let Some(puzzle_game_id) = db::puzzle::get_puzzle_game(&app.db, puzzle_id).await? else {
             return RbError::not_found()
@@ -208,6 +224,16 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
                 .http_err();
         };
         if puzzle_game_id != game_id {
+            return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+        }
+    }
+    if let Some(round_id) = round_id {
+        let Some(round) = db::round::get_round_game(&app.db, round_id).await? else {
+            return RbError::not_found()
+                .code(AssetAdminResult::NotFound.into())
+                .http_err();
+        };
+        if round != game_id {
             return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
         }
     }
@@ -262,6 +288,7 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
             db::asset::CreateAssetGroupData {
                 game_id,
                 puzzle_id,
+                round_id,
                 backend: "local",
                 object_key: &object_key,
                 original_name: &group_name,

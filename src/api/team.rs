@@ -216,6 +216,48 @@ async fn get_self_currency(user: AuthUser, app: web::Data<AppState>) -> Result<H
     Ok(HttpResponse::Ok().json(result))
 }
 
+#[derive(Deserialize)]
+struct TeamActivityQuery {
+    before: Option<i64>,
+    limit: Option<i64>,
+    currency_id: Option<i32>,
+    include_summary: Option<bool>,
+}
+
+async fn get_self_activity(
+    user: AuthUser,
+    query: web::Query<TeamActivityQuery>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?;
+    if team_id.is_none() {
+        RbError::not_found().err()?
+    }
+
+    let team_id = team_id.unwrap();
+    let result = db::event_log::list_team_activity(
+        &app.db,
+        team_id,
+        query.currency_id,
+        query.before,
+        query.limit.unwrap_or(30),
+    )
+    .await?;
+
+    if query.include_summary.unwrap_or(false)
+        && let Some(currency_id) = query.currency_id
+    {
+        let summary =
+            db::event_log::get_currency_activity_summary(&app.db, team_id, currency_id).await?;
+        return Ok(HttpResponse::Ok().json(serde_json::json!({
+            "data": result,
+            "summary": summary
+        })));
+    }
+
+    Ok(HttpResponse::Ok().json(result))
+}
+
 // -- kick --
 
 #[derive(Deserialize)]
@@ -325,6 +367,7 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
         .route("/self", web::post().to(create_self))
         .route("/self/leave", web::post().to(leave_self))
         .route("/self/currency", web::get().to(get_self_currency))
+        .route("/self/activity", web::get().to(get_self_activity))
         .service(
             web::scope("/self")
                 .wrap(middleware::from_fn(check_leader_middleware))

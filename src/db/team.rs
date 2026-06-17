@@ -1,5 +1,6 @@
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_repr::Serialize_repr;
 use sqlx::QueryBuilder;
 use time::OffsetDateTime;
@@ -169,6 +170,21 @@ pub async fn join(
     .await?;
 
     if result.rows_affected() > 0 {
+        db::event_log::insert_tx(
+            &mut tx,
+            db::event_log::EventLogInput {
+                event_type: "team.member.joined",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                game_id: Some(verify.game_id),
+                team_id: Some(team_id),
+                user_id: Some(user_id),
+                data: json!({}),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         tx.commit().await?;
 
         // all member => TeamInfoUpdated
@@ -225,23 +241,56 @@ pub async fn user_create(
     .execute(&mut *tx)
     .await?;
 
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "team.created",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(data.game_id),
+            team_id: Some(team_id),
+            user_id: Some(user_id),
+            data: json!({
+                "team": { "id": team_id, "name": data.name }
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+
     tx.commit().await?;
     Ok(Some(team_id))
 }
 
 pub async fn leave(app: &AppState, team_id: i32, user_id: i32) -> Result<bool, RbInternalError> {
-    let result = sqlx::query!(
+    let result = sqlx::query_scalar!(
         "DELETE FROM rb_team_member tm
         USING rb_team t
         WHERE tm.team_id = $1 AND tm.user_id = $2
-            AND t.id = tm.team_id AND t.state < 1;",
+            AND t.id = tm.team_id AND t.state < 1
+        RETURNING t.game_id;",
         team_id,
         user_id
     )
-    .execute(&app.db)
+    .fetch_optional(&app.db)
     .await?;
 
-    if result.rows_affected() > 0 {
+    if let Some(game_id) = result {
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "team.member.left",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                game_id: Some(game_id),
+                team_id: Some(team_id),
+                user_id: Some(user_id),
+                data: json!({}),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         // other member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
 
@@ -277,6 +326,20 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
     .await?;
 
     if let Some(game_id) = result {
+        db::event_log::insert_tx(
+            &mut tx,
+            db::event_log::EventLogInput {
+                event_type: "team.disbanded",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Warning),
+                game_id: Some(game_id),
+                team_id: None,
+                data: json!({ "team": { "id": team_id } }),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         tx.commit().await?;
 
         db::cache::remove_team_info(game_id, team_id).await?;
@@ -352,6 +415,27 @@ pub async fn user_update(
         .await?;
 
     if let Some(team_id) = result {
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "team.updated",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                game_id: Some(game_id),
+                team_id: Some(team_id),
+                user_id: Some(user_id),
+                data: json!({
+                    "fields": {
+                        "name": data.name.is_some(),
+                        "pass": data.pass.is_some(),
+                        "bio": data.bio.is_some()
+                    }
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         // all member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
         Ok(true)
@@ -416,6 +500,7 @@ pub struct RbCurrencyShowData {
     slug: String,
     name: String,
     growth: i32,
+    init_amount: i32,
     prec: i32,
     amount: i32,
     current_amount: i32,
@@ -431,7 +516,7 @@ pub async fn get_currency_info(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
-                c.prec, tc.amount,
+                c.init_amount, c.prec, tc.amount,
                 LEAST(
                     tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
                     c.max_amount
@@ -456,7 +541,7 @@ pub async fn get_currency_info_one(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
-                c.prec, tc.amount,
+                c.init_amount, c.prec, tc.amount,
                 LEAST(
                     tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
                     c.max_amount
@@ -483,7 +568,7 @@ pub async fn get_currency_info_one_by_slug(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
-                c.prec, tc.amount,
+                c.init_amount, c.prec, tc.amount,
                 LEAST(
                     tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
                     c.max_amount
@@ -504,6 +589,11 @@ pub async fn get_currency_info_one_by_slug(
 
 #[derive(sqlx::FromRow)]
 struct CurrencyRuntimeRow {
+    id: i32,
+    game_id: i32,
+    slug: String,
+    name: String,
+    prec: i32,
     current_amount: i32,
     max_amount: i32,
 }
@@ -516,6 +606,11 @@ async fn lock_currency_runtime(
     let row = sqlx::query_as!(
         CurrencyRuntimeRow,
         r#"SELECT
+            c.id AS "id!",
+            c.game_id AS "game_id!",
+            c.slug AS "slug!",
+            c.cname AS "name!",
+            c.prec AS "prec!",
             LEAST(
                 tc.amount
                     + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
@@ -544,6 +639,11 @@ async fn lock_currency_runtime_by_slug(
     let row = sqlx::query_as!(
         CurrencyRuntimeRow,
         r#"SELECT
+            c.id AS "id!",
+            c.game_id AS "game_id!",
+            c.slug AS "slug!",
+            c.cname AS "name!",
+            c.prec AS "prec!",
             LEAST(
                 tc.amount
                     + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
@@ -593,6 +693,31 @@ pub async fn cost_currency(
     .execute(&mut *tx)
     .await?;
 
+    let after = next_amount as i32;
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "currency.cost",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(row.game_id),
+            team_id: Some(team_id),
+            currency_id: Some(row.id),
+            delta_amount: Some(after - row.current_amount),
+            data: db::event_log::CurrencyEventData {
+                id: row.id,
+                slug: row.slug,
+                name: row.name,
+                prec: row.prec,
+                before: row.current_amount,
+                after,
+            }
+            .json("api.cost"),
+            ..Default::default()
+        },
+    )
+    .await?;
+
     tx.commit().await?;
     Ok(true)
 }
@@ -632,6 +757,31 @@ pub async fn cost_currency_by_slug(
     .execute(&mut *tx)
     .await?;
 
+    let after = next_amount as i32;
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "currency.cost",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(row.game_id),
+            team_id: Some(team_id),
+            currency_id: Some(row.id),
+            delta_amount: Some(after - row.current_amount),
+            data: db::event_log::CurrencyEventData {
+                id: row.id,
+                slug: row.slug,
+                name: row.name,
+                prec: row.prec,
+                before: row.current_amount,
+                after,
+            }
+            .json("api.cost"),
+            ..Default::default()
+        },
+    )
+    .await?;
+
     tx.commit().await?;
     Ok(true)
 }
@@ -661,6 +811,30 @@ pub async fn add_currency(
         stored_amount as i32
     )
     .execute(&mut *tx)
+    .await?;
+
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "currency.added",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(row.game_id),
+            team_id: Some(team_id),
+            currency_id: Some(row.id),
+            delta_amount: Some(actual_growth as i32),
+            data: db::event_log::CurrencyEventData {
+                id: row.id,
+                slug: row.slug,
+                name: row.name,
+                prec: row.prec,
+                before: row.current_amount,
+                after: stored_amount as i32,
+            }
+            .json("api.add"),
+            ..Default::default()
+        },
+    )
     .await?;
 
     tx.commit().await?;
@@ -698,6 +872,30 @@ pub async fn add_currency_by_slug(
         stored_amount as i32
     )
     .execute(&mut *tx)
+    .await?;
+
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "currency.added",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(row.game_id),
+            team_id: Some(team_id),
+            currency_id: Some(row.id),
+            delta_amount: Some(actual_growth as i32),
+            data: db::event_log::CurrencyEventData {
+                id: row.id,
+                slug: row.slug,
+                name: row.name,
+                prec: row.prec,
+                before: row.current_amount,
+                after: stored_amount as i32,
+            }
+            .json("api.add"),
+            ..Default::default()
+        },
+    )
     .await?;
 
     tx.commit().await?;
@@ -741,15 +939,32 @@ pub async fn kick_member(
     user_id: i32,
 ) -> Result<bool, RbInternalError> {
     let result = sqlx::query_scalar!(
-        "DELETE FROM rb_team_member
-        WHERE team_id = $1 AND user_id = $2;",
+        "DELETE FROM rb_team_member tm
+        USING rb_team t
+        WHERE tm.team_id = $1 AND tm.user_id = $2 AND t.id = tm.team_id
+        RETURNING t.game_id;",
         team_id,
         user_id
     )
-    .execute(&app.db)
+    .fetch_optional(&app.db)
     .await?;
 
-    if result.rows_affected() > 0 {
+    if let Some(game_id) = result {
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "team.member.kicked",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Warning),
+                game_id: Some(game_id),
+                team_id: Some(team_id),
+                target_user_id: Some(user_id),
+                data: json!({}),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         // kicked member => TeamSelfKicked
         // other member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
@@ -768,20 +983,39 @@ pub async fn promote_member(
     user_id: i32,
 ) -> Result<bool, RbInternalError> {
     let result = sqlx::query_scalar!(
-        "UPDATE rb_team_member
-        SET is_captain = (user_id = $2)
-        WHERE team_id = $1
-            AND EXISTS (
-                SELECT 1 FROM rb_team_member
-                WHERE team_id = $1 AND user_id = $2
-            );",
+        "WITH target AS (
+            SELECT game_id
+            FROM rb_team_member
+            WHERE team_id = $1 AND user_id = $2
+        ), updated AS (
+            UPDATE rb_team_member
+            SET is_captain = (user_id = $2)
+            WHERE team_id = $1 AND EXISTS (SELECT 1 FROM target)
+            RETURNING 1
+        )
+        SELECT game_id FROM target;",
         team_id,
         user_id
     )
-    .execute(&app.db)
+    .fetch_optional(&app.db)
     .await?;
 
-    if result.rows_affected() > 0 {
+    if let Some(game_id) = result {
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "team.member.promoted",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                game_id: Some(game_id),
+                team_id: Some(team_id),
+                target_user_id: Some(user_id),
+                data: json!({}),
+                ..Default::default()
+            },
+        )
+        .await?;
+
         // all member => TeamInfoUpdated
         // target member => TeamSelfPromoted
         db::cache::invalidate_team_info(app, team_id).await?;

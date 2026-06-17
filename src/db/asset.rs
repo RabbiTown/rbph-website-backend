@@ -11,6 +11,7 @@ pub struct RbAssetGroupAdminData {
     pub id: i32,
     pub game_id: i32,
     pub puzzle_id: Option<i32>,
+    pub round_id: Option<i32>,
     pub backend: String,
     pub object_key: String,
     pub original_name: String,
@@ -53,6 +54,7 @@ pub struct RbAssetGroupWithFilesAdminData {
 pub struct CreateAssetGroupData<'a> {
     pub game_id: i32,
     pub puzzle_id: Option<i32>,
+    pub round_id: Option<i32>,
     pub backend: &'a str,
     pub object_key: &'a str,
     pub original_name: &'a str,
@@ -65,25 +67,38 @@ pub async fn list_by_scope(
     pool: &DbPool,
     game_id: i32,
     puzzle_id: Option<i32>,
+    round_id: Option<i32>,
 ) -> Result<Vec<RbAssetGroupWithFilesAdminData>, RbInternalError> {
     let groups = if let Some(puzzle_id) = puzzle_id {
         sqlx::query_as!(
             RbAssetGroupAdminData,
-            "SELECT id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
+            "SELECT id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
             FROM rb_asset_group
-            WHERE game_id = $1 AND puzzle_id = $2
+            WHERE game_id = $1 AND puzzle_id = $2 AND round_id IS NULL
             ORDER BY ctime_at DESC, id DESC;",
             game_id,
             puzzle_id
         )
         .fetch_all(pool)
         .await?
+    } else if let Some(round_id) = round_id {
+        sqlx::query_as!(
+            RbAssetGroupAdminData,
+            "SELECT id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
+            FROM rb_asset_group
+            WHERE game_id = $1 AND round_id = $2 AND puzzle_id IS NULL
+            ORDER BY ctime_at DESC, id DESC;",
+            game_id,
+            round_id
+        )
+        .fetch_all(pool)
+        .await?
     } else {
         sqlx::query_as!(
             RbAssetGroupAdminData,
-            "SELECT id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
+            "SELECT id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
             FROM rb_asset_group
-            WHERE game_id = $1 AND puzzle_id IS NULL
+            WHERE game_id = $1 AND puzzle_id IS NULL AND round_id IS NULL
             ORDER BY ctime_at DESC, id DESC;",
             game_id
         )
@@ -131,7 +146,10 @@ pub async fn list_readable_files_by_object_key(
         JOIN rb_asset_group g ON g.id = f.group_id
         WHERE g.object_key = $1
             AND g.game_id = $2
-            AND (g.puzzle_id = $3 OR g.puzzle_id IS NULL)
+            AND (
+                (g.puzzle_id = $3 AND g.round_id IS NULL)
+                OR (g.puzzle_id IS NULL AND g.round_id IS NULL)
+            )
         ORDER BY f.relative_path ASC, f.id ASC;"#,
         object_key,
         game_id,
@@ -159,7 +177,10 @@ pub async fn get_readable_file_by_object_key(
         WHERE g.object_key = $1
             AND f.relative_path = $2
             AND g.game_id = $3
-            AND (g.puzzle_id = $4 OR g.puzzle_id IS NULL);"#,
+            AND (
+                (g.puzzle_id = $4 AND g.round_id IS NULL)
+                OR (g.puzzle_id IS NULL AND g.round_id IS NULL)
+            );"#,
         object_key,
         relative_path,
         game_id,
@@ -222,12 +243,13 @@ where
     let result = sqlx::query_as!(
         RbAssetGroupAdminData,
         "INSERT INTO rb_asset_group (
-            game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256
+            game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
         data.game_id,
         data.puzzle_id,
+        data.round_id,
         data.backend,
         data.object_key,
         data.original_name,
@@ -277,7 +299,7 @@ pub async fn admin_get_group(
 ) -> Result<Option<RbAssetGroupAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetGroupAdminData,
-        "SELECT id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
+        "SELECT id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
         FROM rb_asset_group
         WHERE id = $1;",
         group_id
@@ -301,7 +323,7 @@ where
         "UPDATE rb_asset_group
         SET original_name = $2
         WHERE id = $1
-        RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
+        RETURNING id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
         group_id,
         original_name
     )
@@ -325,7 +347,7 @@ where
         "UPDATE rb_asset_group
         SET size = $2, sha256 = $3
         WHERE id = $1
-        RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
+        RETURNING id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
         group_id,
         size,
         sha256

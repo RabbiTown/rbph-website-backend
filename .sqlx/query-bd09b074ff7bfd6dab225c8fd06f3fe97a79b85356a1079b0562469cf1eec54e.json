@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1;",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.init_amount, c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3;",
   "describe": {
     "columns": [
       {
@@ -25,33 +25,40 @@
       },
       {
         "ordinal": 4,
-        "name": "prec",
+        "name": "init_amount",
         "type_info": "Int4"
       },
       {
         "ordinal": 5,
-        "name": "amount",
+        "name": "prec",
         "type_info": "Int4"
       },
       {
         "ordinal": 6,
-        "name": "current_amount!",
+        "name": "amount",
         "type_info": "Int4"
       },
       {
         "ordinal": 7,
-        "name": "max_amount",
+        "name": "current_amount!",
         "type_info": "Int4"
       },
       {
         "ordinal": 8,
+        "name": "max_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4"
+        "Int4",
+        "Int4",
+        "Text"
       ]
     },
     "nullable": [
@@ -61,10 +68,11 @@
       null,
       false,
       false,
+      false,
       null,
       false,
       false
     ]
   },
-  "hash": "850fb71caeaf7c81f29e76f496b50537c9815d57d80f02deea24d4c8265595e3"
+  "hash": "bd09b074ff7bfd6dab225c8fd06f3fe97a79b85356a1079b0562469cf1eec54e"
 }

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH target AS (\n            SELECT game_id\n            FROM rb_team_member\n            WHERE team_id = $1 AND user_id = $2\n        ), updated AS (\n            UPDATE rb_team_member\n            SET is_captain = (user_id = $2)\n            WHERE team_id = $1 AND EXISTS (SELECT 1 FROM target)\n            RETURNING 1\n        )\n        SELECT game_id FROM target;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "272d3873a90c643cacd05b9f4216547d7df847dfa2d7a18073b2941913b0475b"
+}

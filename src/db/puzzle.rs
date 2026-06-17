@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
@@ -480,6 +481,38 @@ pub async fn add_backend_submission_and_invalidate(
     data: &BackendSubmissionInput,
 ) -> Result<BackendSubmissionShowData, RbInternalError> {
     let row = add_backend_submission(&app.db, team_id, user_id, puzzle_id, data).await?;
+    if let Some(puzzle_info) = get_puzzle_judge_info(&app.db, puzzle_id).await? {
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "submission.backend_added",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                game_id: Some(puzzle_info.game_id),
+                team_id: Some(team_id),
+                user_id: Some(user_id),
+                puzzle_id: Some(puzzle_id),
+                submission_id: Some(row.id),
+                data: json!({
+                    "submission": {
+                        "id": row.id,
+                        "answer": row.user_answer,
+                        "norm_answer": row.norm_answer,
+                        "action": i16::from(row.saction),
+                        "result": row.sresult,
+                        "ignored": row.ignored
+                    },
+                    "puzzle": {
+                        "id": puzzle_info.id,
+                        "title": puzzle_info.title
+                    },
+                    "source": "backend"
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
     invalidate_team_puzzle_state_cache(app, team_id, puzzle_id).await?;
     Ok(row)
 }
@@ -537,6 +570,33 @@ pub async fn solve_backend_puzzle(
     db::cache::invalidate_team_puzzle(app, team_id, puzzle_id).await?;
     if solved {
         db::cache::invalidate_team_puzzle_solved(app, team_id, puzzle_id).await?;
+        if let Some(puzzle_info) = get_puzzle_judge_info(&app.db, puzzle_id).await? {
+            db::event_log::insert_pool(
+                &app.db,
+                db::event_log::EventLogInput {
+                    event_type: "puzzle.backend_solved",
+                    event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                    severity: i16::from(db::event_log::EventSeverity::Info),
+                    game_id: Some(puzzle_info.game_id),
+                    team_id: Some(team_id),
+                    user_id: Some(user_id),
+                    puzzle_id: Some(puzzle_id),
+                    submission_id: Some(submission_id),
+                    data: json!({
+                        "puzzle": {
+                            "id": puzzle_info.id,
+                            "title": puzzle_info.title
+                        },
+                        "submission": {
+                            "id": submission_id
+                        },
+                        "source": "backend"
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        }
         if matches!(submission.saction, RbJudgeAction::FinishGame) {
             db::cache::invalidate_team_info(app, team_id).await?;
         }
@@ -794,6 +854,14 @@ pub async fn submit_answer(
     let submit_row = submit_row.unwrap();
     let submit_id = submit_row.id;
 
+    let puzzle_info = sqlx::query!(
+        "SELECT id, game_id, round_id, title
+        FROM rb_puzzle
+        WHERE id = $1;",
+        puzzle_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     let judge = get_judge_rules(&app.db, puzzle_id).await?;
     if judge.is_none() {
         return Ok(SubmitAnswerResult::NotFound);
@@ -861,8 +929,44 @@ pub async fn submit_answer(
     .execute(&mut *tx)
     .await?;
 
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "submission.judged",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: if matches!(result.action, RbJudgeAction::Error) {
+                i16::from(db::event_log::EventSeverity::Warning)
+            } else {
+                i16::from(db::event_log::EventSeverity::Info)
+            },
+            game_id: Some(puzzle_info.game_id),
+            team_id: Some(team_id),
+            user_id: Some(user.uid),
+            puzzle_id: Some(puzzle_id),
+            round_id: Some(puzzle_info.round_id),
+            submission_id: Some(submit_id),
+            data: json!({
+                "submission": {
+                    "id": submit_id,
+                    "answer": answer,
+                    "norm_answer": norm_answer,
+                    "action": i16::from(result.action),
+                    "result": result.result,
+                    "ignored": result.ignored || matches!(result.action, RbJudgeAction::Error)
+                },
+                "puzzle": {
+                    "id": puzzle_info.id,
+                    "title": puzzle_info.title
+                }
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+
     let mut solved = false;
     let mut cooldown_till: Option<OffsetDateTime> = None;
+    let mut cooldown_seconds: Option<i32> = None;
     let mut do_unlock = false;
     let mut currency_updated = false;
     let mut currency_penalty: Vec<CurrencyPenaltyShowData> = vec![];
@@ -892,6 +996,32 @@ pub async fn submit_answer(
             if update.rows_affected() > 0 {
                 solved = true;
                 do_unlock = true;
+                db::event_log::insert_tx(
+                    &mut tx,
+                    db::event_log::EventLogInput {
+                        event_type: "puzzle.solved",
+                        event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                        severity: i16::from(db::event_log::EventSeverity::Info),
+                        game_id: Some(puzzle_info.game_id),
+                        team_id: Some(team_id),
+                        user_id: Some(user.uid),
+                        puzzle_id: Some(puzzle_id),
+                        round_id: Some(puzzle_info.round_id),
+                        submission_id: Some(submit_id),
+                        data: json!({
+                            "puzzle": {
+                                "id": puzzle_info.id,
+                                "title": puzzle_info.title
+                            },
+                            "submission": {
+                                "id": submit_id,
+                                "answer": answer
+                            }
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?;
                 db::ticket::close_puzzle_tickets_on_solve(&mut tx, team_id, puzzle_id, user.uid)
                     .await?;
             }
@@ -906,6 +1036,33 @@ pub async fn submit_answer(
             .await?;
 
             if result.rows_affected() > 0 {
+                db::event_log::insert_tx(
+                    &mut tx,
+                    db::event_log::EventLogInput {
+                        event_type: "game.started",
+                        event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                        severity: i16::from(db::event_log::EventSeverity::Info),
+                        game_id: Some(puzzle_info.game_id),
+                        team_id: Some(team_id),
+                        user_id: Some(user.uid),
+                        puzzle_id: Some(puzzle_id),
+                        round_id: Some(puzzle_info.round_id),
+                        submission_id: Some(submit_id),
+                        data: json!({
+                            "puzzle": {
+                                "id": puzzle_info.id,
+                                "title": puzzle_info.title
+                            },
+                            "submission": {
+                                "id": submit_id,
+                                "answer": answer
+                            }
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+
                 sqlx::query!(
                     "INSERT INTO rb_team_currency (team_id, currency_id, amount)
                     SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount
@@ -941,35 +1098,45 @@ pub async fn submit_answer(
             .await?;
 
             let failure_count = info.failure_count.unwrap_or(0) as i32;
-            let mut cooldown_time: Option<i32> = None;
             let rules: Vec<PenaltyRule> = serde_json::from_value(info.penalty)?;
             for rule in rules {
                 match rule.rtype {
                     RbPuzzlePenaltyType::FixedTime => {
                         if let Some(x) = rule.args.first() {
-                            cooldown_time = Some(*x);
+                            cooldown_seconds = Some(*x);
                         }
                     }
                     RbPuzzlePenaltyType::LinearTime => {
                         if let Some(x) = rule.args.first() {
-                            cooldown_time = Some((*x).saturating_mul(failure_count));
+                            cooldown_seconds = Some((*x).saturating_mul(failure_count));
                         }
                     }
                     RbPuzzlePenaltyType::Currency => {
                         if let Some(currency_id) = rule.args.first()
                             && let Some(amount) = rule.args.get(1)
-                            && let Some(penalty) = sqlx::query_as!(
-                                CurrencyPenaltyShowData,
-                                r#"UPDATE rb_team_currency tc
-                                SET utime_at = NOW(), amount = LEAST(
-                                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                                    c.max_amount
-                                ) - $1
-                                FROM rb_currency c
-                                WHERE tc.currency_id = c.id
-                                    AND tc.team_id = $2
-                                    AND c.id = $3
-                                RETURNING c.id AS "currency_id!", c.cname AS "name!", c.prec AS "prec!", $1::INT AS "amount!";"#,
+                            && let Some(penalty_row) = sqlx::query!(
+                                r#"WITH current AS (
+                                    SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,
+                                        LEAST(
+                                            tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                                            c.max_amount
+                                        ) AS current_amount
+                                    FROM rb_team_currency tc
+                                    JOIN rb_currency c ON tc.currency_id = c.id
+                                    WHERE tc.team_id = $2 AND c.id = $3
+                                    FOR UPDATE
+                                ), updated AS (
+                                    UPDATE rb_team_currency tc
+                                    SET utime_at = NOW(), amount = current.current_amount - $1
+                                    FROM current
+                                    WHERE tc.team_id = current.team_id AND tc.currency_id = current.id
+                                    RETURNING current.id, current.slug, current.cname, current.prec,
+                                        current.current_amount, tc.amount
+                                )
+                                SELECT id AS "currency_id!", slug AS "slug!", cname AS "name!",
+                                    prec AS "prec!", $1::INT AS "amount!",
+                                    current_amount AS "before!", amount AS "after!"
+                                FROM updated;"#,
                                 amount,
                                 team_id,
                                 currency_id
@@ -977,14 +1144,57 @@ pub async fn submit_answer(
                             .fetch_optional(&mut *tx)
                             .await?
                             {
+                                let penalty = CurrencyPenaltyShowData {
+                                    currency_id: penalty_row.currency_id,
+                                    name: penalty_row.name.clone(),
+                                    prec: penalty_row.prec,
+                                    amount: penalty_row.amount,
+                                };
                                 currency_updated = true;
+                                db::event_log::insert_tx(
+                                    &mut tx,
+                                    db::event_log::EventLogInput {
+                                        event_type: "currency.penalty",
+                                        event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                                        severity: i16::from(db::event_log::EventSeverity::Info),
+                                        game_id: Some(puzzle_info.game_id),
+                                        team_id: Some(team_id),
+                                        user_id: Some(user.uid),
+                                        puzzle_id: Some(puzzle_id),
+                                        round_id: Some(puzzle_info.round_id),
+                                        submission_id: Some(submit_id),
+                                        currency_id: Some(penalty.currency_id),
+                                        delta_amount: Some(-penalty.amount),
+                                        data: json!({
+                                            "reason": "puzzle.penalty",
+                                            "currency": {
+                                                "id": penalty.currency_id,
+                                                "slug": penalty_row.slug,
+                                                "name": penalty.name,
+                                                "prec": penalty.prec
+                                            },
+                                            "delta": -penalty.amount,
+                                            "before": penalty_row.before,
+                                            "after": penalty_row.after,
+                                            "submission": {
+                                                "id": submit_id
+                                            },
+                                            "puzzle": {
+                                                "id": puzzle_info.id,
+                                                "title": puzzle_info.title
+                                            }
+                                        }),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await?;
                                 currency_penalty.push(penalty);
                             }
                     }
                     _ => {}
                 }
             }
-            if let Some(time) = cooldown_time {
+            if let Some(time) = cooldown_seconds {
                 cooldown_till = sqlx::query_scalar!(
                     "UPDATE rb_team_puzzle
                     SET cooldown_till = NOW() + ($1 * INTERVAL '1 second')
@@ -1002,6 +1212,22 @@ pub async fn submit_answer(
             state_cache_invalidated = true;
         }
         _ => {}
+    }
+
+    if matches!(result.action, RbJudgeAction::Fail) {
+        let consequences = json!({
+            "cooldown_seconds": cooldown_seconds,
+            "currency_penalty": &currency_penalty
+        });
+        sqlx::query!(
+            "UPDATE rb_event_log
+            SET data = data || $1::JSONB
+            WHERE submission_id = $2 AND event_type = 'submission.judged';",
+            consequences,
+            submit_id
+        )
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
@@ -1158,15 +1384,44 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
     }
 
     if !unlocks.is_empty() {
-        sqlx::query!(
-            "INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
-            SELECT $1, UNNEST($2::int[]), 0
-            ON CONFLICT DO NOTHING;",
+        let inserted = sqlx::query!(
+            "WITH inserted AS (
+                INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
+                SELECT $1, UNNEST($2::int[]), 0
+                ON CONFLICT DO NOTHING
+                RETURNING puzzle_id
+            )
+            SELECT p.id, p.title, p.round_id
+            FROM inserted i
+            JOIN rb_puzzle p ON p.id = i.puzzle_id;",
             team_id,
             &unlocks
         )
-        .execute(&app.db)
+        .fetch_all(&app.db)
         .await?;
+
+        for puzzle in inserted {
+            db::event_log::insert_pool(
+                &app.db,
+                db::event_log::EventLogInput {
+                    event_type: "puzzle.unlocked",
+                    event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                    severity: i16::from(db::event_log::EventSeverity::Info),
+                    game_id: Some(game_id),
+                    team_id: Some(team_id),
+                    puzzle_id: Some(puzzle.id),
+                    round_id: Some(puzzle.round_id),
+                    data: json!({
+                        "puzzle": {
+                            "id": puzzle.id,
+                            "title": puzzle.title
+                        }
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        }
     }
 
     Ok(unlocks)
@@ -1494,7 +1749,8 @@ pub async fn purchase_hint(
     hint_id: i32,
 ) -> Result<PurchaseHintResult, RbInternalError> {
     let info = sqlx::query!(
-        "SELECT r.game_id, tm.team_id, h.puzzle_id, h.cost_id, h.cost_amount
+        "SELECT r.game_id, tm.team_id, h.puzzle_id, p.round_id, p.title AS puzzle_title,
+            h.title AS hint_title, h.cost_id, h.cost_amount
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_round r ON r.id = p.round_id
@@ -1516,26 +1772,50 @@ pub async fn purchase_hint(
     let info = info.unwrap();
 
     let mut tx = app.db.begin().await?;
+    let mut currency_event: Option<db::event_log::CurrencyEventData> = None;
 
     if info.cost_id.is_some() {
         let result = sqlx::query!(
-            "UPDATE rb_team_currency tc
-            SET utime_at = NOW(), amount = LEAST(
-                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                c.max_amount
-            ) - $3
-            FROM rb_currency c
-            WHERE tc.currency_id = c.id AND tc.team_id = $1 AND c.id = $2
-                AND ($3 <= 0 OR LEAST(
-                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                    c.max_amount
-                ) >= $3);",
+            r#"WITH current AS (
+                SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,
+                    LEAST(
+                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                        c.max_amount
+                    ) AS current_amount
+                FROM rb_team_currency tc
+                JOIN rb_currency c ON tc.currency_id = c.id
+                WHERE tc.team_id = $1 AND c.id = $2
+                    AND ($3 <= 0 OR LEAST(
+                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
+                        c.max_amount
+                    ) >= $3)
+                FOR UPDATE
+            ), updated AS (
+                UPDATE rb_team_currency tc
+                SET utime_at = NOW(), amount = current.current_amount - $3
+                FROM current
+                WHERE tc.team_id = current.team_id AND tc.currency_id = current.id
+                RETURNING current.id, current.slug, current.cname, current.prec,
+                    current.current_amount, tc.amount
+            )
+            SELECT id AS "id!", slug AS "slug!", cname AS "name!", prec AS "prec!",
+                current_amount AS "before!", amount AS "after!"
+            FROM updated;"#,
             info.team_id, info.cost_id, info.cost_amount
         )
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
 
-        if result.rows_affected() == 0 {
+        if let Some(currency) = result {
+            currency_event = Some(db::event_log::CurrencyEventData {
+                id: currency.id,
+                slug: currency.slug,
+                name: currency.name,
+                prec: currency.prec,
+                before: currency.before,
+                after: currency.after,
+            });
+        } else {
             return Ok(PurchaseHintResult::Insufficient);
         }
     }
@@ -1556,7 +1836,47 @@ pub async fn purchase_hint(
         info.team_id,
         hint_id
     )
-    .fetch_one(&app.db)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    db::event_log::insert_tx(
+        &mut tx,
+        db::event_log::EventLogInput {
+            event_type: "hint.purchased",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(info.game_id),
+            team_id: Some(info.team_id),
+            user_id: Some(user_id),
+            puzzle_id: Some(info.puzzle_id),
+            round_id: Some(info.round_id),
+            hint_id: Some(hint_id),
+            currency_id: currency_event.as_ref().map(|currency| currency.id),
+            delta_amount: currency_event.as_ref().map(|currency| currency.delta()),
+            data: json!({
+                "hint": {
+                    "id": hint_id,
+                    "title": info.hint_title,
+                    "cost_id": info.cost_id,
+                    "cost_amount": info.cost_amount
+                },
+                "puzzle": {
+                    "id": info.puzzle_id,
+                    "title": info.puzzle_title
+                },
+                "currency": currency_event.as_ref().map(|currency| json!({
+                    "id": currency.id,
+                    "slug": currency.slug,
+                    "name": currency.name,
+                    "prec": currency.prec
+                })),
+                "delta": currency_event.as_ref().map(|currency| currency.delta()),
+                "before": currency_event.as_ref().map(|currency| currency.before),
+                "after": currency_event.as_ref().map(|currency| currency.after)
+            }),
+            ..Default::default()
+        },
+    )
     .await?;
 
     db::cache::invalidate_team_hints(app, info.team_id, info.puzzle_id).await?;

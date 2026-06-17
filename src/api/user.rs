@@ -1,5 +1,6 @@
 use actix_web::{HttpResponse, Result, web};
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::{AppState, db, error::RbError, extractor::auth::AuthUser};
 
@@ -39,6 +40,23 @@ pub async fn update_info(
     }
 
     let result = db::user::update_profile(&app.db, user.uid, nickname, bio).await?;
+    db::event_log::insert_pool(
+        &app.db,
+        db::event_log::EventLogInput {
+            event_type: "user.profile_updated",
+            event_scope: i16::from(db::event_log::EventScope::System),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            user_id: Some(user.uid),
+            data: json!({
+                "fields": {
+                    "nickname": true,
+                    "bio": req.bio.is_some()
+                }
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_team_member tm\n        USING rb_team t\n        WHERE tm.team_id = $1 AND tm.user_id = $2 AND t.id = tm.team_id\n        RETURNING t.game_id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bc8d34556f4284a024665a49ac5e02effc687436e8c826a6a323c86d10491ee8"
+}

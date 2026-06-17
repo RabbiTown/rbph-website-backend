@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.team_id, t.puzzle_id, tm.game_id,\n            p.round_id AS \"round_id?\", p.title AS \"puzzle_title?\",\n            m.cost_id, m.cost_amount\n        FROM rb_message m\n        JOIN rb_ticket t ON t.id = m.ticket_id\n        JOIN rb_team tm ON tm.id = t.team_id\n        LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id\n        WHERE m.id = $1 AND t.id = $2\n            AND NOT m.unlocked\n        FOR UPDATE OF m;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "round_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "puzzle_title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cost_amount",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "785850284a73e3555f78372eb3d8f943f30e004e0c722c39485ff48e9f524d83"
+}

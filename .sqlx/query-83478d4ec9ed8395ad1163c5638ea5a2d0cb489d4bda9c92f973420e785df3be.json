@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            c.id AS \"currency_id!\",\n            c.init_amount,\n            LEAST(\n                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                c.max_amount\n            ) AS \"current_amount!\",\n            COALESCE(SUM(el.delta_amount), 0)::BIGINT AS \"logged_delta!\"\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id AND tc.team_id = $1\n        LEFT JOIN rb_event_log el ON el.team_id = tc.team_id\n            AND el.currency_id = c.id\n        WHERE c.id = $2\n        GROUP BY c.id, c.init_amount, tc.amount, tc.utime_at, tc.growth, c.growth, c.max_amount;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "currency_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "init_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "current_amount!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "logged_delta!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "83478d4ec9ed8395ad1163c5638ea5a2d0cb489d4bda9c92f973420e785df3be"
+}

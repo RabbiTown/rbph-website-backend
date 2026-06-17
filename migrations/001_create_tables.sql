@@ -159,6 +159,7 @@ CREATE TABLE rb_asset_group (
     id              SERIAL PRIMARY KEY,
     game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
     puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    round_id        INT REFERENCES rb_round(id) ON DELETE CASCADE,
     backend         VARCHAR(32) NOT NULL,
     object_key      TEXT NOT NULL UNIQUE,
     original_name   VARCHAR(255) NOT NULL,
@@ -168,8 +169,14 @@ CREATE TABLE rb_asset_group (
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE rb_asset_group ADD CONSTRAINT rb_ck_asset_group_scope
+CHECK ((puzzle_id IS NOT NULL)::INT + (round_id IS NOT NULL)::INT <= 1);
+
 CREATE INDEX rb_idx_asset_group_game_puzzle_ctime
 ON rb_asset_group(game_id, puzzle_id, ctime_at DESC);
+
+CREATE INDEX rb_idx_asset_group_game_round_ctime
+ON rb_asset_group(game_id, round_id, ctime_at DESC);
 
 CREATE TABLE rb_asset_file (
     id              SERIAL PRIMARY KEY,
@@ -326,3 +333,39 @@ CREATE TABLE rb_ticket_operation (
 
 CREATE INDEX rb_idx_ticket_operation_ticket_id
 ON rb_ticket_operation(ticket_id, ctime_at DESC, id DESC);
+
+-- event log
+
+CREATE TABLE rb_event_log (
+    id              BIGSERIAL PRIMARY KEY,
+    event_type      VARCHAR(96) NOT NULL,
+    event_scope     SMALLINT NOT NULL,
+    severity        SMALLINT NOT NULL DEFAULT 0,
+    game_id         INT REFERENCES rb_game(id) ON DELETE CASCADE,
+    team_id         INT REFERENCES rb_team(id) ON DELETE SET NULL,
+    user_id         INT REFERENCES rb_user(id) ON DELETE SET NULL,
+    target_user_id  INT REFERENCES rb_user(id) ON DELETE SET NULL,
+    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE SET NULL,
+    round_id        INT REFERENCES rb_round(id) ON DELETE SET NULL,
+    hint_id         INT REFERENCES rb_hint(id) ON DELETE SET NULL,
+    ticket_id       INT REFERENCES rb_ticket(id) ON DELETE SET NULL,
+    submission_id   INT REFERENCES rb_submission(id) ON DELETE SET NULL,
+    currency_id     INT REFERENCES rb_currency(id) ON DELETE SET NULL,
+    delta_amount    INT,
+    data            JSONB NOT NULL DEFAULT '{}'::JSONB,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX rb_idx_event_log_team_ctime
+ON rb_event_log(team_id, ctime_at DESC, id DESC);
+
+CREATE INDEX rb_idx_event_log_game_scope_ctime
+ON rb_event_log(game_id, event_scope, ctime_at DESC, id DESC);
+
+CREATE INDEX rb_idx_event_log_puzzle_ctime
+ON rb_event_log(puzzle_id, ctime_at DESC, id DESC)
+WHERE puzzle_id IS NOT NULL;
+
+CREATE INDEX rb_idx_event_log_currency_ctime
+ON rb_event_log(currency_id, ctime_at DESC, id DESC)
+WHERE currency_id IS NOT NULL;

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_event_log\n            SET data = data || $1::JSONB\n            WHERE submission_id = $2 AND event_type = 'submission.judged';",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c81a795fa0b9c5080b6494bbad0d1c93041be8b6adfeb1a3f7f7a2d7b8e002db"
+}

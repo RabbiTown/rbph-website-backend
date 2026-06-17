@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"count!\"\n        FROM rb_event_log el\n        WHERE ($1::SMALLINT IS NULL OR el.event_scope = $1)\n            AND ($2::SMALLINT IS NULL OR el.severity = $2)\n            AND ($3::TEXT IS NULL OR el.event_type = $3)\n            AND ($4::INT IS NULL OR el.game_id = $4)\n            AND ($5::INT IS NULL OR el.team_id = $5)\n            AND ($6::INT IS NULL OR el.user_id = $6 OR el.target_user_id = $6);",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int2",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6571fc5866d308119d25c82993b6eaa79c0e5d6df01b7f8df982d97033e13044"
+}

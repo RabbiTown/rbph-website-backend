@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.id = $2;",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.init_amount, c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.id = $2;",
   "describe": {
     "columns": [
       {
@@ -25,26 +25,31 @@
       },
       {
         "ordinal": 4,
-        "name": "prec",
+        "name": "init_amount",
         "type_info": "Int4"
       },
       {
         "ordinal": 5,
-        "name": "amount",
+        "name": "prec",
         "type_info": "Int4"
       },
       {
         "ordinal": 6,
-        "name": "current_amount!",
+        "name": "amount",
         "type_info": "Int4"
       },
       {
         "ordinal": 7,
-        "name": "max_amount",
+        "name": "current_amount!",
         "type_info": "Int4"
       },
       {
         "ordinal": 8,
+        "name": "max_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -62,10 +67,11 @@
       null,
       false,
       false,
+      false,
       null,
       false,
       false
     ]
   },
-  "hash": "80ebed4beb74a2d0db739df0ca123d227a442d39b3357954f38b440f1ddfa04b"
+  "hash": "2134b157a1cd9025abe1d8c2001fbb51018332a89d38af623fc6d27aff3bdbeb"
 }

@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT el.id, el.event_type, el.event_scope AS scope, el.severity, el.game_id, el.team_id, el.user_id,\n            el.target_user_id, el.puzzle_id, el.round_id, el.hint_id, el.ticket_id, el.submission_id, el.currency_id,\n            el.delta_amount,\n            (\n                (el.data - 'user' - 'target_user')\n                || CASE\n                    WHEN u.id IS NULL THEN '{}'::JSONB\n                    ELSE jsonb_build_object('user', jsonb_build_object('id', u.id, 'nickname', u.nickname))\n                END\n                || CASE\n                    WHEN tu.id IS NULL THEN '{}'::JSONB\n                    ELSE jsonb_build_object('target_user', jsonb_build_object('id', tu.id, 'nickname', tu.nickname))\n                END\n            ) AS \"data!\",\n            el.ctime_at\n        FROM rb_event_log el\n        LEFT JOIN rb_user u ON u.id = el.user_id\n        LEFT JOIN rb_user tu ON tu.id = el.target_user_id\n        WHERE ($1::SMALLINT IS NULL OR el.event_scope = $1)\n            AND ($2::SMALLINT IS NULL OR el.severity = $2)\n            AND ($3::TEXT IS NULL OR el.event_type = $3)\n            AND ($4::INT IS NULL OR el.game_id = $4)\n            AND ($5::INT IS NULL OR el.team_id = $5)\n            AND ($6::INT IS NULL OR el.user_id = $6 OR el.target_user_id = $6)\n        ORDER BY el.id DESC\n        LIMIT $7\n        OFFSET $8;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "event_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "scope",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "severity",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "user_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "target_user_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "hint_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "ticket_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "submission_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "currency_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "delta_amount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "data!",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 16,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int2",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      false
+    ]
+  },
+  "hash": "e8e9e6ccefe5b9dc737b157ad1c118887b1818bc6f02a1bfde03a75f2c6d0467"
+}

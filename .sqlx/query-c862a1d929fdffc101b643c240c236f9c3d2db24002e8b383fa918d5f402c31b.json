@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_asset_group (\n            game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        RETURNING id, game_id, puzzle_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
+  "query": "UPDATE rb_asset_group\n        SET original_name = $2\n        WHERE id = $1\n        RETURNING id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -20,36 +20,41 @@
       },
       {
         "ordinal": 3,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
         "name": "backend",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "object_key",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "original_name",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "mime_type",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "size",
         "type_info": "Int8"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "sha256",
         "type_info": "Bpchar"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -57,18 +62,13 @@
     "parameters": {
       "Left": [
         "Int4",
-        "Int4",
-        "Varchar",
-        "Text",
-        "Varchar",
-        "Varchar",
-        "Int8",
-        "Bpchar"
+        "Varchar"
       ]
     },
     "nullable": [
       false,
       false,
+      true,
       true,
       false,
       false,
@@ -79,5 +79,5 @@
       false
     ]
   },
-  "hash": "dbd4df9d33e21f40dd59fca5afaab63a42c6d2e679130d51ad4b50c497806ed5"
+  "hash": "c862a1d929fdffc101b643c240c236f9c3d2db24002e8b383fa918d5f402c31b"
 }

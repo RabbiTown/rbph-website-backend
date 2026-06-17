@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            c.id AS \"id!\",\n            c.game_id AS \"game_id!\",\n            c.slug AS \"slug!\",\n            c.cname AS \"name!\",\n            c.prec AS \"prec!\",\n            LEAST(\n                tc.amount\n                    + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                c.max_amount\n            ) AS \"current_amount!\",\n            c.max_amount AS \"max_amount!\"\n        FROM rb_team_currency tc\n        JOIN rb_currency c ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND tc.currency_id = $2\n        FOR UPDATE;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "prec!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "current_amount!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "max_amount!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "038e3de4a5cbb02dfa086fcd70e19bbd2921d8b51d8ed7f3f8da5df632bbf1b3"
+}

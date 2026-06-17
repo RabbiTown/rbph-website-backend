@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH current AS (\n                                    SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,\n                                        LEAST(\n                                            tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                                            c.max_amount\n                                        ) AS current_amount\n                                    FROM rb_team_currency tc\n                                    JOIN rb_currency c ON tc.currency_id = c.id\n                                    WHERE tc.team_id = $2 AND c.id = $3\n                                    FOR UPDATE\n                                ), updated AS (\n                                    UPDATE rb_team_currency tc\n                                    SET utime_at = NOW(), amount = current.current_amount - $1\n                                    FROM current\n                                    WHERE tc.team_id = current.team_id AND tc.currency_id = current.id\n                                    RETURNING current.id, current.slug, current.cname, current.prec,\n                                        current.current_amount, tc.amount\n                                )\n                                SELECT id AS \"currency_id!\", slug AS \"slug!\", cname AS \"name!\",\n                                    prec AS \"prec!\", $1::INT AS \"amount!\",\n                                    current_amount AS \"before!\", amount AS \"after!\"\n                                FROM updated;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "currency_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "prec!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "amount!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "before!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "after!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "5ac1edf6db8263ee40fa5933aaee3a213baeeef0b5247ba92b6c7e1864b29ebc"
+}

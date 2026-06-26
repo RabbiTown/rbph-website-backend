@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.state, u.urole,\n            EXISTS (\n                SELECT 1\n                FROM rb_team_member tm\n                WHERE tm.team_id = t.team_id\n                AND tm.user_id = u.id\n            ) AS is_member\n        FROM rb_ticket t\n        JOIN rb_user u ON u.id = $2\n        WHERE t.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "urole",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_member",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "f90bfc152f8d24163f7b3f0cebd9314fb23ef45fc4301ce2e45609983232b7c3"
+}

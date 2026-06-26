@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_ticket SET assignee = $2 WHERE id = $1\n        RETURNING\n            (SELECT nickname FROM rb_user WHERE id = $2) AS \"nickname!\",\n            (SELECT email FROM rb_user WHERE id = $2) AS \"email!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "nickname!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "email!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "5b8aec0c13ecee1a0c0f65c2b8107ab291533673983ecc8b602ae5044252a809"
+}

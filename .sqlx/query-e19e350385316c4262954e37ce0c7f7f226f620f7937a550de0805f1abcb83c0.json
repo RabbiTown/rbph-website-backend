@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_notification (team_id, kind, source_id, actor, data)\n            SELECT tk.team_id, $2::SMALLINT, $1::INT, $3::INT,\n                jsonb_build_object(\n                    'ticket_id', tk.id,\n                    'message_id', $1,\n                    'puzzle_id', p.id,\n                    'puzzle_title', p.title\n                )\n            FROM rb_ticket tk\n            LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id\n            WHERE tk.id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e19e350385316c4262954e37ce0c7f7f226f620f7937a550de0805f1abcb83c0"
+}

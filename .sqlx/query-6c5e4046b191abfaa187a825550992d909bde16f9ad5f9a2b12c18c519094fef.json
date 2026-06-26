@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_notification SET read_at = NOW()\n        WHERE id = $1 AND team_id = $2 AND read_at IS NULL\n        RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6c5e4046b191abfaa187a825550992d909bde16f9ad5f9a2b12c18c519094fef"
+}

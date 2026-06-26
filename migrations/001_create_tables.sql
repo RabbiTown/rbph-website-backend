@@ -294,7 +294,8 @@ CREATE TABLE rb_ticket (
     id              SERIAL PRIMARY KEY,
     state           SMALLINT NOT NULL,
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
-    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE
+    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    assignee        INT REFERENCES rb_user(id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX rb_idx_ticket_dm_unique
@@ -303,6 +304,9 @@ WHERE puzzle_id IS NULL;
 
 CREATE INDEX rb_idx_ticket_open_team_puzzle
 ON rb_ticket(state, team_id, puzzle_id);
+
+CREATE INDEX rb_idx_ticket_assignee_state
+ON rb_ticket(assignee, state);
 
 CREATE TABLE rb_message (
     id              SERIAL PRIMARY KEY,
@@ -313,13 +317,37 @@ CREATE TABLE rb_message (
     cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
     cost_amount     INT NOT NULL DEFAULT 0,
     unlocked        BOOLEAN NOT NULL DEFAULT TRUE,
-    ticket_id       INT REFERENCES rb_ticket(id) ON DELETE CASCADE,
+    ticket_id       INT NOT NULL REFERENCES rb_ticket(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ
 );
 
 CREATE INDEX rb_idx_message_ticket_host_id_partial
 ON rb_message(sender_type, ticket_id, id);
+
+CREATE INDEX rb_idx_message_ticket_id
+ON rb_message(ticket_id, id DESC);
+
+-- notification
+
+CREATE TABLE rb_notification (
+    id              BIGSERIAL PRIMARY KEY,
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    kind            SMALLINT NOT NULL,
+    source_id       INT NOT NULL,
+    actor           INT REFERENCES rb_user(id) ON DELETE SET NULL,
+    data            JSONB NOT NULL,
+    read_at         TIMESTAMPTZ,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (kind, source_id)
+);
+
+ALTER TABLE rb_notification ADD CONSTRAINT rb_ck_notification_data_object
+CHECK (jsonb_typeof(data) = 'object');
+
+CREATE INDEX rb_idx_notification_team_unread
+ON rb_notification(team_id, id DESC)
+WHERE read_at IS NULL;
 
 CREATE TABLE rb_ticket_operation (
     id              SERIAL PRIMARY KEY,

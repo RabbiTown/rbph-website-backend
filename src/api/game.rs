@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::{
     AppState,
-    api::{error_handler, team, ticket},
+    api::{error_handler, notification, team, ticket},
     db::{
         self,
         game::RbGameShowData,
@@ -27,7 +27,7 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct GamePathInfo {
-    game_id: i32,
+    pub game_id: i32,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +61,23 @@ async fn get_puzzle(
     let Some(puzzle_id) = puzzle_id else {
         return RbError::not_found().http_err();
     };
+
+    if user.req_role()?.is_moderator() {
+        let puzzle = db::puzzle::get_puzzle_show(&app.db, puzzle_id).await?;
+        let Some(puzzle) = puzzle else {
+            return RbError::not_found().http_err();
+        };
+        return Ok(HttpResponse::Ok().json(serde_json::json!({
+            "data": puzzle,
+            "state": {
+                "state": -1,
+                "max_submit": null,
+                "submit_count": 0,
+                "answers": [],
+                "utime_at": OffsetDateTime::now_utc(),
+            }
+        })));
+    }
 
     if db::puzzle::get_puzzle_user_info(&app.db, user.uid, puzzle_id)
         .await?
@@ -265,6 +282,11 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                     .service(
                         web::scope("/tickets")
                             .configure(ticket::games_config)
+                            .default_service(web::route().to(error_handler)),
+                    )
+                    .service(
+                        web::scope("/notifications")
+                            .configure(notification::games_config)
                             .default_service(web::route().to(error_handler)),
                     )
                     .route("/info", web::get().to(get_aggre_info))

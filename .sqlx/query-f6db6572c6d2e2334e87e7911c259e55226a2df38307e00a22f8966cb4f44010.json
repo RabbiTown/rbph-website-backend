@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_ticket\n            SET assignee = $2\n            WHERE id = $1 AND assignee IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f6db6572c6d2e2334e87e7911c259e55226a2df38307e00a22f8966cb4f44010"
+}

@@ -1,6 +1,7 @@
 mod admin;
 mod auth;
 mod game;
+mod notification;
 mod puzzle;
 mod puzzle_backend;
 mod round;

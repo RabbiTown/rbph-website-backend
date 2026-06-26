@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT n.id, n.team_id, t.game_id\n        FROM rb_notification n\n        JOIN rb_team t ON t.id = n.team_id\n        WHERE n.kind = $1 AND n.source_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a452716fac78cd7d28f79b326d5c91433f44048fb632ce90de29c1c8fd743acd"
+}

@@ -41,14 +41,16 @@ async fn list(query: web::Query<LogListQuery>, app: web::Data<AppState>) -> Resu
     let offset = (page - 1) * limit;
     let logs = db::event_log::list_admin_logs(
         &app.db,
-        query.scope,
-        query.severity,
-        event_type,
-        query.game_id,
-        query.team_id,
-        query.user_id,
-        offset,
-        limit,
+        db::event_log::AdminLogQuery {
+            scope: query.scope,
+            severity: query.severity,
+            event_type,
+            game_id: query.game_id,
+            team_id: query.team_id,
+            user_id: query.user_id,
+            offset,
+            limit,
+        },
     )
     .await?;
     let total = db::event_log::count_admin_logs(

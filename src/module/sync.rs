@@ -211,6 +211,100 @@ impl SyncHub {
         self.push_user(user_id, SyncMessageType::TeamSelfPromoted, ());
     }
 
+    pub async fn notify_ticket_updated(
+        &self,
+        db_pool: &DbPool,
+        ticket_id: i32,
+        event: &str,
+        message_id: Option<i32>,
+        actor_id: i32,
+    ) -> Result<(), RbInternalError> {
+        let ticket = sqlx::query!(
+            "SELECT tk.team_id, tk.puzzle_id, t.game_id
+            FROM rb_ticket tk
+            JOIN rb_team t ON t.id = tk.team_id
+            WHERE tk.id = $1",
+            ticket_id,
+        )
+        .fetch_one(db_pool)
+        .await?;
+        let moderators = sqlx::query_scalar!(
+            "SELECT id FROM rb_user WHERE urole >= $1",
+            i16::from(crate::model::user::RbUserRole::Moderator),
+        )
+        .fetch_all(db_pool)
+        .await?;
+        let data = json!({
+            "event": event,
+            "ticket_id": ticket_id,
+            "message_id": message_id,
+            "actor_id": actor_id,
+            "team_id": ticket.team_id,
+            "puzzle_id": ticket.puzzle_id,
+            "game_id": ticket.game_id,
+        });
+
+        self.push_team(
+            db_pool,
+            ticket.team_id,
+            SyncMessageType::TicketUpdated,
+            data.clone(),
+        )
+        .await?;
+        self.push_users(&moderators, SyncMessageType::TicketUpdated, data);
+        Ok(())
+    }
+
+    pub async fn notify_notification_created_by_source(
+        &self,
+        db_pool: &DbPool,
+        kind: crate::db::notification::NotificationKind,
+        source_id: i32,
+    ) -> Result<(), RbInternalError> {
+        let Some(info) =
+            crate::db::notification::get_sync_info_by_source(db_pool, kind, source_id).await?
+        else {
+            return Ok(());
+        };
+        let data = json!({
+            "event": "created",
+            "notification_id": info.id,
+            "team_id": info.team_id,
+            "game_id": info.game_id,
+        });
+        self.push_team(
+            db_pool,
+            info.team_id,
+            SyncMessageType::NotificationUpdated,
+            data,
+        )
+        .await
+    }
+
+    pub async fn notify_notification_updated(
+        &self,
+        db_pool: &DbPool,
+        team_id: i32,
+        notification_id: Option<i64>,
+        event: &str,
+    ) -> Result<(), RbInternalError> {
+        let game_id = sqlx::query_scalar!("SELECT game_id FROM rb_team WHERE id = $1", team_id)
+            .fetch_one(db_pool)
+            .await?;
+        self.push_team(
+            db_pool,
+            team_id,
+            SyncMessageType::NotificationUpdated,
+            json!({
+                "event": event,
+                "notification_id": notification_id,
+                "team_id": team_id,
+                "game_id": game_id,
+            }),
+        )
+        .await
+    }
+
     pub fn cleanup(&self) {
         self.users.retain(|_, sessions| {
             sessions.retain(|session| !session.is_closed());
@@ -418,4 +512,8 @@ pub enum SyncMessageType {
     // 300 - puzzle
     PuzzleSubmitted = 301,
     PuzzleHintUnlocked = 302,
+
+    // 400 - ticket
+    TicketUpdated = 401,
+    NotificationUpdated = 402,
 }

@@ -1,0 +1,139 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tk.id, tk.state,\n                t.id AS t_id, t.name AS t_name, t.state AS t_state, t.game_id AS g_id,\n                p.id AS \"p_id?\", p.slug AS \"p_slug?\", p.title AS \"p_title?\",\n                COALESCE(tp.state, -1)::SMALLINT AS \"p_state?\",\n                r.id AS \"r_id?\", r.slug AS \"r_slug?\", r.title AS \"r_title?\",\n                au.id AS \"a_id?\", au.nickname AS \"a_nickname?\", au.email AS \"a_email?\",\n                (SELECT COUNT(*) FROM rb_message mc WHERE mc.ticket_id = tk.id) AS msg_count,\n                lm.ctime_at AS \"last_at?\", lm.sender_type AS \"last_by?\"\n        FROM rb_ticket tk\n        JOIN rb_team t ON t.id = tk.team_id\n        LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.puzzle_id = p.id\n        LEFT JOIN rb_round r ON r.id = p.round_id\n        LEFT JOIN rb_user au ON au.id = tk.assignee\n        LEFT JOIN LATERAL (\n            SELECT m.sender_type, m.ctime_at\n            FROM rb_message m\n            WHERE m.ticket_id = tk.id\n            ORDER BY m.id DESC\n            LIMIT 1\n        ) lm ON TRUE\n        WHERE t.game_id = $1\n            AND ($2 = 0 OR ($2 = 1 AND tk.puzzle_id IS NOT NULL) OR ($2 = 2 AND tk.puzzle_id IS NULL))\n            AND ($3::SMALLINT IS NULL OR tk.state = $3)\n            AND ($4 = 0 OR ($4 = 1 AND lm.sender_type = 0) OR ($4 = 2 AND lm.sender_type = 1))\n            AND ($5 = 0 OR ($5 = 1 AND tk.assignee = $6) OR ($5 = 2 AND tk.assignee IS NULL))\n            AND ($7::INT IS NULL OR tk.puzzle_id = $7)\n            AND ($8::INT IS NULL OR tk.team_id = $8)\n        ORDER BY lm.ctime_at DESC NULLS LAST, tk.id DESC\n        LIMIT $9 OFFSET $10",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "t_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "t_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "t_state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "g_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "p_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "p_slug?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "p_title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "p_state?",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 10,
+        "name": "r_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "r_slug?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "r_title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 13,
+        "name": "a_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "a_nickname?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 15,
+        "name": "a_email?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 16,
+        "name": "msg_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 17,
+        "name": "last_at?",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 18,
+        "name": "last_by?",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "bdb73aa3ae2e678197dfda234bf25ad95fe0822999422fb3d211c37f28d7bc3d"
+}

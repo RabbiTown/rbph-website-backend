@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT n.id, n.kind, n.data, n.read_at, n.ctime_at,\n            u.id AS \"actor_id?\", u.nickname AS \"actor_nickname?\"\n        FROM rb_notification n\n        LEFT JOIN rb_user u ON u.id = n.actor\n        WHERE n.team_id = $1 AND ($2::BIGINT IS NULL OR n.id < $2)\n        ORDER BY n.id DESC\n        LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "data",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "read_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "actor_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "actor_nickname?",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "80faac6521bc0e39da371b2034cd9d0b8348a43d39d745b188bb2b44a3008b66"
+}

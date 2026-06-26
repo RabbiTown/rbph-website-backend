@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tk.team_id, tk.puzzle_id, t.game_id\n            FROM rb_ticket tk\n            JOIN rb_team t ON t.id = tk.team_id\n            WHERE tk.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "74dbee52dde76bbc17c94ecfff8b38c47ba54fc8e78e8d3c82c3e41289ab7a37"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            COUNT(*) AS \"count!\",\n            COUNT(*) FILTER (WHERE data->>'puzzle_id' IS NULL) AS \"dm_count!\"\n        FROM rb_notification\n        WHERE team_id = $1 AND read_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "dm_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "2043265e57c18f6a551839b582b44455db3f1b4f217366fabeda81c4ec9710aa"
+}

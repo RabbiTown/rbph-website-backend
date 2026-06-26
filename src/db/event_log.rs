@@ -187,19 +187,23 @@ pub async fn list_team_activity(
     Ok(rows)
 }
 
+pub struct AdminLogQuery<'a> {
+    pub scope: Option<i16>,
+    pub severity: Option<i16>,
+    pub event_type: Option<&'a str>,
+    pub game_id: Option<i32>,
+    pub team_id: Option<i32>,
+    pub user_id: Option<i32>,
+    pub offset: i64,
+    pub limit: i64,
+}
+
 pub async fn list_admin_logs(
     pool: &DbPool,
-    scope: Option<i16>,
-    severity: Option<i16>,
-    event_type: Option<&str>,
-    game_id: Option<i32>,
-    team_id: Option<i32>,
-    user_id: Option<i32>,
-    offset: i64,
-    limit: i64,
+    query: AdminLogQuery<'_>,
 ) -> Result<Vec<EventLogData>, RbInternalError> {
-    let limit = limit.clamp(1, 100);
-    let offset = offset.max(0);
+    let limit = query.limit.clamp(1, 100);
+    let offset = query.offset.max(0);
     let rows = sqlx::query_as!(
         EventLogData,
         r#"SELECT el.id, el.event_type, el.event_scope AS scope, el.severity, el.game_id, el.team_id, el.user_id,
@@ -229,12 +233,12 @@ pub async fn list_admin_logs(
         ORDER BY el.id DESC
         LIMIT $7
         OFFSET $8;"#,
-        scope,
-        severity,
-        event_type,
-        game_id,
-        team_id,
-        user_id,
+        query.scope,
+        query.severity,
+        query.event_type,
+        query.game_id,
+        query.team_id,
+        query.user_id,
         limit,
         offset
     )

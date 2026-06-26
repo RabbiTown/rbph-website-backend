@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.team_id, t.puzzle_id, t.state, t.assignee,\n            au.nickname AS \"assignee_nickname?\", au.email AS \"assignee_email?\", tm.game_id,\n            p.round_id AS \"round_id?\", p.title AS \"puzzle_title?\"\n        FROM rb_ticket t\n        JOIN rb_team tm ON tm.id = t.team_id\n        LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id\n        LEFT JOIN rb_user au ON au.id = t.assignee\n        WHERE t.id = $1\n        FOR UPDATE OF t;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "assignee",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "assignee_nickname?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "assignee_email?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "round_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "puzzle_title?",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d882db78dd1fdca9cc551e83c7a6cc73d7244c99be68b1b66f234da6139006c1"
+}

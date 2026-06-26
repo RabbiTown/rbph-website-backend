@@ -18,7 +18,6 @@ use crate::{
 pub struct TicketUserInfo {
     pub ticket_id: i32,
     pub state: RbTicketState,
-    pub puzzle_id: Option<i32>,
     pub member_access: bool,
     pub mod_access: bool,
     pub admin_access: bool,
@@ -30,7 +29,7 @@ pub async fn get_ticket_user_info(
     user_id: i32,
 ) -> Result<Option<TicketUserInfo>, RbInternalError> {
     let result = sqlx::query!(
-        "SELECT t.state, t.puzzle_id, u.urole,
+        "SELECT t.state, u.urole,
             EXISTS (
                 SELECT 1
                 FROM rb_team_member tm
@@ -49,7 +48,6 @@ pub async fn get_ticket_user_info(
     Ok(result.map(|x| TicketUserInfo {
         ticket_id,
         state: x.state.into(),
-        puzzle_id: x.puzzle_id,
         member_access: x.is_member.unwrap_or(false),
         mod_access: RbUserRole::from(x.urole).is_moderator(),
         admin_access: RbUserRole::from(x.urole).is_admin(),
@@ -74,10 +72,12 @@ pub struct TicketAggreInfoPuzzle {
     round: RbRoundSimpleData,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct TicketAggreInfoUser {
-    id: i32,
-    nickname: String,
+    pub id: i32,
+    pub nickname: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -203,6 +203,8 @@ pub struct TicketSummary {
     last_at: Option<OffsetDateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_by: Option<RbTicketSenderType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assignee: Option<TicketAggreInfoUser>,
 }
 
 impl TicketSummary {
@@ -210,11 +212,23 @@ impl TicketSummary {
         self.id
     }
 
+    pub fn game_id(&self) -> Option<i32> {
+        self.game_id
+    }
+
+    pub fn is_puzzle_ticket(&self) -> bool {
+        self.puzzle.is_some()
+    }
+
     pub fn currency_ids(&self) -> Vec<i32> {
         self.team
             .as_ref()
             .map(|team| team.currency.iter().map(|currency| currency.id).collect())
             .unwrap_or_default()
+    }
+
+    pub fn hide_assignee(&mut self) {
+        self.assignee = None;
     }
 }
 
@@ -379,6 +393,7 @@ fn make_message(
         sender: TicketAggreInfoUser {
             id: sender_id?,
             nickname: sender_nickname?,
+            email: None,
         },
         sender_type: RbTicketSenderType::from_primitive(sender_type?),
         cost_id,
@@ -426,6 +441,7 @@ pub async fn get_ticket_messages(
             sender: TicketAggreInfoUser {
                 id: x.u_id,
                 nickname: x.u_nickname,
+                email: None,
             },
             sender_type: RbTicketSenderType::from_primitive(x.sender_type),
             cost_id: x.cost_id,
@@ -469,6 +485,7 @@ pub async fn get_ticket_messages(
             actor: TicketAggreInfoUser {
                 id: x.u_id,
                 nickname: x.u_nickname,
+                email: None,
             },
             actor_type: RbTicketSenderType::from_primitive(x.actor_type),
             message: make_message(
@@ -516,6 +533,7 @@ pub async fn get_ticket_message(
         sender: TicketAggreInfoUser {
             id: x.u_id,
             nickname: x.u_nickname,
+            email: None,
         },
         sender_type: RbTicketSenderType::from_primitive(x.sender_type),
         cost_id: x.cost_id,
@@ -533,6 +551,7 @@ pub async fn get_or_create_dm_ticket_id(
     db_pool: &DbPool,
     team_id: i32,
     actor_id: i32,
+    actor_type: RbTicketSenderType,
 ) -> Result<i32, RbInternalError> {
     let mut tx = db_pool.begin().await?;
 
@@ -554,7 +573,7 @@ pub async fn get_or_create_dm_ticket_id(
             result.id,
             i16::from(TicketOperationAction::Open),
             actor_id,
-            i16::from(RbTicketSenderType::Team)
+            i16::from(actor_type)
         )
         .execute(&mut *tx)
         .await?;
@@ -593,7 +612,10 @@ pub async fn get_dm_ticket_thread(
         });
     };
 
-    let ticket = get_ticket_summary(db_pool, ticket_id, false).await?;
+    let mut ticket = get_ticket_summary(db_pool, ticket_id, false).await?;
+    if !can_view_locked && let Some(ticket) = ticket.as_mut() {
+        ticket.hide_assignee();
+    }
     let messages = get_ticket_messages(db_pool, ticket_id, can_view_locked).await?;
     let state = ticket
         .as_ref()
@@ -637,9 +659,11 @@ pub async fn get_ticket_summary(
                 p.id AS \"p_id?\", p.slug AS \"p_slug?\", p.title AS \"p_title?\", tp.state AS \"p_state?\",
                 r.id AS \"r_id?\", r.slug AS \"r_slug?\", r.title AS \"r_title?\",
                 stats.msg_count, stats.last_at,
-                last_msg.sender_type AS \"last_by?\"
+                last_msg.sender_type AS \"last_by?\",
+                au.id AS \"a_id?\", au.nickname AS \"a_nickname?\", au.email AS \"a_email?\"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id
+        LEFT JOIN rb_user au ON au.id = tk.assignee
         LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id
         LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.puzzle_id = p.id
         LEFT JOIN rb_round r ON r.id = p.round_id
@@ -676,6 +700,14 @@ pub async fn get_ticket_summary(
         msg_count: x.msg_count,
         last_at: x.last_at,
         last_by: x.last_by.map(RbTicketSenderType::from_primitive),
+        assignee: x
+            .a_id
+            .zip(x.a_nickname)
+            .map(|(id, nickname)| TicketAggreInfoUser {
+                id,
+                nickname,
+                email: x.a_email,
+            }),
     }))
 }
 
@@ -684,9 +716,12 @@ pub async fn get_ticket_thread(
     ticket_id: i32,
     info: &TicketUserInfo,
 ) -> Result<Option<TicketThread>, RbInternalError> {
-    let Some(ticket) = get_ticket_summary(db_pool, ticket_id, true).await? else {
+    let Some(mut ticket) = get_ticket_summary(db_pool, ticket_id, true).await? else {
         return Ok(None);
     };
+    if !info.mod_access {
+        ticket.hide_assignee();
+    }
     let messages = get_ticket_messages(db_pool, ticket_id, info.mod_access).await?;
     let send_block = calc_send_block(
         db_pool,
@@ -742,6 +777,168 @@ fn make_puzzle(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn list_staff_tickets(
+    db_pool: &DbPool,
+    game_id: i32,
+    kind: i32,
+    state: Option<i16>,
+    waiting_for: i32,
+    assignee_filter: i32,
+    user_id: i32,
+    puzzle_id: Option<i32>,
+    team_id: Option<i32>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<TicketSummary>, RbInternalError> {
+    let rows = sqlx::query!(
+        r#"SELECT tk.id, tk.state,
+                t.id AS t_id, t.name AS t_name, t.state AS t_state, t.game_id AS g_id,
+                p.id AS "p_id?", p.slug AS "p_slug?", p.title AS "p_title?",
+                COALESCE(tp.state, -1)::SMALLINT AS "p_state?",
+                r.id AS "r_id?", r.slug AS "r_slug?", r.title AS "r_title?",
+                au.id AS "a_id?", au.nickname AS "a_nickname?", au.email AS "a_email?",
+                (SELECT COUNT(*) FROM rb_message mc WHERE mc.ticket_id = tk.id) AS msg_count,
+                lm.ctime_at AS "last_at?", lm.sender_type AS "last_by?"
+        FROM rb_ticket tk
+        JOIN rb_team t ON t.id = tk.team_id
+        LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id
+        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.puzzle_id = p.id
+        LEFT JOIN rb_round r ON r.id = p.round_id
+        LEFT JOIN rb_user au ON au.id = tk.assignee
+        LEFT JOIN LATERAL (
+            SELECT m.sender_type, m.ctime_at
+            FROM rb_message m
+            WHERE m.ticket_id = tk.id
+            ORDER BY m.id DESC
+            LIMIT 1
+        ) lm ON TRUE
+        WHERE t.game_id = $1
+            AND ($2 = 0 OR ($2 = 1 AND tk.puzzle_id IS NOT NULL) OR ($2 = 2 AND tk.puzzle_id IS NULL))
+            AND ($3::SMALLINT IS NULL OR tk.state = $3)
+            AND ($4 = 0 OR ($4 = 1 AND lm.sender_type = 0) OR ($4 = 2 AND lm.sender_type = 1))
+            AND ($5 = 0 OR ($5 = 1 AND tk.assignee = $6) OR ($5 = 2 AND tk.assignee IS NULL))
+            AND ($7::INT IS NULL OR tk.puzzle_id = $7)
+            AND ($8::INT IS NULL OR tk.team_id = $8)
+        ORDER BY lm.ctime_at DESC NULLS LAST, tk.id DESC
+        LIMIT $9 OFFSET $10"#,
+        game_id,
+        kind,
+        state,
+        waiting_for,
+        assignee_filter,
+        user_id,
+        puzzle_id,
+        team_id,
+        limit,
+        offset,
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|x| TicketSummary {
+            id: x.id,
+            state: RbTicketState::from_primitive(x.state),
+            game_id: Some(x.g_id),
+            team: Some(TicketAggreInfoTeam {
+                id: x.t_id,
+                name: x.t_name,
+                state: RbTeamState::from_primitive(x.t_state),
+                currency: vec![],
+            }),
+            puzzle: make_puzzle(
+                x.p_id, x.p_slug, x.p_title, x.p_state, x.r_id, x.r_slug, x.r_title,
+            ),
+            msg_count: x.msg_count,
+            last_at: x.last_at,
+            last_by: x.last_by.map(RbTicketSenderType::from_primitive),
+            assignee: x
+                .a_id
+                .zip(x.a_nickname)
+                .map(|(id, nickname)| TicketAggreInfoUser {
+                    id,
+                    nickname,
+                    email: x.a_email,
+                }),
+        })
+        .collect())
+}
+
+pub enum AssignTicketResult {
+    Ok(TicketAggreInfoUser),
+    Assigned(TicketAggreInfoUser),
+    NotFound,
+}
+
+pub async fn assign_ticket_self(
+    db_pool: &DbPool,
+    ticket_id: i32,
+    user_id: i32,
+    force: bool,
+) -> Result<AssignTicketResult, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let current = sqlx::query!(
+        "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\"
+        FROM rb_ticket tk
+        LEFT JOIN rb_user u ON u.id = tk.assignee
+        WHERE tk.id = $1
+        FOR UPDATE OF tk",
+        ticket_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(current) = current else {
+        return Ok(AssignTicketResult::NotFound);
+    };
+    if let Some(assignee) = current.assignee
+        && assignee != user_id
+        && !force
+    {
+        return Ok(AssignTicketResult::Assigned(TicketAggreInfoUser {
+            id: assignee,
+            nickname: current.nickname.unwrap_or_default(),
+            email: current.email,
+        }));
+    }
+
+    let user = sqlx::query!(
+        "UPDATE rb_ticket SET assignee = $2 WHERE id = $1
+        RETURNING
+            (SELECT nickname FROM rb_user WHERE id = $2) AS \"nickname!\",
+            (SELECT email FROM rb_user WHERE id = $2) AS \"email!\"",
+        ticket_id,
+        user_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(AssignTicketResult::Ok(TicketAggreInfoUser {
+        id: user_id,
+        nickname: user.nickname,
+        email: Some(user.email),
+    }))
+}
+
+pub async fn unassign_ticket(
+    db_pool: &DbPool,
+    ticket_id: i32,
+    user_id: i32,
+) -> Result<bool, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        "UPDATE rb_ticket SET assignee = NULL
+        WHERE id = $1 AND assignee = $2
+        RETURNING id",
+        ticket_id,
+        user_id,
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .is_some())
+}
+
 #[derive(Deserialize)]
 pub struct SendMessageData {
     pub content: String,
@@ -775,7 +972,54 @@ async fn insert_ticket_message(
     .fetch_one(&mut **tx)
     .await?;
 
+    if matches!(data.sender_type, RbTicketSenderType::Host) {
+        sqlx::query!(
+            "INSERT INTO rb_notification (team_id, kind, source_id, actor, data)
+            SELECT tk.team_id, $2::SMALLINT, $1::INT, $3::INT,
+                jsonb_build_object(
+                    'ticket_id', tk.id,
+                    'message_id', $1,
+                    'puzzle_id', p.id,
+                    'puzzle_title', p.title
+                )
+            FROM rb_ticket tk
+            LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id
+            WHERE tk.id = $4",
+            result,
+            i16::from(crate::db::notification::NotificationKind::TicketReply),
+            data.sender_id,
+            ticket_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
     Ok(result)
+}
+
+async fn auto_assign_ticket_on_staff_message(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ticket_id: i32,
+    data: &SendMessageData,
+) -> Result<(), RbInternalError> {
+    if matches!(data.sender_type, RbTicketSenderType::Host) {
+        sqlx::query!(
+            "UPDATE rb_ticket
+            SET assignee = $2
+            WHERE id = $1 AND assignee IS NULL",
+            ticket_id,
+            data.sender_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+pub enum SendTicketMessageResult {
+    Ok(TicketMessage),
+    Pending,
+    Assigned(TicketAggreInfoUser),
 }
 
 pub async fn send_ticket_message(
@@ -783,16 +1027,36 @@ pub async fn send_ticket_message(
     ticket_id: i32,
     data: &SendMessageData,
     max_pending: Option<i64>,
-) -> Result<Option<TicketMessage>, RbInternalError> {
+    force_assignee: bool,
+) -> Result<SendTicketMessageResult, RbInternalError> {
     let mut tx = db_pool.begin().await?;
+
+    let ticket = sqlx::query!(
+        "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\"
+        FROM rb_ticket tk
+        LEFT JOIN rb_user u ON u.id = tk.assignee
+        WHERE tk.id = $1
+        FOR UPDATE OF tk",
+        ticket_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if matches!(data.sender_type, RbTicketSenderType::Host)
+        && let Some(assignee) = ticket.assignee
+        && assignee != data.sender_id
+        && !force_assignee
+    {
+        return Ok(SendTicketMessageResult::Assigned(TicketAggreInfoUser {
+            id: assignee,
+            nickname: ticket.nickname.unwrap_or_default(),
+            email: ticket.email,
+        }));
+    }
 
     if let Some(max_pending) = max_pending
         && matches!(data.sender_type, RbTicketSenderType::Team)
     {
-        sqlx::query!("SELECT FROM rb_ticket WHERE id = $1 FOR UPDATE", ticket_id)
-            .execute(&mut *tx)
-            .await?;
-
         // check pending message
         let pending = sqlx::query_scalar!(
             "SELECT COUNT(*) FROM rb_message m
@@ -812,15 +1076,26 @@ pub async fn send_ticket_message(
         .unwrap_or(0);
 
         if pending >= max_pending {
-            return Ok(None);
+            return Ok(SendTicketMessageResult::Pending);
         }
     }
+
+    auto_assign_ticket_on_staff_message(&mut tx, ticket_id, data).await?;
 
     let result = insert_ticket_message(&mut tx, ticket_id, data).await?;
 
     tx.commit().await?;
 
-    get_ticket_message(db_pool, result, true).await
+    let message = get_ticket_message(db_pool, result, true)
+        .await?
+        .ok_or("Inserted ticket message not found")?;
+    Ok(SendTicketMessageResult::Ok(message))
+}
+
+pub enum CloseTicketResult {
+    Ok(Option<i32>),
+    Closed,
+    Assigned(TicketAggreInfoUser),
 }
 
 pub async fn close_ticket(
@@ -829,24 +1104,44 @@ pub async fn close_ticket(
     actor_id: i32,
     actor_type: RbTicketSenderType,
     message: Option<&SendMessageData>,
-) -> Result<bool, RbInternalError> {
+    force_assignee: bool,
+) -> Result<CloseTicketResult, RbInternalError> {
     let mut tx = db_pool.begin().await?;
 
     let info = sqlx::query!(
-        r#"SELECT t.team_id, t.puzzle_id, tm.game_id,
+        r#"SELECT t.team_id, t.puzzle_id, t.state, t.assignee,
+            au.nickname AS "assignee_nickname?", au.email AS "assignee_email?", tm.game_id,
             p.round_id AS "round_id?", p.title AS "puzzle_title?"
         FROM rb_ticket t
         JOIN rb_team tm ON tm.id = t.team_id
         LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id
-        WHERE t.id = $1;"#,
+        LEFT JOIN rb_user au ON au.id = t.assignee
+        WHERE t.id = $1
+        FOR UPDATE OF t;"#,
         ticket_id
     )
     .fetch_optional(&mut *tx)
     .await?;
 
     let Some(info) = info else {
-        return Ok(false);
+        return Ok(CloseTicketResult::Closed);
     };
+
+    if info.state == i16::from(RbTicketState::Closed) {
+        return Ok(CloseTicketResult::Closed);
+    }
+    if message.is_some()
+        && matches!(actor_type, RbTicketSenderType::Host)
+        && let Some(assignee) = info.assignee
+        && assignee != actor_id
+        && !force_assignee
+    {
+        return Ok(CloseTicketResult::Assigned(TicketAggreInfoUser {
+            id: assignee,
+            nickname: info.assignee_nickname.unwrap_or_default(),
+            email: info.assignee_email,
+        }));
+    }
 
     let updated = sqlx::query_scalar!(
         "UPDATE rb_ticket SET state = $1
@@ -859,12 +1154,15 @@ pub async fn close_ticket(
     .await?
     .is_some();
 
+    let mut inserted_message_id = None;
     if updated {
         let message_id = if let Some(message) = message {
+            auto_assign_ticket_on_staff_message(&mut tx, ticket_id, message).await?;
             Some(insert_ticket_message(&mut tx, ticket_id, message).await?)
         } else {
             None
         };
+        inserted_message_id = message_id;
 
         sqlx::query!(
             "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type, message_id)
@@ -906,7 +1204,11 @@ pub async fn close_ticket(
 
     tx.commit().await?;
 
-    Ok(updated)
+    Ok(if updated {
+        CloseTicketResult::Ok(inserted_message_id)
+    } else {
+        CloseTicketResult::Closed
+    })
 }
 
 pub async fn close_puzzle_tickets_on_solve(
@@ -1178,7 +1480,7 @@ pub async fn open_puzzle_ticket(
         ticket_id,
         i16::from(TicketOperationAction::Open),
         message.sender_id,
-        i16::from(RbTicketSenderType::Team),
+        i16::from(message.sender_type),
         message_id
     )
     .execute(&mut *tx)
@@ -1213,9 +1515,8 @@ pub async fn open_puzzle_ticket(
     let info = TicketUserInfo {
         ticket_id,
         state: RbTicketState::Open,
-        puzzle_id: Some(puzzle_id),
-        member_access: true,
-        mod_access: false,
+        member_access: matches!(message.sender_type, RbTicketSenderType::Team),
+        mod_access: matches!(message.sender_type, RbTicketSenderType::Host),
         admin_access: false,
     };
     let thread = get_ticket_thread(db_pool, ticket_id, &info)
@@ -1319,6 +1620,7 @@ pub async fn get_team_puzzle_tickets(
             msg_count: x.msg_count,
             last_at: x.last_at,
             last_by: x.last_by.map(RbTicketSenderType::from_primitive),
+            assignee: None,
         })
         .collect();
 

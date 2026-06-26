@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\"\n        FROM rb_ticket tk\n        LEFT JOIN rb_user u ON u.id = tk.assignee\n        WHERE tk.id = $1\n        FOR UPDATE OF tk",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "assignee",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "nickname?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "email?",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "366ec345f12845fd3610f3bbf5a487266792e747a28087ff46b572f9e2abef70"
+}

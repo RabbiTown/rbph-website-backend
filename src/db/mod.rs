@@ -4,6 +4,7 @@ pub mod board;
 pub mod cache;
 pub mod event_log;
 pub mod game;
+pub mod notification;
 pub mod puzzle;
 pub mod puzzle_backend;
 pub mod round;

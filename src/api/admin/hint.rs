@@ -68,7 +68,7 @@ fn validate_basic(
     content: Option<&str>,
     content_type: Option<i16>,
     cooldown: Option<i32>,
-    cost_amount: Option<i32>,
+    cost_amount: Option<i64>,
 ) -> bool {
     title.is_none_or(|value| !value.trim().is_empty() && value.chars().count() <= 120)
         && content.is_none_or(|_| true)

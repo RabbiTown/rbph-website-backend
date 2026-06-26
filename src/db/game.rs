@@ -76,30 +76,33 @@ pub struct RbCurrencyAdminData {
     pub id: i32,
     pub name: String,
     pub slug: String,
-    pub growth: i32,
-    pub init_amount: i32,
+    pub growth: i64,
+    pub init_amount: i64,
+    pub init_hidden: bool,
     pub prec: i32,
-    pub max_amount: i32,
+    pub max_amount: i64,
 }
 
 #[derive(Deserialize)]
 pub struct RbCurrencyCreateData {
     pub name: String,
     pub slug: String,
-    pub growth: i32,
-    pub init_amount: i32,
+    pub growth: i64,
+    pub init_amount: i64,
+    pub init_hidden: bool,
     pub prec: i32,
-    pub max_amount: i32,
+    pub max_amount: i64,
 }
 
 #[derive(Deserialize)]
 pub struct RbCurrencyUpdateData {
     pub name: String,
     pub slug: String,
-    pub growth: i32,
-    pub init_amount: i32,
+    pub growth: i64,
+    pub init_amount: i64,
+    pub init_hidden: bool,
     pub prec: i32,
-    pub max_amount: i32,
+    pub max_amount: i64,
 }
 
 pub fn valid_currency_slug(slug: &str) -> bool {
@@ -114,8 +117,8 @@ pub fn valid_currency_data(
     name: &str,
     slug: &str,
     prec: i32,
-    init_amount: i32,
-    max_amount: i32,
+    init_amount: i64,
+    max_amount: i64,
 ) -> bool {
     !name.trim().is_empty()
         && name.chars().count() <= 40
@@ -203,7 +206,7 @@ pub async fn list_currency(
 ) -> Result<Vec<RbCurrencyAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbCurrencyAdminData,
-        "SELECT id, cname AS name, slug, growth, init_amount, prec, max_amount
+        "SELECT id, cname AS name, slug, growth, init_amount, init_hidden, prec, max_amount
         FROM rb_currency
         WHERE game_id = $1
         ORDER BY id;",
@@ -222,7 +225,7 @@ pub async fn get_currency(
 ) -> Result<Option<RbCurrencyAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbCurrencyAdminData,
-        "SELECT id, cname AS name, slug, growth, init_amount, prec, max_amount
+        "SELECT id, cname AS name, slug, growth, init_amount, init_hidden, prec, max_amount
         FROM rb_currency
         WHERE id = $1 AND game_id = $2;",
         currency_id,
@@ -262,16 +265,17 @@ pub async fn create_currency(
 
     let Some(currency) = sqlx::query_as!(
         RbCurrencyAdminData,
-        "INSERT INTO rb_currency (cname, slug, growth, init_amount, prec, max_amount, game_id)
-        SELECT $2, $3, $4, $5, $6, $7, g.id
+        "INSERT INTO rb_currency (cname, slug, growth, init_amount, init_hidden, prec, max_amount, game_id)
+        SELECT $2, $3, $4, $5, $6, $7, $8, g.id
         FROM rb_game g
         WHERE g.id = $1
-        RETURNING id, cname AS name, slug, growth, init_amount, prec, max_amount;",
+        RETURNING id, cname AS name, slug, growth, init_amount, init_hidden, prec, max_amount;",
         game_id,
         data.name.trim(),
         data.slug.trim(),
         data.growth,
         data.init_amount,
+        data.init_hidden,
         data.prec,
         data.max_amount
     )
@@ -283,13 +287,14 @@ pub async fn create_currency(
     };
 
     sqlx::query!(
-        "INSERT INTO rb_team_currency (team_id, currency_id, amount)
-        SELECT id, $2, $3 FROM rb_team
+        "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
+        SELECT id, $2, $3, $4 FROM rb_team
         WHERE game_id = $1
         ON CONFLICT (team_id, currency_id) DO NOTHING;",
         game_id,
         currency.id,
-        currency.init_amount
+        currency.init_amount,
+        currency.init_hidden
     )
     .execute(&mut *tx)
     .await?;
@@ -311,16 +316,18 @@ pub async fn update_currency(
             slug = $4,
             growth = $5,
             init_amount = $6,
-            prec = $7,
-            max_amount = $8
+            init_hidden = $7,
+            prec = $8,
+            max_amount = $9
         WHERE id = $1 AND game_id = $2
-        RETURNING id, cname AS name, slug, growth, init_amount, prec, max_amount;",
+        RETURNING id, cname AS name, slug, growth, init_amount, init_hidden, prec, max_amount;",
         currency_id,
         game_id,
         data.name.trim(),
         data.slug.trim(),
         data.growth,
         data.init_amount,
+        data.init_hidden,
         data.prec,
         data.max_amount
     )

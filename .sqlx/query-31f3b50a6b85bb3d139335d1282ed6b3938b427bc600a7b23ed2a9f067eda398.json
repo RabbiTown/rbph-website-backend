@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_currency (cname, slug, growth, init_amount, prec, max_amount, game_id)\n        SELECT $2, $3, $4, $5, $6, $7, g.id\n        FROM rb_game g\n        WHERE g.id = $1\n        RETURNING id, cname AS name, slug, growth, init_amount, prec, max_amount;",
+  "query": "SELECT id, cname AS name, slug, growth, init_amount, init_hidden, prec, max_amount\n        FROM rb_currency\n        WHERE id = $1 AND game_id = $2;",
   "describe": {
     "columns": [
       {
@@ -21,31 +21,31 @@
       {
         "ordinal": 3,
         "name": "growth",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 4,
         "name": "init_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 5,
+        "name": "init_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "prec",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "max_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4",
-        "Varchar",
-        "Varchar",
-        "Int4",
-        "Int4",
         "Int4",
         "Int4"
       ]
@@ -57,8 +57,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "4f5ae7c2178b6f87b789f95954433d10e0b9f58de2ad7b59bb3799a2b7c42102"
+  "hash": "31f3b50a6b85bb3d139335d1282ed6b3938b427bc600a7b23ed2a9f067eda398"
 }

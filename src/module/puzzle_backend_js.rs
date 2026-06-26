@@ -91,6 +91,17 @@ fn internal_err(msg: impl Into<String>) -> RbInternalError {
     RbInternalError::Other(msg.into())
 }
 
+fn js_number_to_i64(value: f64, message: &str) -> Result<i64, JsError> {
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || value < i64::MIN as f64
+        || value > i64::MAX as f64
+    {
+        return Err(js_err(message));
+    }
+    Ok(value as i64)
+}
+
 fn json_to_js(value: &Value, context: &mut Context) -> Result<JsValue, RbInternalError> {
     JsValue::from_json(value, context).map_err(|e| internal_err(e.to_string()))
 }
@@ -645,6 +656,7 @@ pub fn register_ctx(
     let currency_query_db_for_query = currency_query_db.clone();
     let currency_query_db_for_add = currency_query_db.clone();
     let currency_cost_db_for_cost = currency_cost_db.clone();
+    let currency_set_db = db.clone();
     let backend_app = app.clone();
     let util_app = app.clone();
     let asset_list_runtime = asset_runtime.clone();
@@ -840,7 +852,7 @@ pub fn register_ctx(
                             .transpose()?;
                         match currency_id {
                             Some(CurrencyRef::Id(currency_id)) => {
-                                let row = block_on_db(crate::db::team::get_currency_info_one(
+                                let row = block_on_db(crate::db::team::get_currency_info_one_all(
                                     &currency_query_db_for_query,
                                     team_id,
                                     currency_id,
@@ -854,7 +866,7 @@ pub fn register_ctx(
                                 let runtime = with_runtime_context(|ctx| ctx.clone())
                                     .map_err(|e| js_err(e.to_string()))?;
                                 let row =
-                                    block_on_db(crate::db::team::get_currency_info_one_by_slug(
+                                    block_on_db(crate::db::team::get_currency_info_one_by_slug_all(
                                         &currency_query_db_for_query,
                                         team_id,
                                         runtime.game_id,
@@ -866,7 +878,7 @@ pub fn register_ctx(
                                 json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
                             }
                             None => {
-                                let rows = block_on_db(crate::db::team::get_currency_info(
+                                let rows = block_on_db(crate::db::team::get_currency_info_all(
                                     &currency_query_db_for_query,
                                     team_id,
                                 ))
@@ -907,8 +919,13 @@ pub fn register_ctx(
                         let amount = args
                             .get(2)
                             .and_then(|value| value.as_number())
-                            .ok_or_else(|| js_err("$util.costCurrency requires amount"))?
-                            as i32;
+                            .ok_or_else(|| js_err("$util.costCurrency requires amount"))
+                            .and_then(|value| {
+                                js_number_to_i64(
+                                    value,
+                                    "$util.costCurrency amount must be an integer in i64 range",
+                                )
+                            })?;
 
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
@@ -964,8 +981,13 @@ pub fn register_ctx(
                         let amount = args
                             .get(2)
                             .and_then(|value| value.as_number())
-                            .ok_or_else(|| js_err("$util.addCurrency requires amount"))?
-                            as i32;
+                            .ok_or_else(|| js_err("$util.addCurrency requires amount"))
+                            .and_then(|value| {
+                                js_number_to_i64(
+                                    value,
+                                    "$util.addCurrency amount must be an integer in i64 range",
+                                )
+                            })?;
 
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
@@ -998,6 +1020,102 @@ pub fn register_ctx(
                 )
             },
             js_string!("addCurrency"),
+            3,
+        )
+        .function(
+            unsafe {
+                NativeFunction::from_closure_with_captures(
+                    move |_, args, _, context| {
+                        let team_id = args
+                            .first()
+                            .and_then(|value| value.as_number())
+                            .ok_or_else(|| js_err("$util.updateCurrency requires team id"))?
+                            as i32;
+                        let currency_id = args
+                            .get(1)
+                            .map(|value| {
+                                currency_ref_arg(
+                                    Some(value),
+                                    "$util.updateCurrency requires currency id or slug",
+                                )
+                            })
+                            .transpose()?
+                            .ok_or_else(|| {
+                                js_err("$util.updateCurrency requires currency id or slug")
+                            })?;
+                        let value = args
+                            .get(2)
+                            .ok_or_else(|| js_err("$util.updateCurrency requires amount or options"))?;
+                        let options = if let Some(amount) = value.as_number() {
+                            crate::db::team::UpdateCurrencyOptions {
+                                amount: Some(js_number_to_i64(
+                                    amount,
+                                    "$util.updateCurrency amount must be an integer in i64 range",
+                                )?),
+                                growth: None,
+                                hidden: None,
+                            }
+                        } else {
+                            let json =
+                                js_to_json(value, context).map_err(|e| js_err(e.to_string()))?;
+                            let object = json.as_object().ok_or_else(|| {
+                                js_err("$util.updateCurrency options must be an object")
+                            })?;
+                            let number_field = |name: &str| -> Result<Option<i64>, JsError> {
+                                object
+                                    .get(name)
+                                    .map(|value| {
+                                        value.as_i64().ok_or_else(|| {
+                                            js_err(format!(
+                                                "$util.updateCurrency options.{name} must be a number"
+                                            ))
+                                        })
+                                    })
+                                    .transpose()
+                            };
+                            crate::db::team::UpdateCurrencyOptions {
+                                amount: number_field("amount")?,
+                                growth: number_field("growth")?,
+                                hidden: object
+                                    .get("hidden")
+                                    .map(|value| {
+                                        value.as_bool().ok_or_else(|| {
+                                            js_err("$util.updateCurrency options.hidden must be a boolean")
+                                        })
+                                    })
+                                    .transpose()?,
+                            }
+                        };
+
+                        let updated = match currency_id {
+                            CurrencyRef::Id(currency_id) => {
+                                block_on_db(crate::db::team::update_currency(
+                                    &currency_set_db,
+                                    team_id,
+                                    currency_id,
+                                    options,
+                                ))
+                            }
+                            CurrencyRef::Slug(slug) => {
+                                let runtime = with_runtime_context(|ctx| ctx.clone())
+                                    .map_err(|e| js_err(e.to_string()))?;
+                                block_on_db(crate::db::team::update_currency_by_slug(
+                                    &currency_set_db,
+                                    team_id,
+                                    runtime.game_id,
+                                    &slug,
+                                    options,
+                                ))
+                            }
+                        }
+                        .map_err(|e| js_err(e.to_string()))?;
+                        let json = serde_json::to_value(updated).map_err(|e| js_err(e.to_string()))?;
+                        json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
+                    },
+                    (),
+                )
+            },
+            js_string!("updateCurrency"),
             3,
         )
         .function(

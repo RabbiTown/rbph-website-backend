@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_puzzle\n                    SET cooldown_till = NOW() + ($1::BIGINT * INTERVAL '1 second')\n                    WHERE team_id = $2 AND puzzle_id = $3\n                    RETURNING cooldown_till;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cooldown_till",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "760d3cacd75910cb6d8b669da04368d92f21b555c34e62506156a101c9477e25"
+}

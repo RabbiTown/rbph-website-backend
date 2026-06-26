@@ -39,7 +39,7 @@ pub struct EventLogInput {
     pub ticket_id: Option<i32>,
     pub submission_id: Option<i32>,
     pub currency_id: Option<i32>,
-    pub delta_amount: Option<i32>,
+    pub delta_amount: Option<i64>,
     pub data: Value,
 }
 
@@ -123,7 +123,7 @@ pub struct EventLogData {
     pub ticket_id: Option<i32>,
     pub submission_id: Option<i32>,
     pub currency_id: Option<i32>,
-    pub delta_amount: Option<i32>,
+    pub delta_amount: Option<i64>,
     pub data: Value,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -132,8 +132,8 @@ pub struct EventLogData {
 #[derive(Serialize)]
 pub struct CurrencyActivitySummary {
     pub currency_id: i32,
-    pub init_amount: i32,
-    pub current_amount: i32,
+    pub init_amount: i64,
+    pub current_amount: i64,
     pub logged_delta: i64,
 }
 
@@ -289,9 +289,9 @@ pub async fn get_currency_activity_summary(
             c.id AS "currency_id!",
             c.init_amount,
             LEAST(
-                tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                c.max_amount
-            ) AS "current_amount!",
+                tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                c.max_amount::NUMERIC
+            )::BIGINT AS "current_amount!",
             COALESCE(SUM(el.delta_amount), 0)::BIGINT AS "logged_delta!"
         FROM rb_currency c
         JOIN rb_team_currency tc ON tc.currency_id = c.id AND tc.team_id = $1
@@ -319,12 +319,12 @@ pub struct CurrencyEventData {
     pub slug: String,
     pub name: String,
     pub prec: i32,
-    pub before: i32,
-    pub after: i32,
+    pub before: i64,
+    pub after: i64,
 }
 
 impl CurrencyEventData {
-    pub fn delta(&self) -> i32 {
+    pub fn delta(&self) -> i64 {
         self.after - self.before
     }
 

@@ -121,7 +121,7 @@ struct TicketSendRequest {
     #[serde(default)]
     cost_id: Option<i32>,
     #[serde(default)]
-    cost_amount: i32,
+    cost_amount: i64,
     #[serde(default)]
     force_assignee: bool,
 }

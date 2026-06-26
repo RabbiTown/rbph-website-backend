@@ -232,9 +232,10 @@ CREATE TABLE rb_currency (
     id              SERIAL PRIMARY KEY,
     cname           VARCHAR(40) NOT NULL,
     slug            VARCHAR(40) NOT NULL,
-    growth          INT NOT NULL,
-    init_amount     INT NOT NULL DEFAULT 0,
-    max_amount      INT NOT NULL DEFAULT 2147483647,
+    growth          BIGINT NOT NULL,
+    init_amount     BIGINT NOT NULL DEFAULT 0,
+    init_hidden     BOOLEAN NOT NULL DEFAULT FALSE,
+    max_amount      BIGINT NOT NULL DEFAULT 9223372036854775807,
     prec            INT NOT NULL,
     game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
     UNIQUE (game_id, slug)
@@ -243,8 +244,9 @@ CREATE TABLE rb_currency (
 CREATE TABLE rb_team_currency (
     team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
     currency_id     INT NOT NULL REFERENCES rb_currency(id) ON DELETE CASCADE,
-    amount          INT NOT NULL DEFAULT 0,
-    growth          INT NOT NULL DEFAULT 0,
+    amount          BIGINT NOT NULL DEFAULT 0,
+    growth          BIGINT NOT NULL DEFAULT 0,
+    hidden          BOOLEAN NOT NULL DEFAULT FALSE,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (team_id, currency_id)
 );
@@ -260,7 +262,7 @@ CREATE TABLE rb_hint (
     content_type    SMALLINT NOT NULL DEFAULT 0,
     cooldown        INT NOT NULL DEFAULT 0,
     cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
-    cost_amount     INT NOT NULL DEFAULT 0,
+    cost_amount     BIGINT NOT NULL DEFAULT 0,
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -315,7 +317,7 @@ CREATE TABLE rb_message (
     sender          INT NOT NULL REFERENCES rb_user(id) ON DELETE CASCADE,
     sender_type     SMALLINT NOT NULL,
     cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
-    cost_amount     INT NOT NULL DEFAULT 0,
+    cost_amount     BIGINT NOT NULL DEFAULT 0,
     unlocked        BOOLEAN NOT NULL DEFAULT TRUE,
     ticket_id       INT NOT NULL REFERENCES rb_ticket(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -379,7 +381,7 @@ CREATE TABLE rb_event_log (
     ticket_id       INT REFERENCES rb_ticket(id) ON DELETE SET NULL,
     submission_id   INT REFERENCES rb_submission(id) ON DELETE SET NULL,
     currency_id     INT REFERENCES rb_currency(id) ON DELETE SET NULL,
-    delta_amount    INT,
+    delta_amount    BIGINT,
     data            JSONB NOT NULL DEFAULT '{}'::JSONB,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

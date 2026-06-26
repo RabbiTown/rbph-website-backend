@@ -45,8 +45,8 @@ WHERE id = 1;
 
 -- currency
 
-INSERT INTO rb_currency (id, cname, slug, growth, init_amount, max_amount, prec, game_id)
-VALUES (1, '提示点', 'hint', 10, 0, 1000000, 1, 1);
+INSERT INTO rb_currency (id, cname, slug, growth, init_amount, init_hidden, max_amount, prec, game_id)
+VALUES (1, '提示点', 'hint', 10, 0, FALSE, 1000000, 1, 1);
 
 -- hint
 

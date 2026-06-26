@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            c.id AS \"id!\",\n            c.game_id AS \"game_id!\",\n            c.slug AS \"slug!\",\n            c.cname AS \"name!\",\n            c.prec AS \"prec!\",\n            LEAST(\n                tc.amount\n                    + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                c.max_amount\n            ) AS \"current_amount!\",\n            c.max_amount AS \"max_amount!\"\n        FROM rb_team_currency tc\n        JOIN rb_currency c ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3\n        FOR UPDATE;",
+  "query": "SELECT\n            c.id AS \"id!\",\n            c.game_id AS \"game_id!\",\n            c.slug AS \"slug!\",\n            c.cname AS \"name!\",\n            c.prec AS \"prec!\",\n            LEAST(\n                tc.amount::NUMERIC\n                    + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                c.max_amount::NUMERIC\n            )::BIGINT AS \"current_amount!\",\n            c.max_amount AS \"max_amount!\"\n        FROM rb_team_currency tc\n        JOIN rb_currency c ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3\n        FOR UPDATE;",
   "describe": {
     "columns": [
       {
@@ -31,12 +31,12 @@
       {
         "ordinal": 5,
         "name": "current_amount!",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 6,
         "name": "max_amount!",
-        "type_info": "Int4"
+        "type_info": "Int8"
       }
     ],
     "parameters": {
@@ -56,5 +56,5 @@
       false
     ]
   },
-  "hash": "e8df9655a069b0b04d22c14d01d737ba7add59165c5ec37a39a82d054246b4bf"
+  "hash": "86941e2dce0b12611e24e0fd418ac017a09e2b34a634e7fd377329299b3b9096"
 }

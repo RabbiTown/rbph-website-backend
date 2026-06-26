@@ -46,7 +46,7 @@
       {
         "ordinal": 8,
         "name": "cost_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 9,

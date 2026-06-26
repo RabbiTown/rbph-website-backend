@@ -37,7 +37,7 @@ struct PuzzleListQuery {
 struct PenaltyRule {
     #[serde(rename = "type")]
     rtype: RbPuzzlePenaltyType,
-    args: Vec<i32>,
+    args: Vec<i64>,
 }
 
 #[repr(i32)]
@@ -234,9 +234,12 @@ async fn validate_penalty_currency(
                 let Some(amount) = rule.args.get(1) else {
                     return Ok(false);
                 };
-                if *currency_id <= 0
+                let Ok(currency_id) = i32::try_from(*currency_id) else {
+                    return Ok(false);
+                };
+                if currency_id <= 0
                     || *amount <= 0
-                    || !db::game::currency_belongs_to_game(&app.db, game_id, *currency_id).await?
+                    || !db::game::currency_belongs_to_game(&app.db, game_id, currency_id).await?
                 {
                     return Ok(false);
                 }

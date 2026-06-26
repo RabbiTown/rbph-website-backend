@@ -21,7 +21,7 @@
       {
         "ordinal": 3,
         "name": "h_ca",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 4,

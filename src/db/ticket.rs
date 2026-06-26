@@ -87,7 +87,7 @@ pub struct TicketMessage {
     sender: TicketAggreInfoUser,
     sender_type: RbTicketSenderType,
     cost_id: Option<i32>,
-    cost_amount: i32,
+    cost_amount: i64,
     unlocked: bool,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -380,7 +380,7 @@ fn make_message(
     sender_nickname: Option<String>,
     sender_type: Option<i16>,
     cost_id: Option<i32>,
-    cost_amount: Option<i32>,
+    cost_amount: Option<i64>,
     unlocked: Option<bool>,
     content: Option<String>,
     content_type: Option<i16>,
@@ -946,7 +946,7 @@ pub struct SendMessageData {
     pub sender_id: i32,
     pub sender_type: RbTicketSenderType,
     pub cost_id: Option<i32>,
-    pub cost_amount: i32,
+    pub cost_amount: i64,
 }
 
 async fn insert_ticket_message(
@@ -1288,9 +1288,9 @@ pub async fn purchase_ticket_message(
             r#"WITH current AS (
                 SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,
                     LEAST(
-                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                        c.max_amount
-                    ) AS current_amount
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    )::BIGINT AS current_amount
                 FROM rb_team_currency tc
                 JOIN rb_currency c ON tc.currency_id = c.id
                 WHERE tc.team_id = $1 AND c.id = $2
@@ -1299,10 +1299,10 @@ pub async fn purchase_ticket_message(
                         FROM rb_team_member tm
                         WHERE tm.team_id = $1 AND tm.user_id = $4
                     )
-                    AND ($3 <= 0 OR LEAST(
-                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                        c.max_amount
-                    ) >= $3)
+                    AND ($3::BIGINT <= 0 OR LEAST(
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    )::BIGINT >= $3)
                 FOR UPDATE
             ), updated AS (
                 UPDATE rb_team_currency tc

@@ -61,8 +61,8 @@ fn currency_data_valid(
     name: &str,
     slug: &str,
     prec: i32,
-    init_amount: i32,
-    max_amount: i32,
+    init_amount: i64,
+    max_amount: i64,
 ) -> bool {
     db::game::valid_currency_data(name, slug, prec, init_amount, max_amount)
 }

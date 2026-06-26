@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH current AS (\n                SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,\n                    LEAST(\n                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    )::BIGINT AS current_amount\n                FROM rb_team_currency tc\n                JOIN rb_currency c ON tc.currency_id = c.id\n                WHERE tc.team_id = $1 AND c.id = $2\n                    AND c.game_id = (\n                        SELECT tm.game_id\n                        FROM rb_team_member tm\n                        WHERE tm.team_id = $1 AND tm.user_id = $4\n                    )\n                    AND ($3::BIGINT <= 0 OR LEAST(\n                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    )::BIGINT >= $3)\n                FOR UPDATE\n            ), updated AS (\n                UPDATE rb_team_currency tc\n                SET utime_at = NOW(), amount = current.current_amount - $3\n                FROM current\n                WHERE tc.team_id = current.team_id AND tc.currency_id = current.id\n                RETURNING current.id, current.slug, current.cname, current.prec,\n                    current.current_amount, tc.amount\n            )\n            SELECT id AS \"id!\", slug AS \"slug!\", cname AS \"name!\", prec AS \"prec!\",\n                current_amount AS \"before!\", amount AS \"after!\"\n            FROM updated;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "prec!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "before!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "after!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "6df3e5a5c9f1ceaf2fd8be9b256a5bbf3a196c963f13f36a14883d9218c4e82d"
+}

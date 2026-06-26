@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)\n        SELECT id, $2, $3, $4 FROM rb_team\n        WHERE game_id = $1\n        ON CONFLICT (team_id, currency_id) DO NOTHING;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "02a6df52c059f2e6ae3a739c8036ed73fec932ebaf3b532fd5240e7b88ab1bd7"
+}

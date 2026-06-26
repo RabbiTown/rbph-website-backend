@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, cname AS name, slug, growth, init_amount, prec, max_amount\n        FROM rb_currency\n        WHERE id = $1 AND game_id = $2;",
+  "query": "UPDATE rb_currency\n        SET cname = $3,\n            slug = $4,\n            growth = $5,\n            init_amount = $6,\n            init_hidden = $7,\n            prec = $8,\n            max_amount = $9\n        WHERE id = $1 AND game_id = $2\n        RETURNING id, cname AS name, slug, growth, init_amount, init_hidden, prec, max_amount;",
   "describe": {
     "columns": [
       {
@@ -21,28 +21,40 @@
       {
         "ordinal": 3,
         "name": "growth",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 4,
         "name": "init_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 5,
+        "name": "init_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "prec",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "max_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
         "Int4",
-        "Int4"
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Int8",
+        "Int8",
+        "Bool",
+        "Int4",
+        "Int8"
       ]
     },
     "nullable": [
@@ -52,8 +64,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "69aed5291d6d7a8d8f4cbf8e5af22cea09ac23acad6472f090066f216d89bf0c"
+  "hash": "22c2bcf5e98f874b33d7daf83e04b342162f385316d067d6c44e25041c65a0f5"
 }

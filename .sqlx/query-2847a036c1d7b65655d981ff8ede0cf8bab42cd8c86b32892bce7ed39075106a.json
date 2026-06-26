@@ -76,7 +76,7 @@
       {
         "ordinal": 14,
         "name": "delta_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 15,

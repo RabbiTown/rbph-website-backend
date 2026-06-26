@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.init_amount, c.prec, tc.amount,\n                LEAST(\n                    tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),\n                    c.max_amount\n                ) AS \"current_amount!\",\n                c.max_amount, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3;",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.init_amount, c.prec, tc.amount,\n                LEAST(\n                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                )::BIGINT AS \"current_amount!\",\n                c.max_amount, tc.hidden, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3 AND ($4 OR NOT tc.hidden);",
   "describe": {
     "columns": [
       {
@@ -21,12 +21,12 @@
       {
         "ordinal": 3,
         "name": "growth!",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 4,
         "name": "init_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 5,
@@ -36,20 +36,25 @@
       {
         "ordinal": 6,
         "name": "amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 7,
         "name": "current_amount!",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 8,
         "name": "max_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 9,
+        "name": "hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -58,7 +63,8 @@
       "Left": [
         "Int4",
         "Int4",
-        "Text"
+        "Text",
+        "Bool"
       ]
     },
     "nullable": [
@@ -71,8 +77,9 @@
       false,
       null,
       false,
+      false,
       false
     ]
   },
-  "hash": "bd09b074ff7bfd6dab225c8fd06f3fe97a79b85356a1079b0562469cf1eec54e"
+  "hash": "b6dd9cf09ae82fd4ac80f59c33fca9eb744828a1075da38154b5a18dc25f0a70"
 }

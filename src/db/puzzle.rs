@@ -629,7 +629,7 @@ pub struct CurrencyPenaltyShowData {
     pub currency_id: i32,
     pub name: String,
     pub prec: i32,
-    pub amount: i32,
+    pub amount: i64,
 }
 
 pub async fn get_judge_rules(
@@ -783,7 +783,7 @@ pub enum SubmitAnswerResult {
 struct PenaltyRule {
     #[serde(rename = "type")]
     rtype: RbPuzzlePenaltyType,
-    args: Vec<i32>,
+    args: Vec<i64>,
 }
 
 pub async fn submit_answer(
@@ -966,7 +966,7 @@ pub async fn submit_answer(
 
     let mut solved = false;
     let mut cooldown_till: Option<OffsetDateTime> = None;
-    let mut cooldown_seconds: Option<i32> = None;
+    let mut cooldown_seconds: Option<i64> = None;
     let mut do_unlock = false;
     let mut currency_updated = false;
     let mut currency_penalty: Vec<CurrencyPenaltyShowData> = vec![];
@@ -1064,8 +1064,8 @@ pub async fn submit_answer(
                 .await?;
 
                 sqlx::query!(
-                    "INSERT INTO rb_team_currency (team_id, currency_id, amount)
-                    SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount
+                    "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
+                    SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount, c.init_hidden AS hidden
                     FROM rb_team t
                     JOIN rb_currency c ON c.game_id = t.game_id
                     WHERE t.id = $1
@@ -1097,7 +1097,7 @@ pub async fn submit_answer(
             .fetch_one(&mut *tx)
             .await?;
 
-            let failure_count = info.failure_count.unwrap_or(0) as i32;
+            let failure_count = info.failure_count.unwrap_or(0);
             let rules: Vec<PenaltyRule> = serde_json::from_value(info.penalty)?;
             for rule in rules {
                 match rule.rtype {
@@ -1114,13 +1114,14 @@ pub async fn submit_answer(
                     RbPuzzlePenaltyType::Currency => {
                         if let Some(currency_id) = rule.args.first()
                             && let Some(amount) = rule.args.get(1)
+                            && let Ok(currency_id) = i32::try_from(*currency_id)
                             && let Some(penalty_row) = sqlx::query!(
                                 r#"WITH current AS (
                                     SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,
                                         LEAST(
-                                            tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                                            c.max_amount
-                                        ) AS current_amount
+                                            tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                                            c.max_amount::NUMERIC
+                                        )::BIGINT AS current_amount
                                     FROM rb_team_currency tc
                                     JOIN rb_currency c ON tc.currency_id = c.id
                                     WHERE tc.team_id = $2 AND c.id = $3
@@ -1134,7 +1135,7 @@ pub async fn submit_answer(
                                         current.current_amount, tc.amount
                                 )
                                 SELECT id AS "currency_id!", slug AS "slug!", cname AS "name!",
-                                    prec AS "prec!", $1::INT AS "amount!",
+                                    prec AS "prec!", $1::BIGINT AS "amount!",
                                     current_amount AS "before!", amount AS "after!"
                                 FROM updated;"#,
                                 amount,
@@ -1197,10 +1198,10 @@ pub async fn submit_answer(
             if let Some(time) = cooldown_seconds {
                 cooldown_till = sqlx::query_scalar!(
                     "UPDATE rb_team_puzzle
-                    SET cooldown_till = NOW() + ($1 * INTERVAL '1 second')
+                    SET cooldown_till = NOW() + ($1::BIGINT * INTERVAL '1 second')
                     WHERE team_id = $2 AND puzzle_id = $3
                     RETURNING cooldown_till;",
-                    time as i64,
+                    time,
                     team_id,
                     puzzle_id
                 )
@@ -1635,7 +1636,7 @@ pub struct RbHintShowData {
     pub title_hidden: bool,
     pub cooldown: i32,
     pub cost_id: Option<i32>,
-    pub cost_amount: i32,
+    pub cost_amount: i64,
 }
 
 pub async fn get_hints_show_for_team(
@@ -1779,16 +1780,16 @@ pub async fn purchase_hint(
             r#"WITH current AS (
                 SELECT tc.team_id, c.id, c.slug, c.cname, c.prec,
                     LEAST(
-                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                        c.max_amount
-                    ) AS current_amount
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    )::BIGINT AS current_amount
                 FROM rb_team_currency tc
                 JOIN rb_currency c ON tc.currency_id = c.id
                 WHERE tc.team_id = $1 AND c.id = $2
-                    AND ($3 <= 0 OR LEAST(
-                        tc.amount + (EXTRACT(EPOCH FROM (NOW() - tc.utime_at))::INT / 60) * (c.growth + tc.growth),
-                        c.max_amount
-                    ) >= $3)
+                    AND ($3::BIGINT <= 0 OR LEAST(
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    )::BIGINT >= $3)
                 FOR UPDATE
             ), updated AS (
                 UPDATE rb_team_currency tc
@@ -2146,7 +2147,7 @@ pub struct RbHintAdminData {
     pub content_type: i16,
     pub cooldown: i32,
     pub cost_id: Option<i32>,
-    pub cost_amount: i32,
+    pub cost_amount: i64,
     pub puzzle_id: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -2166,7 +2167,7 @@ pub struct RbHintCreateData {
     pub cooldown: i32,
     pub cost_id: Option<i32>,
     #[serde(default)]
-    pub cost_amount: i32,
+    pub cost_amount: i64,
     pub puzzle_id: i32,
 }
 
@@ -2183,7 +2184,7 @@ pub struct RbHintUpdateData {
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
     )]
     pub cost_id: Option<Option<i32>>,
-    pub cost_amount: Option<i32>,
+    pub cost_amount: Option<i64>,
     pub puzzle_id: Option<i32>,
 }
 

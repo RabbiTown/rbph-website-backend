@@ -31,7 +31,7 @@
       {
         "ordinal": 5,
         "name": "cost_amount",
-        "type_info": "Int4"
+        "type_info": "Int8"
       }
     ],
     "parameters": {

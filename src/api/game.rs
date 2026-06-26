@@ -42,6 +42,12 @@ struct GameRoundPathInfo {
     round_ref: String,
 }
 
+#[derive(Serialize)]
+struct GamePuzzleResponse {
+    data: db::puzzle::RbPuzzleShowData,
+    state: db::puzzle::RbPuzzleTeamStateShowData,
+}
+
 async fn get_info(info: web::Path<GamePathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::game::get_by_id(&app.db, info.game_id).await?;
     if result.is_none() {
@@ -67,16 +73,17 @@ async fn get_puzzle(
         let Some(puzzle) = puzzle else {
             return RbError::not_found().http_err();
         };
-        return Ok(HttpResponse::Ok().json(serde_json::json!({
-            "data": puzzle,
-            "state": {
-                "state": -1,
-                "max_submit": null,
-                "submit_count": 0,
-                "answers": [],
-                "utime_at": OffsetDateTime::now_utc(),
-            }
-        })));
+        return Ok(HttpResponse::Ok().json(GamePuzzleResponse {
+            data: puzzle,
+            state: db::puzzle::RbPuzzleTeamStateShowData {
+                state: crate::model::game::RbTeamPuzzleState::Locked,
+                max_submit: None,
+                submit_count: 0,
+                answers: vec![],
+                utime_at: OffsetDateTime::now_utc(),
+                cooldown_till: None,
+            },
+        }));
     }
 
     if db::puzzle::get_puzzle_user_info(&app.db, user.uid, puzzle_id)

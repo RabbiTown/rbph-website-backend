@@ -89,7 +89,7 @@ INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
 VALUES (1, 1, 0);
 
 INSERT INTO rb_team (id, name, state, pass, bio, game_id, finish_at)
-VALUES (2, '4S', 2, '1', '', 1, '2025-12-23 12:11');
+VALUES (2, '-------- 金牌线 --------', 2, '1', '', 1, '2025-12-23 12:11');
 
 INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
 VALUES (2, 1, 0), (2, 2, 1), (2, 3, 1);

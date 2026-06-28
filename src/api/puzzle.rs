@@ -37,20 +37,28 @@ async fn get_puzzle(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    get_puzzle_response_for_user_team(app.get_ref(), &user, path.puzzle_id).await
+}
+
+pub(super) async fn get_puzzle_response_for_user_team(
+    app: &AppState,
+    user: &AuthUser,
+    puzzle_id: i32,
+) -> Result<HttpResponse> {
     let result = db::puzzle::get_puzzle_show_str_for_team(
         &app.db,
         &app.kv,
         user.req_team_id()?.ok_or(RbError::forbid())?,
-        path.puzzle_id,
+        puzzle_id,
     )
     .await?;
-    if result.is_none() {
-        RbError::not_found().err()?
-    }
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
 
     Ok(HttpResponse::Ok()
         .content_type(ContentType::json())
-        .body(result.unwrap()))
+        .body(result))
 }
 
 #[derive(Deserialize)]

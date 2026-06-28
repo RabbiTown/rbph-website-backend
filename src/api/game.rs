@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 
 use crate::{
     AppState,
-    api::{error_handler, notification, team, ticket},
+    api::{error_handler, notification, puzzle, round, team, ticket},
     db::{
         self,
         game::RbGameShowData,
@@ -42,12 +42,6 @@ struct GameRoundPathInfo {
     round_ref: String,
 }
 
-#[derive(Serialize)]
-struct GamePuzzleResponse {
-    data: db::puzzle::RbPuzzleShowData,
-    state: db::puzzle::RbPuzzleTeamStateShowData,
-}
-
 async fn get_info(info: web::Path<GamePathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::game::get_by_id(&app.db, info.game_id).await?;
     if result.is_none() {
@@ -68,24 +62,6 @@ async fn get_puzzle(
         return RbError::not_found().http_err();
     };
 
-    if user.req_role()?.is_moderator() {
-        let puzzle = db::puzzle::get_puzzle_show(&app.db, puzzle_id).await?;
-        let Some(puzzle) = puzzle else {
-            return RbError::not_found().http_err();
-        };
-        return Ok(HttpResponse::Ok().json(GamePuzzleResponse {
-            data: puzzle,
-            state: db::puzzle::RbPuzzleTeamStateShowData {
-                state: crate::model::game::RbTeamPuzzleState::Locked,
-                max_submit: None,
-                submit_count: 0,
-                answers: vec![],
-                utime_at: OffsetDateTime::now_utc(),
-                cooldown_till: None,
-            },
-        }));
-    }
-
     if db::puzzle::get_puzzle_user_info(&app.db, user.uid, puzzle_id)
         .await?
         .is_none()
@@ -93,20 +69,7 @@ async fn get_puzzle(
         return RbError::not_found().http_err();
     }
 
-    let result = db::puzzle::get_puzzle_show_str_for_team(
-        &app.db,
-        &app.kv,
-        user.req_team_id()?.ok_or(RbError::forbid())?,
-        puzzle_id,
-    )
-    .await?;
-    let Some(result) = result else {
-        return RbError::not_found().http_err();
-    };
-
-    Ok(HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body(result))
+    puzzle::get_puzzle_response_for_user_team(app.get_ref(), &user, puzzle_id).await
 }
 
 async fn get_round(
@@ -127,20 +90,7 @@ async fn get_round(
         return RbError::not_found().http_err();
     }
 
-    let result = db::round::get_info_for_team_str(
-        &app.db,
-        &app.kv,
-        round_id,
-        user.req_team_id()?.ok_or(RbError::forbid())?,
-    )
-    .await?;
-    let Some(result) = result else {
-        return RbError::not_found().http_err();
-    };
-
-    Ok(HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body(result))
+    round::get_round_response_for_user_team(app.get_ref(), &user, round_id).await
 }
 
 #[derive(Serialize)]

@@ -21,20 +21,28 @@ async fn get_round(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    get_round_response_for_user_team(app.get_ref(), &user, path.round_id).await
+}
+
+pub(super) async fn get_round_response_for_user_team(
+    app: &AppState,
+    user: &AuthUser,
+    round_id: i32,
+) -> Result<HttpResponse> {
     let result = db::round::get_info_for_team_str(
         &app.db,
         &app.kv,
-        path.round_id,
+        round_id,
         user.req_team_id()?.ok_or(RbError::forbid())?,
     )
     .await?;
-    if result.is_none() {
-        RbError::not_found().err()?
-    }
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
 
     Ok(HttpResponse::Ok()
         .content_type(ContentType::json())
-        .body(result.unwrap()))
+        .body(result))
 }
 
 async fn check_round_middleware(

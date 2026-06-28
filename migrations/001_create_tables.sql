@@ -263,6 +263,7 @@ CREATE TABLE rb_hint (
     cooldown        INT NOT NULL DEFAULT 0,
     cost_id         INT REFERENCES rb_currency(id) ON DELETE SET NULL,
     cost_amount     BIGINT NOT NULL DEFAULT 0,
+    backend_function VARCHAR(64),
     puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

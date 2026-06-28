@@ -231,6 +231,7 @@ async fn purchase_hint(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let sid = req.and_then(|req| req.sid.clone());
     let purchase_result = db::puzzle::purchase_hint(&app, user.uid, path.hint_id).await?;
 
     match purchase_result {
@@ -241,8 +242,6 @@ async fn purchase_hint(
             RbError::conflict(PurchaseHintResult::Insufficient.into()).http_err()
         }
         db::puzzle::PurchaseHintResult::Ok(result) => {
-            let sid = req.and_then(|req| req.sid.clone());
-
             tokio::spawn(async move {
                 let _ = app
                     .sync_hub

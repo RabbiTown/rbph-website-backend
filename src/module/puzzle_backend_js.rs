@@ -43,6 +43,22 @@ pub struct JudgeRuntimeContext {
 }
 
 #[derive(Clone)]
+pub struct HintPurchaseRuntimeContext {
+    pub puzzle_id: i32,
+    pub game_id: i32,
+    pub puzzle_title: String,
+    pub team_id: i32,
+    pub team_name: String,
+    pub user_id: i32,
+    pub user_nickname: String,
+    pub hint_id: i32,
+    pub hint_title: String,
+    pub cost_id: Option<i32>,
+    pub cost_amount: i64,
+    pub currency: Value,
+}
+
+#[derive(Clone)]
 pub struct RuntimeServices {
     pub app: AppState,
     pub asset_runtime: AssetRuntime,
@@ -374,6 +390,82 @@ fn build_judge_ctx_arg(
         .property(
             js_string!("apiName"),
             JsValue::from(JsString::from("judge")),
+            Attribute::all(),
+        )
+        .build();
+
+    Ok(ctx.into())
+}
+
+fn build_hint_purchase_ctx_arg(
+    context: &mut Context,
+    runtime: &HintPurchaseRuntimeContext,
+    function_name: &str,
+) -> Result<JsValue, RbInternalError> {
+    let puzzle = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.puzzle_id, Attribute::all())
+        .property(js_string!("gameId"), runtime.game_id, Attribute::all())
+        .property(
+            js_string!("title"),
+            JsValue::from(JsString::from(runtime.puzzle_title.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let team = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.team_id, Attribute::all())
+        .property(
+            js_string!("name"),
+            JsValue::from(JsString::from(runtime.team_name.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let user = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.user_id, Attribute::all())
+        .property(
+            js_string!("nickname"),
+            JsValue::from(JsString::from(runtime.user_nickname.clone())),
+            Attribute::all(),
+        )
+        .build();
+
+    let hint = ObjectInitializer::new(context)
+        .property(js_string!("id"), runtime.hint_id, Attribute::all())
+        .property(
+            js_string!("title"),
+            JsValue::from(JsString::from(runtime.hint_title.clone())),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("costId"),
+            runtime
+                .cost_id
+                .map(JsValue::from)
+                .unwrap_or_else(JsValue::null),
+            Attribute::all(),
+        )
+        .property(
+            js_string!("costAmount"),
+            runtime.cost_amount,
+            Attribute::all(),
+        )
+        .build();
+
+    let currency = json_to_js(&runtime.currency, context)?;
+    let purchase = ObjectInitializer::new(context)
+        .property(js_string!("currency"), currency, Attribute::all())
+        .build();
+
+    let ctx = ObjectInitializer::new(context)
+        .property(js_string!("puzzle"), puzzle, Attribute::all())
+        .property(js_string!("team"), team, Attribute::all())
+        .property(js_string!("user"), user, Attribute::all())
+        .property(js_string!("hint"), hint, Attribute::all())
+        .property(js_string!("purchase"), purchase, Attribute::all())
+        .property(
+            js_string!("apiName"),
+            JsValue::from(JsString::from(function_name)),
             Attribute::all(),
         )
         .build();
@@ -1620,6 +1712,88 @@ pub async fn execute_judge(
         }
 
         Ok::<_, RbInternalError>(Some(output))
+    })
+    .await
+    .map_err(|e| internal_err(e.to_string()))?
+}
+
+pub async fn execute_hint_purchase(
+    app: &AppState,
+    backend: crate::db::puzzle_backend::PuzzleBackend,
+    function_name: String,
+    runtime: HintPurchaseRuntimeContext,
+) -> Result<(), RbInternalError> {
+    let app = app.clone();
+    tokio::task::spawn_blocking(move || {
+        RUNTIME_CONTEXT.with(|slot| {
+            *slot.borrow_mut() = Some(RuntimeContext {
+                game_id: runtime.game_id,
+                method: "HINT_PURCHASE".to_string(),
+                puzzle_id: runtime.puzzle_id,
+                team_id: runtime.team_id,
+                user_id: runtime.user_id,
+                api_name: function_name.clone(),
+                query: Value::Null,
+                body: Value::Null,
+                puzzle_title: runtime.puzzle_title.clone(),
+                user_nickname: runtime.user_nickname.clone(),
+                team_name: runtime.team_name.clone(),
+            });
+        });
+        let _guard = RuntimeContextGuard;
+
+        let mut context = Context::default();
+        configure_runtime_limits(&mut context);
+        register_ctx(
+            &mut context,
+            RuntimeServices {
+                app: app.clone(),
+                asset_runtime: AssetRuntime {
+                    db: app.db.clone(),
+                    storage: app.storage.clone(),
+                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+                },
+            },
+        )?;
+
+        let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let promise = module.load_link_evaluate(&mut context);
+        context
+            .run_jobs()
+            .map_err(|e| internal_err(e.to_string()))?;
+        if let Some(err) = promise.state().as_rejected() {
+            return Err(internal_err(format!("module rejected: {}", err.display())));
+        }
+
+        let namespace = module.namespace(&mut context);
+        let value = namespace
+            .get(js_string!(function_name.as_str()), &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let function = value
+            .as_function()
+            .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
+
+        let ctx_arg = build_hint_purchase_ctx_arg(&mut context, &runtime, &function_name)?;
+        let result = function
+            .call(&JsValue::undefined(), &[ctx_arg], &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        if let Some(promise) = result.as_promise() {
+            context
+                .run_jobs()
+                .map_err(|e| internal_err(e.to_string()))?;
+            match promise.state() {
+                boa_engine::builtins::promise::PromiseState::Fulfilled(_) => {}
+                boa_engine::builtins::promise::PromiseState::Rejected(reason) => {
+                    return Err(internal_err(format!("api rejected: {}", reason.display())));
+                }
+                boa_engine::builtins::promise::PromiseState::Pending => {
+                    return Err(internal_err("api promise is still pending"));
+                }
+            }
+        }
+
+        Ok::<_, RbInternalError>(())
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?

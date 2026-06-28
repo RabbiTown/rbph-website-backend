@@ -69,12 +69,24 @@ fn validate_basic(
     content_type: Option<i16>,
     cooldown: Option<i32>,
     cost_amount: Option<i64>,
+    backend_function: Option<&str>,
 ) -> bool {
     title.is_none_or(|value| !value.trim().is_empty() && value.chars().count() <= 120)
         && content.is_none_or(|_| true)
         && content_type.is_none_or(validate_content_type)
         && cooldown.is_none_or(|value| value >= 0)
         && cost_amount.is_none_or(|value| value >= 0)
+        && backend_function.is_none_or(validate_backend_function)
+}
+
+fn validate_backend_function(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        && value.len() <= 64
 }
 
 async fn get_hint_game(app: &AppState, puzzle_id: i32) -> Result<Option<i32>, RbInternalError> {
@@ -88,6 +100,7 @@ async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool
         Some(data.content_type),
         Some(data.cooldown),
         Some(data.cost_amount),
+        data.backend_function.as_deref(),
     ) {
         return Ok(false);
     }
@@ -118,6 +131,10 @@ async fn validate_update(
         data.content_type,
         data.cooldown,
         data.cost_amount,
+        data.backend_function
+            .as_ref()
+            .map(|value| value.as_deref())
+            .unwrap_or(current.backend_function.as_deref()),
     ) {
         return Ok(false);
     }

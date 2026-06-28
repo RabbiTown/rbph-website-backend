@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::prelude::FromRow;
 use time::OffsetDateTime;
 
@@ -1750,12 +1750,15 @@ pub async fn purchase_hint(
     hint_id: i32,
 ) -> Result<PurchaseHintResult, RbInternalError> {
     let info = sqlx::query!(
-        "SELECT r.game_id, tm.team_id, h.puzzle_id, p.round_id, p.title AS puzzle_title,
-            h.title AS hint_title, h.cost_id, h.cost_amount
+        "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,
+            h.puzzle_id, p.round_id, p.title AS puzzle_title,
+            h.title AS hint_title, h.cost_id, h.cost_amount, h.backend_function
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_round r ON r.id = p.round_id
         JOIN rb_team_member tm ON tm.game_id = r.game_id
+        JOIN rb_team t ON t.id = tm.team_id
+        JOIN rb_user u ON u.id = tm.user_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
         WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
@@ -1771,6 +1774,84 @@ pub async fn purchase_hint(
         return Ok(PurchaseHintResult::Unavailable);
     }
     let info = info.unwrap();
+
+    let mut precheck_currency_event: Option<db::event_log::CurrencyEventData> = None;
+    if info.cost_id.is_some() {
+        let currency = sqlx::query!(
+            r#"SELECT c.id AS "id!", c.slug AS "slug!", c.cname AS "name!", c.prec AS "prec!",
+                LEAST(
+                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                    c.max_amount::NUMERIC
+                )::BIGINT AS "before!"
+            FROM rb_team_currency tc
+            JOIN rb_currency c ON tc.currency_id = c.id
+            WHERE tc.team_id = $1 AND c.id = $2
+                AND ($3::BIGINT <= 0 OR LEAST(
+                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                    c.max_amount::NUMERIC
+                )::BIGINT >= $3)"#,
+            info.team_id,
+            info.cost_id,
+            info.cost_amount
+        )
+        .fetch_optional(&app.db)
+        .await?;
+
+        if let Some(currency) = currency {
+            precheck_currency_event = Some(db::event_log::CurrencyEventData {
+                id: currency.id,
+                slug: currency.slug,
+                name: currency.name,
+                prec: currency.prec,
+                before: currency.before,
+                after: currency.before - info.cost_amount,
+            });
+        } else {
+            return Ok(PurchaseHintResult::Insufficient);
+        }
+    }
+
+    if let Some(function_name) = info.backend_function.as_deref() {
+        let backend = db::puzzle_backend::get_backend(&app.db, info.puzzle_id)
+            .await?
+            .ok_or_else(|| RbInternalError::Other("hint backend function not found".to_string()))?;
+        if !backend.enabled || !backend.export_enabled(function_name) {
+            return Err(RbInternalError::Other(
+                "hint backend function not callable".to_string(),
+            ));
+        }
+        let currency = precheck_currency_event.as_ref().map(|currency| {
+            json!({
+                "id": currency.id,
+                "slug": currency.slug,
+                "name": currency.name,
+                "prec": currency.prec,
+                "before": currency.before,
+                "after": currency.after,
+                "delta": currency.delta(),
+            })
+        });
+        crate::module::puzzle_backend_js::execute_hint_purchase(
+            app,
+            backend,
+            function_name.to_string(),
+            crate::module::puzzle_backend_js::HintPurchaseRuntimeContext {
+                puzzle_id: info.puzzle_id,
+                game_id: info.game_id,
+                puzzle_title: info.puzzle_title.clone(),
+                team_id: info.team_id,
+                team_name: info.team_name.clone(),
+                user_id,
+                user_nickname: info.user_nickname.clone(),
+                hint_id,
+                hint_title: info.hint_title.clone(),
+                cost_id: info.cost_id,
+                cost_amount: info.cost_amount,
+                currency: currency.unwrap_or(Value::Null),
+            },
+        )
+        .await?;
+    }
 
     let mut tx = app.db.begin().await?;
     let mut currency_event: Option<db::event_log::CurrencyEventData> = None;
@@ -2148,6 +2229,7 @@ pub struct RbHintAdminData {
     pub cooldown: i32,
     pub cost_id: Option<i32>,
     pub cost_amount: i64,
+    pub backend_function: Option<String>,
     pub puzzle_id: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -2168,6 +2250,7 @@ pub struct RbHintCreateData {
     pub cost_id: Option<i32>,
     #[serde(default)]
     pub cost_amount: i64,
+    pub backend_function: Option<String>,
     pub puzzle_id: i32,
 }
 
@@ -2185,6 +2268,11 @@ pub struct RbHintUpdateData {
     )]
     pub cost_id: Option<Option<i32>>,
     pub cost_amount: Option<i64>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
+    pub backend_function: Option<Option<String>>,
     pub puzzle_id: Option<i32>,
 }
 
@@ -2196,7 +2284,7 @@ pub async fn admin_list_hints(
         sqlx::query_as!(
             RbHintAdminData,
             "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
-                cost_amount, puzzle_id, ctime_at
+                cost_amount, backend_function, puzzle_id, ctime_at
             FROM rb_hint
             WHERE puzzle_id = $1
             ORDER BY sort, id;",
@@ -2208,7 +2296,7 @@ pub async fn admin_list_hints(
         sqlx::query_as!(
             RbHintAdminData,
             "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
-                cost_amount, puzzle_id, ctime_at
+                cost_amount, backend_function, puzzle_id, ctime_at
             FROM rb_hint
             ORDER BY puzzle_id, sort, id;"
         )
@@ -2226,7 +2314,7 @@ pub async fn admin_get_hint(
     let result = sqlx::query_as!(
         RbHintAdminData,
         "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
-            cost_amount, puzzle_id, ctime_at
+            cost_amount, backend_function, puzzle_id, ctime_at
         FROM rb_hint
         WHERE id = $1;",
         hint_id
@@ -2244,13 +2332,14 @@ pub async fn admin_create_hint(
     let result = sqlx::query_as!(
         RbHintAdminData,
         "INSERT INTO rb_hint (
-            sort, title, title_hidden, content, content_type, cooldown, cost_id, cost_amount, puzzle_id
+            sort, title, title_hidden, content, content_type, cooldown, cost_id, cost_amount,
+            backend_function, puzzle_id
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, p.id
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, p.id
         FROM rb_puzzle p
         WHERE p.id = $1
         RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
-            cost_amount, puzzle_id, ctime_at;",
+            cost_amount, backend_function, puzzle_id, ctime_at;",
         data.puzzle_id,
         data.sort,
         data.title,
@@ -2260,6 +2349,7 @@ pub async fn admin_create_hint(
         data.cooldown,
         data.cost_id,
         data.cost_amount,
+        data.backend_function,
     )
     .fetch_optional(pool)
     .await?;
@@ -2274,6 +2364,8 @@ pub async fn admin_update_hint(
 ) -> Result<Option<RbHintAdminData>, RbInternalError> {
     let cost_id_is_set = data.cost_id.is_some();
     let cost_id = data.cost_id.flatten();
+    let backend_function_is_set = data.backend_function.is_some();
+    let backend_function = data.backend_function.clone().flatten();
 
     let result = sqlx::query_as!(
         RbHintAdminData,
@@ -2289,15 +2381,16 @@ pub async fn admin_update_hint(
                 WHEN $8 AND $9::INT IS NULL THEN 0
                 ELSE COALESCE($10, h.cost_amount)
             END,
+            backend_function = CASE WHEN $11 THEN $12 ELSE h.backend_function END,
             puzzle_id = COALESCE((
-                SELECT p.id FROM rb_puzzle p WHERE p.id = $11::INT
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $13::INT
             ), h.puzzle_id)
         WHERE h.id = $1
-            AND ($11::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_puzzle p WHERE p.id = $11::INT
+            AND ($13::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $13::INT
             ))
         RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
-            cost_amount, puzzle_id, ctime_at;",
+            cost_amount, backend_function, puzzle_id, ctime_at;",
         hint_id,
         data.sort,
         data.title,
@@ -2308,6 +2401,8 @@ pub async fn admin_update_hint(
         cost_id_is_set,
         cost_id,
         data.cost_amount,
+        backend_function_is_set,
+        backend_function,
         data.puzzle_id
     )
     .fetch_optional(pool)

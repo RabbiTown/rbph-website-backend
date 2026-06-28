@@ -147,17 +147,19 @@ pub async fn join(
         .await?
         .ok_or("Game not found")?;
 
-    let member_count = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM rb_team_member
-        WHERE team_id = $1;",
-        team_id
-    )
-    .fetch_one(&mut *tx)
-    .await?
-    .unwrap_or(0);
+    if let Some(max_members) = max_members {
+        let member_count = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM rb_team_member
+            WHERE team_id = $1;",
+            team_id
+        )
+        .fetch_one(&mut *tx)
+        .await?
+        .unwrap_or(0);
 
-    if member_count >= i64::from(max_members) {
-        return Ok(TeamJoinResult::TeamFull);
+        if member_count >= i64::from(max_members) {
+            return Ok(TeamJoinResult::TeamFull);
+        }
     }
 
     let result = sqlx::query!(

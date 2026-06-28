@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT COUNT(*) FROM rb_team_member\n        WHERE team_id = $1;",
+  "query": "SELECT COUNT(*) FROM rb_team_member\n            WHERE team_id = $1;",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "c957b601a1f70bcecdfd63238058a72f1b32ca3a027f001117020f6212012b1f"
+  "hash": "e5f37810bdeedd8299b5c5a88c02dc5795b01dc4a6dd0247c64515475bc1fea3"
 }

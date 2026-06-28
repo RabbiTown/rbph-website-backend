@@ -2,7 +2,7 @@
 
 INSERT INTO rb_game (id, title, cover, is_shown, is_online, reg_open_at, pre_open_at, start_at, end_at, settings)
 VALUES (1, 'RBPH Test Game', '', TRUE, TRUE,
-        '2025-11-01 20:00:00+08', '2025-11-08 19:00:00+08', '2025-11-08 20:00:00+08', '2025-11-20 20:00:00+08', '{}');
+        '2025-11-01 20:00:00+08', '2025-11-08 19:00:00+08', '2025-11-08 20:00:00+08', '2025-11-20 20:00:00+08', '{"team":{"max_members":6}}');
 
 SELECT setval('rb_game_id_seq', 100);
 

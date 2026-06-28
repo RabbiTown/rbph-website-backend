@@ -356,7 +356,7 @@ pub async fn delete_currency(
 
 pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, RbInternalError> {
     let patch = data.settings.clone().unwrap_or(Value::Null);
-    let settings = RbGameSettings::sanitize_storage(Some(RbGameSettings::merge_patch(
+    let settings = RbGameSettings::sanitize_storage(Some(RbGameSettings::merge_settings_patch(
         RbGameSettings::default_value(),
         patch,
     )));
@@ -409,7 +409,7 @@ pub async fn update(
         };
 
         Some(RbGameSettings::sanitize_storage(Some(
-            RbGameSettings::merge_patch(current, patch),
+            RbGameSettings::merge_settings_patch(current, patch),
         )))
     } else {
         None
@@ -506,7 +506,7 @@ pub async fn list_show(
 pub async fn get_team_max_members(
     pool: &DbPool,
     game_id: i32,
-) -> Result<Option<i32>, RbInternalError> {
+) -> Result<Option<Option<i32>>, RbInternalError> {
     Ok(get_setting_group::<RbGameTeamSettings>(pool, game_id)
         .await?
         .map(|settings| settings.max_members))

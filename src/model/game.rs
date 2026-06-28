@@ -36,9 +36,9 @@ pub struct RbGameSettings {
     pub ticket: Value,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct RbGameTeamSettings {
-    pub max_members: i32,
+    pub max_members: Option<i32>,
 }
 
 pub trait GameSettingGroup: Default + for<'de> Deserialize<'de> + Serialize + Sized {
@@ -55,12 +55,6 @@ impl Default for RbGameSettings {
             team: RbGameTeamSettings::default(),
             ticket: Value::Object(Map::new()),
         }
-    }
-}
-
-impl Default for RbGameTeamSettings {
-    fn default() -> Self {
-        Self { max_members: 6 }
     }
 }
 
@@ -84,14 +78,6 @@ impl RbGameTeamSettings {
 
 impl GameSettingGroup for RbGameTeamSettings {
     const PATH: &'static [&'static str] = &["team"];
-
-    fn sanitize(mut self) -> Self {
-        let default = Self::default();
-        if self.max_members <= 0 {
-            self.max_members = default.max_members;
-        }
-        self
-    }
 }
 
 impl RbGameSettings {
@@ -114,7 +100,7 @@ impl RbGameSettings {
     pub fn sanitize(value: Option<Value>) -> Self {
         let value = value.unwrap_or(Value::Null);
         let default = Self::default_value();
-        let merged = Self::merge_patch(default, value);
+        let merged = Self::merge_settings_patch(default, value);
         let mut settings = serde_json::from_value::<Self>(merged).unwrap_or_default();
 
         settings.team = settings.team.sanitize();
@@ -150,6 +136,38 @@ impl RbGameSettings {
             (_, patch) => patch,
         }
     }
+
+    pub fn merge_settings_patch(base: Value, patch: Value) -> Value {
+        Self::merge_settings_patch_at(base, patch, &[])
+    }
+
+    fn merge_settings_patch_at(base: Value, patch: Value, path: &[String]) -> Value {
+        match (base, patch) {
+            (Value::Object(mut base), Value::Object(patch)) => {
+                for (key, value) in patch {
+                    let mut child_path = Vec::with_capacity(path.len() + 1);
+                    child_path.extend_from_slice(path);
+                    child_path.push(key.clone());
+
+                    let is_nullable_setting = child_path.len() == 2
+                        && child_path[0] == "team"
+                        && child_path[1] == "max_members";
+
+                    if value.is_null() && !is_nullable_setting {
+                        base.remove(&key);
+                    } else {
+                        let base_value = base.remove(&key).unwrap_or(Value::Null);
+                        base.insert(
+                            key,
+                            Self::merge_settings_patch_at(base_value, value, &child_path),
+                        );
+                    }
+                }
+                Value::Object(base)
+            }
+            (_, patch) => patch,
+        }
+    }
 }
 
 impl Type<Postgres> for RbGameSettings {
@@ -176,6 +194,60 @@ impl<'q> Encode<'q, Postgres> for RbGameSettings {
         buf: &mut PgArgumentBuffer,
     ) -> Result<IsNull, Box<dyn std::error::Error + Send + Sync>> {
         <Json<&Self> as Encode<Postgres>>::encode_by_ref(&Json(self), buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RbGameSettings, RbGameTeamSettings};
+    use serde_json::json;
+
+    #[test]
+    fn game_settings_default_team_is_unlimited() {
+        assert_eq!(RbGameTeamSettings::default().max_members, None);
+        assert_eq!(
+            RbGameSettings::default_value(),
+            json!({
+                "team": { "max_members": null },
+                "ticket": {},
+            })
+        );
+    }
+
+    #[test]
+    fn team_settings_patch_accepts_null_and_positive_integer() {
+        assert!(RbGameTeamSettings::validate_patch(
+            &json!({ "max_members": null })
+        ));
+        assert!(RbGameTeamSettings::validate_patch(
+            &json!({ "max_members": 1 })
+        ));
+    }
+
+    #[test]
+    fn team_settings_patch_rejects_invalid_max_members() {
+        for value in [
+            json!({ "max_members": 0 }),
+            json!({ "max_members": -1 }),
+            json!({ "max_members": 1.5 }),
+            json!({ "max_members": "6" }),
+        ] {
+            assert!(!RbGameTeamSettings::validate_patch(&value));
+        }
+    }
+
+    #[test]
+    fn settings_patch_preserves_null_team_max_members() {
+        let merged = RbGameSettings::merge_settings_patch(
+            json!({ "team": { "max_members": 6 }, "ticket": { "a": true } }),
+            json!({ "team": { "max_members": null }, "ticket": null }),
+        );
+
+        assert_eq!(merged, json!({ "team": { "max_members": null } }));
+        assert_eq!(
+            RbGameSettings::sanitize(Some(merged)).team.max_members,
+            None
+        );
     }
 }
 

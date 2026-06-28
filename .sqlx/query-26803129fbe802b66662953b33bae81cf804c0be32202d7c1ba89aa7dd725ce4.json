@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n                cost_amount, puzzle_id, ctime_at\n            FROM rb_hint\n            WHERE puzzle_id = $1\n            ORDER BY sort, id;",
+  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n                cost_amount, backend_function, puzzle_id, ctime_at\n            FROM rb_hint\n            WHERE puzzle_id = $1\n            ORDER BY sort, id;",
   "describe": {
     "columns": [
       {
@@ -50,11 +50,16 @@
       },
       {
         "ordinal": 9,
+        "name": "backend_function",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -74,9 +79,10 @@
       false,
       true,
       false,
+      true,
       false,
       false
     ]
   },
-  "hash": "7305ac44e2b91f2897ad647005d65e781b59c061749a878a6b1dc4dfa3d0156f"
+  "hash": "26803129fbe802b66662953b33bae81cf804c0be32202d7c1ba89aa7dd725ce4"
 }

@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id AS \"id!\", c.slug AS \"slug!\", c.cname AS \"name!\", c.prec AS \"prec!\",\n                LEAST(\n                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                )::BIGINT AS \"before!\"\n            FROM rb_team_currency tc\n            JOIN rb_currency c ON tc.currency_id = c.id\n            WHERE tc.team_id = $1 AND c.id = $2\n                AND ($3::BIGINT <= 0 OR LEAST(\n                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                )::BIGINT >= $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "prec!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "before!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "881fbd53481d3b9b3028ad3b6ed40d7df7dd6b7cdb4aec24a24409520d66ec0e"
+}

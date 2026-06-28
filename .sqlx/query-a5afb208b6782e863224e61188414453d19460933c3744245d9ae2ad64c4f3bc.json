@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_hint (\n            sort, title, title_hidden, content, content_type, cooldown, cost_id, cost_amount, puzzle_id\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, p.id\n        FROM rb_puzzle p\n        WHERE p.id = $1\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n            cost_amount, puzzle_id, ctime_at;",
+  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            title_hidden = COALESCE($4, h.title_hidden),\n            content = COALESCE($5, h.content),\n            content_type = COALESCE($6, h.content_type),\n            cooldown = COALESCE($7, h.cooldown),\n            cost_id = CASE WHEN $8 THEN $9 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $8 AND $9::INT IS NULL THEN 0\n                ELSE COALESCE($10, h.cost_amount)\n            END,\n            backend_function = CASE WHEN $11 THEN $12 ELSE h.backend_function END,\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $13::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($13::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $13::INT\n            ))\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n            cost_amount, backend_function, puzzle_id, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -50,11 +50,16 @@
       },
       {
         "ordinal": 9,
+        "name": "backend_function",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -68,8 +73,12 @@
         "Text",
         "Int2",
         "Int4",
+        "Bool",
         "Int4",
-        "Int8"
+        "Int8",
+        "Bool",
+        "Varchar",
+        "Int4"
       ]
     },
     "nullable": [
@@ -82,9 +91,10 @@
       false,
       true,
       false,
+      true,
       false,
       false
     ]
   },
-  "hash": "e9e8af0d8382070720f70e483507d626b418ea82ad5cb90620b57f0c8bc74a97"
+  "hash": "a5afb208b6782e863224e61188414453d19460933c3744245d9ae2ad64c4f3bc"
 }

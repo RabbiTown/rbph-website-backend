@@ -165,6 +165,19 @@ fn currency_ref_arg(value: Option<&JsValue>, message: &str) -> Result<CurrencyRe
     Err(js_err(message))
 }
 
+fn optional_reason_arg(value: Option<&JsValue>, message: &str) -> Result<Option<String>, JsError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    let Some(reason) = value.as_string() else {
+        return Err(js_err(message));
+    };
+    Ok(Some(reason.to_std_string_escaped()))
+}
+
 fn block_on_db<T>(
     future: impl std::future::Future<Output = Result<T, RbInternalError>>,
 ) -> Result<T, RbInternalError> {
@@ -1018,6 +1031,17 @@ pub fn register_ctx(
                                     "$util.costCurrency amount must be an integer in i64 range",
                                 )
                             })?;
+                        let reason = optional_reason_arg(
+                            args.get(3),
+                            "$util.costCurrency reason must be a string or null",
+                        )?;
+                        let runtime = with_runtime_context(|ctx| ctx.clone())
+                            .map_err(|e| js_err(e.to_string()))?;
+                        let context = crate::db::team::CurrencyEventContext {
+                            puzzle_id: Some(runtime.puzzle_id),
+                            puzzle_title: Some(&runtime.puzzle_title),
+                            reason: reason.as_deref(),
+                        };
 
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
@@ -1026,17 +1050,17 @@ pub fn register_ctx(
                                     team_id,
                                     currency_id,
                                     -amount,
+                                    Some(context),
                                 ))
                             }
                             CurrencyRef::Slug(slug) => {
-                                let runtime = with_runtime_context(|ctx| ctx.clone())
-                                    .map_err(|e| js_err(e.to_string()))?;
                                 block_on_db(crate::db::team::cost_currency_by_slug(
                                     &currency_cost_db_for_cost,
                                     team_id,
                                     runtime.game_id,
                                     &slug,
                                     -amount,
+                                    Some(context),
                                 ))
                             }
                         }
@@ -1080,6 +1104,17 @@ pub fn register_ctx(
                                     "$util.addCurrency amount must be an integer in i64 range",
                                 )
                             })?;
+                        let reason = optional_reason_arg(
+                            args.get(3),
+                            "$util.addCurrency reason must be a string or null",
+                        )?;
+                        let runtime = with_runtime_context(|ctx| ctx.clone())
+                            .map_err(|e| js_err(e.to_string()))?;
+                        let context = crate::db::team::CurrencyEventContext {
+                            puzzle_id: Some(runtime.puzzle_id),
+                            puzzle_title: Some(&runtime.puzzle_title),
+                            reason: reason.as_deref(),
+                        };
 
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
@@ -1088,17 +1123,17 @@ pub fn register_ctx(
                                     team_id,
                                     currency_id,
                                     amount,
+                                    Some(context),
                                 ))
                             }
                             CurrencyRef::Slug(slug) => {
-                                let runtime = with_runtime_context(|ctx| ctx.clone())
-                                    .map_err(|e| js_err(e.to_string()))?;
                                 block_on_db(crate::db::team::add_currency_by_slug(
                                     &currency_query_db_for_add,
                                     team_id,
                                     runtime.game_id,
                                     &slug,
                                     amount,
+                                    Some(context),
                                 ))
                             }
                         }

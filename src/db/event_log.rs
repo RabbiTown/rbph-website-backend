@@ -328,9 +328,18 @@ impl CurrencyEventData {
         self.after - self.before
     }
 
-    pub fn json(&self, reason: &'static str) -> Value {
+    pub fn json(
+        &self,
+        reason: Option<&str>,
+        puzzle_id: Option<i32>,
+        puzzle_title: Option<&str>,
+    ) -> Value {
         json!({
             "reason": reason,
+            "puzzle": puzzle_id.map(|id| json!({
+                "id": id,
+                "title": puzzle_title
+            })),
             "currency": {
                 "id": self.id,
                 "slug": self.slug,

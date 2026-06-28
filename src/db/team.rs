@@ -642,6 +642,12 @@ pub struct UpdateCurrencyOptions {
     pub hidden: Option<bool>,
 }
 
+pub struct CurrencyEventContext<'a> {
+    pub puzzle_id: Option<i32>,
+    pub puzzle_title: Option<&'a str>,
+    pub reason: Option<&'a str>,
+}
+
 async fn lock_currency_runtime(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     team_id: i32,
@@ -786,6 +792,7 @@ pub async fn cost_currency(
     team_id: i32,
     currency_id: i32,
     delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
     let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
@@ -814,6 +821,7 @@ pub async fn cost_currency(
     .await?;
 
     let after = next_amount;
+    let context = context.as_ref();
     db::event_log::insert_tx(
         &mut tx,
         db::event_log::EventLogInput {
@@ -832,7 +840,11 @@ pub async fn cost_currency(
                 before: row.current_amount,
                 after,
             }
-            .json("api.cost"),
+            .json(
+                context.and_then(|context| context.reason),
+                context.and_then(|context| context.puzzle_id),
+                context.and_then(|context| context.puzzle_title),
+            ),
             ..Default::default()
         },
     )
@@ -848,6 +860,7 @@ pub async fn cost_currency_by_slug(
     game_id: i32,
     slug: &str,
     delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
     let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
@@ -881,6 +894,7 @@ pub async fn cost_currency_by_slug(
     .await?;
 
     let after = next_amount;
+    let context = context.as_ref();
     db::event_log::insert_tx(
         &mut tx,
         db::event_log::EventLogInput {
@@ -899,7 +913,11 @@ pub async fn cost_currency_by_slug(
                 before: row.current_amount,
                 after,
             }
-            .json("api.cost"),
+            .json(
+                context.and_then(|context| context.reason),
+                context.and_then(|context| context.puzzle_id),
+                context.and_then(|context| context.puzzle_title),
+            ),
             ..Default::default()
         },
     )
@@ -914,6 +932,7 @@ pub async fn add_currency(
     team_id: i32,
     currency_id: i32,
     delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<i64>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
     let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
@@ -936,6 +955,7 @@ pub async fn add_currency(
     .execute(&mut *tx)
     .await?;
 
+    let context = context.as_ref();
     db::event_log::insert_tx(
         &mut tx,
         db::event_log::EventLogInput {
@@ -954,7 +974,11 @@ pub async fn add_currency(
                 before: row.current_amount,
                 after: stored_amount,
             }
-            .json("api.add"),
+            .json(
+                context.and_then(|context| context.reason),
+                context.and_then(|context| context.puzzle_id),
+                context.and_then(|context| context.puzzle_title),
+            ),
             ..Default::default()
         },
     )
@@ -970,6 +994,7 @@ pub async fn add_currency_by_slug(
     game_id: i32,
     slug: &str,
     delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<i64>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
     let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
@@ -997,6 +1022,7 @@ pub async fn add_currency_by_slug(
     .execute(&mut *tx)
     .await?;
 
+    let context = context.as_ref();
     db::event_log::insert_tx(
         &mut tx,
         db::event_log::EventLogInput {
@@ -1015,7 +1041,11 @@ pub async fn add_currency_by_slug(
                 before: row.current_amount,
                 after: stored_amount,
             }
-            .json("api.add"),
+            .json(
+                context.and_then(|context| context.reason),
+                context.and_then(|context| context.puzzle_id),
+                context.and_then(|context| context.puzzle_title),
+            ),
             ..Default::default()
         },
     )

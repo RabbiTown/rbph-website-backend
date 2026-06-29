@@ -17,10 +17,6 @@ pub struct RbGame {
     pub cover: Option<String>,
     pub is_shown: bool,
     pub is_online: bool,
-    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
-    pub reg_open_at: Option<OffsetDateTime>,
-    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
-    pub pre_open_at: Option<OffsetDateTime>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub start_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]

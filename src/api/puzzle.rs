@@ -120,9 +120,14 @@ async fn judge_puzzle(
                 "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
+                JOIN rb_game g ON g.id = p.game_id
+                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
                 WHERE p.id = ANY($1)
+                    AND tp.state >= 0
+                    AND COALESCE(p.release_at, g.start_at) <= NOW()
                 ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
-                &unlocks
+                &unlocks,
+                team_id
             )
             .fetch_all(&app.db)
             .await

@@ -54,6 +54,7 @@ pub async fn list_all_for_team(
         FROM rb_announcement a
         JOIN rb_team t ON t.id = $1
         LEFT JOIN rb_puzzle p ON p.id = a.puzzle_id
+        LEFT JOIN rb_game g ON g.id = p.game_id
         LEFT JOIN rb_round r ON r.id = p.round_id
         WHERE a.is_shown
             AND (a.game_id IS NULL OR a.game_id = t.game_id)
@@ -63,6 +64,7 @@ pub async fn list_all_for_team(
                 WHERE tp.team_id = t.id
                     AND tp.state >= 0
                     AND tp.puzzle_id = a.puzzle_id
+                    AND COALESCE(p.release_at, g.start_at) <= NOW()
             ))
         ORDER BY a.is_pinned DESC, utime_at DESC",
         team_id

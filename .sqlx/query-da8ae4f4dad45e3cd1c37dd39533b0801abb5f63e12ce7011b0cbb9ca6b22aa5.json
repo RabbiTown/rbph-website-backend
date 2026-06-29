@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        ORDER BY r.game_id, r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -65,27 +65,34 @@
       },
       {
         "ordinal": 12,
+        "name": "release_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ticket_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Int4"
+      ]
     },
     "nullable": [
       false,
@@ -100,11 +107,12 @@
       false,
       true,
       false,
+      true,
       false,
       false,
       false,
       false
     ]
   },
-  "hash": "a8a704e18905d3351b418ec0b330706dad73efd4de770810f431f74dafcb210e"
+  "hash": "da8ae4f4dad45e3cd1c37dd39533b0801abb5f63e12ce7011b0cbb9ca6b22aa5"
 }

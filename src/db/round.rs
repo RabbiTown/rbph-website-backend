@@ -60,7 +60,9 @@ pub async fn get_round_state(
         "SELECT EXISTS (
             SELECT 1 FROM rb_team_puzzle tp
             JOIN rb_puzzle p ON p.id = tp.puzzle_id AND p.round_id = $2
+            JOIN rb_game g ON g.id = p.game_id
             WHERE tp.team_id = $1 AND tp.state >= 0
+                AND COALESCE(p.release_at, g.start_at) <= NOW()
         );",
         team_id,
         round_id
@@ -187,12 +189,14 @@ pub async fn get_state_for_team(
         "SELECT p.id, p.slug, p.title, tp.state AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
         FROM rb_puzzle p
+        JOIN rb_game g ON g.id = p.game_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
         LEFT JOIN rb_submission s ON s.puzzle_id = p.id
             AND s.team_id = tp.team_id
             AND (s.saction = 1 OR s.saction = 5)
             AND s.real_answer IS NOT NULL
         WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.state >= 0
+            AND COALESCE(p.release_at, g.start_at) <= NOW()
             AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)
         GROUP BY p.id, p.slug, p.title, p.sort, tp.state
         ORDER BY p.sort, p.id;",
@@ -210,6 +214,7 @@ pub async fn get_state_for_team(
         FROM rb_team_puzzle tp
         JOIN rb_round r ON r.id = $2
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        JOIN rb_game g ON g.id = p.game_id
         LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
             AND fs.team_id = tp.team_id
             AND fs.saction = 0
@@ -218,6 +223,8 @@ pub async fn get_state_for_team(
             AND s.team_id = tp.team_id
             AND s.saction = 1
         WHERE tp.team_id = $1 AND tp.puzzle_id = r.puzzle
+            AND tp.state >= 0
+            AND COALESCE(p.release_at, g.start_at) <= NOW()
         GROUP BY tp.ctime_at, tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         round_id
@@ -238,6 +245,32 @@ pub async fn get_state_for_team(
     })
 }
 
+async fn get_state_cache_ttl(
+    db_pool: &DbPool,
+    team_id: i32,
+    round_id: i32,
+) -> Result<u64, RbInternalError> {
+    let seconds = sqlx::query_scalar!(
+        "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(COALESCE(p.release_at, g.start_at)) - NOW())))::BIGINT
+        FROM rb_puzzle p
+        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
+            AND tp.team_id = $1
+            AND tp.state >= 0
+        WHERE p.round_id = $2
+            AND COALESCE(p.release_at, g.start_at) > NOW();",
+        team_id,
+        round_id
+    )
+    .fetch_one(db_pool)
+    .await?;
+
+    Ok(seconds
+        .and_then(|seconds| u64::try_from(seconds).ok())
+        .map(|seconds| seconds.clamp(1, 60 * 60))
+        .unwrap_or(60 * 60))
+}
+
 pub async fn get_state_for_team_str(
     db_pool: &DbPool,
     kv_pool: &KvPool,
@@ -253,12 +286,13 @@ pub async fn get_state_for_team_str(
 
     let result = get_state_for_team(db_pool, team_id, round_id).await?;
     let result = serde_json::to_string(&result)?;
+    let ttl = get_state_cache_ttl(db_pool, team_id, round_id).await?;
 
     let kv_pool = kv_pool.clone();
     let result_clone = result.clone();
     tokio::spawn(async move {
         let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, 60 * 60).await;
+        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, ttl).await;
     });
 
     Ok(result)
@@ -299,9 +333,11 @@ pub async fn get_simple_list_for_team(
         WHERE r.game_id = $1
         AND EXISTS (
             SELECT 1 FROM rb_puzzle p
+            JOIN rb_game g ON g.id = p.game_id
             JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
                 AND tp.team_id = $2 AND tp.state >= 0
             WHERE p.round_id = r.id
+                AND COALESCE(p.release_at, g.start_at) <= NOW()
         )
         ORDER BY r.sort, r.id;",
         game_id,

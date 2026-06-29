@@ -1,8 +1,8 @@
 -- game
 
-INSERT INTO rb_game (id, title, cover, is_shown, is_online, reg_open_at, pre_open_at, start_at, end_at, settings)
+INSERT INTO rb_game (id, title, cover, is_shown, is_online, start_at, end_at, settings)
 VALUES (1, 'RBPH Test Game', '', TRUE, TRUE,
-        '2025-11-01 20:00:00+08', '2025-11-08 19:00:00+08', '2025-11-08 20:00:00+08', '2025-11-20 20:00:00+08', '{"team":{"max_members":6}}');
+        '2025-11-08 20:00:00+08', '2025-11-20 20:00:00+08', '{"team":{"max_members":6}}');
 
 SELECT setval('rb_game_id_seq', 100);
 
@@ -18,10 +18,10 @@ SELECT setval('rb_round_id_seq', 100);
 
 -- puzzle
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, release_at, round_id)
 VALUES (1, '序幕', 0, E'', 0,
         '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"bili20fans","action":"easter_egg","result":"我的 B 站 20 粉丝啦，哇！"}]',
-        '[{"type":1,"args":[10]}]', NULL, 'default', 1);
+        '[{"type":1,"args":[10]}]', NULL, 'default', '2025-11-08 19:00:00+08', 1);
 
 INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
 VALUES (2, '命名毋以讹传之', 0, E'::align{textAlign="center"}\n*只有起错的名字，没有叫错的外号。*\n::\n\n题目内容略。', 0,

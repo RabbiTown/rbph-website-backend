@@ -385,6 +385,7 @@ async fn edit(
             .http_err();
     };
     invalidate_puzzle_cache(&app, puzzle.game_id, path.puzzle_id).await;
+    invalidate_puzzle_team_state_cache(&app, path.puzzle_id).await;
     invalidate_round_state_cache(&app, puzzle.round_id).await;
     if let Some(previous) = previous
         && previous.round_id != puzzle.round_id

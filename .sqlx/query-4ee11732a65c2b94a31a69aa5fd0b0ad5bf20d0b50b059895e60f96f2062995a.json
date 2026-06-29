@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id, r.slug, r.title\n        FROM rb_round r\n        WHERE r.game_id = $1\n        AND EXISTS (\n            SELECT 1 FROM rb_puzzle p\n            JOIN rb_game g ON g.id = p.game_id\n            JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id\n                AND tp.team_id = $2 AND tp.state >= 0\n            WHERE p.round_id = r.id\n                AND COALESCE(p.release_at, g.start_at) <= NOW()\n        )\n        ORDER BY r.sort, r.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "4ee11732a65c2b94a31a69aa5fd0b0ad5bf20d0b50b059895e60f96f2062995a"
+}

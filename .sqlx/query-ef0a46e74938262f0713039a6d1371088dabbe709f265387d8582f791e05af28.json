@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tp.state >= 0 AND COALESCE(p.release_at, g.start_at) <= NOW() AS \"access!\"\n        FROM rb_team_puzzle tp\n        JOIN rb_puzzle p ON p.id = tp.puzzle_id\n        JOIN rb_game g ON g.id = p.game_id\n        WHERE tp.team_id = $1 AND tp.puzzle_id = $2\n        FOR UPDATE OF tp;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ef0a46e74938262f0713039a6d1371088dabbe709f265387d8582f791e05af28"
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug\n                FROM rb_puzzle p\n                JOIN rb_round r ON r.id = p.round_id\n                WHERE p.id = ANY($1)\n                ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
+  "query": "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug\n                FROM rb_puzzle p\n                JOIN rb_round r ON r.id = p.round_id\n                JOIN rb_game g ON g.id = p.game_id\n                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2\n                WHERE p.id = ANY($1)\n                    AND tp.state >= 0\n                    AND COALESCE(p.release_at, g.start_at) <= NOW()\n                ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
   "describe": {
     "columns": [
       {
@@ -31,7 +31,8 @@
     ],
     "parameters": {
       "Left": [
-        "Int4Array"
+        "Int4Array",
+        "Int4"
       ]
     },
     "nullable": [
@@ -42,5 +43,5 @@
       true
     ]
   },
-  "hash": "61d7aef77f7f786760bbfacf0e04e660ca60a36111553f74039bef3b32f63411"
+  "hash": "e36325a31fae292621ee426f9c5f1db09e2767601ca99fa0938e6e8e6da90547"
 }

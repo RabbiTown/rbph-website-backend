@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT h.id,\n            CASE\n                WHEN h.title_hidden\n                    AND NOW() < tp.ctime_at + (h.cooldown * INTERVAL '1 second')\n                THEN NULL\n                ELSE h.title\n            END AS \"title?\",\n            h.title_hidden,\n            h.cooldown, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1\n        WHERE p.id = $2\n        ORDER BY h.sort, h.id;",
+  "query": "SELECT h.id,\n            CASE\n                WHEN h.title_hidden\n                    AND NOW() < tp.ctime_at + (h.cooldown * INTERVAL '1 second')\n                THEN NULL\n                ELSE h.title\n            END AS \"title?\",\n            h.title_hidden,\n            h.cooldown, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_game g ON g.id = p.game_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1\n        WHERE p.id = $2 AND tp.state >= 0 AND COALESCE(p.release_at, g.start_at) <= NOW()\n        ORDER BY h.sort, h.id;",
   "describe": {
     "columns": [
       {
@@ -49,5 +49,5 @@
       false
     ]
   },
-  "hash": "47cca65d4cbd9cfeb7bb2fb84ecf3ebe416c6864ab1d29c44ad0c8c04a5ef28d"
+  "hash": "b317be8cd3089e876756b0b3ba033de6cea7aed8865685f945f53fbdf6a6db4b"
 }

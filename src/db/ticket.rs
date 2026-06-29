@@ -1442,11 +1442,14 @@ pub async fn open_puzzle_ticket(
             EXISTS (
                 SELECT 1 FROM rb_team_puzzle tp
                 WHERE tp.puzzle_id = p.id AND tp.team_id = $1
+                    AND tp.state >= 0
                     AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS cooldown_ready
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        WHERE p.id = $2;",
+        JOIN rb_game g ON g.id = p.game_id
+        WHERE p.id = $2
+            AND COALESCE(p.release_at, g.start_at) <= NOW();",
         team_id,
         puzzle_id
     )
@@ -1577,19 +1580,28 @@ pub async fn get_team_puzzle_tickets(
         "SELECT
             (SELECT p.ticket_enabled
                 FROM rb_puzzle p
-                WHERE p.id = $2
+                JOIN rb_game g ON g.id = p.game_id
+                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
+                WHERE p.id = $2 AND tp.state >= 0
+                    AND COALESCE(p.release_at, g.start_at) <= NOW()
             ) AS ticket_enabled,
             EXISTS (
                 SELECT 1 FROM rb_puzzle p
+                JOIN rb_game g ON g.id = p.game_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND p.ticket_enabled
+                    AND tp.state >= 0
+                    AND COALESCE(p.release_at, g.start_at) <= NOW()
                     AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS ready,
             (
                 SELECT tp.ctime_at + (p.ticket_cooldown * INTERVAL '1 second')
                 FROM rb_puzzle p
+                JOIN rb_game g ON g.id = p.game_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND p.ticket_enabled
+                    AND tp.state >= 0
+                    AND COALESCE(p.release_at, g.start_at) <= NOW()
             ) AS cooldown_till;",
         team_id,
         puzzle_id

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, title, reg_open_at, pre_open_at, start_at, end_at, cover\n        FROM rb_game WHERE id = $1;",
+  "query": "SELECT id, title, start_at, end_at, cover\n        FROM rb_game WHERE id = $1;",
   "describe": {
     "columns": [
       {
@@ -15,26 +15,16 @@
       },
       {
         "ordinal": 2,
-        "name": "reg_open_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 3,
-        "name": "pre_open_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 4,
         "name": "start_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 5,
+        "ordinal": 3,
         "name": "end_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 4,
         "name": "cover",
         "type_info": "Text"
       }
@@ -47,12 +37,10 @@
     "nullable": [
       false,
       false,
-      true,
-      true,
       false,
       false,
       true
     ]
   },
-  "hash": "b7ad002a5c620ddaacd5a1f728df6945afc6282fbcffeb96a94805d0efa06ffa"
+  "hash": "8a79cf7c1b3196092617baef78c042c6ab058f1ceb44a4db7971c130d9a016be"
 }

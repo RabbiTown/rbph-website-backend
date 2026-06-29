@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.ticket_enabled, p.title AS puzzle_title, p.round_id, r.game_id,\n            EXISTS (\n                SELECT 1 FROM rb_team_puzzle tp\n                WHERE tp.puzzle_id = p.id AND tp.team_id = $1\n                    AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')\n            ) AS cooldown_ready\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE p.id = $2;",
+  "query": "SELECT p.ticket_enabled, p.title AS puzzle_title, p.round_id, r.game_id,\n            EXISTS (\n                SELECT 1 FROM rb_team_puzzle tp\n                WHERE tp.puzzle_id = p.id AND tp.team_id = $1\n                    AND tp.state >= 0\n                    AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')\n            ) AS cooldown_ready\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_game g ON g.id = p.game_id\n        WHERE p.id = $2\n            AND COALESCE(p.release_at, g.start_at) <= NOW();",
   "describe": {
     "columns": [
       {
@@ -43,5 +43,5 @@
       null
     ]
   },
-  "hash": "8cff46e879030047b611f24b2c93e939bd9c11bed5528652c256b9380d29d50a"
+  "hash": "0ceda86936674f9e59c530d9b6750c7b0b84f6855598fed0b21f3d52723110ab"
 }

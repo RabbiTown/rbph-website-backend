@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n            SELECT 1\n            FROM rb_team_puzzle tp\n            JOIN rb_puzzle p ON p.id = tp.puzzle_id\n            JOIN rb_game g ON g.id = p.game_id\n            WHERE tp.team_id = $1\n                AND tp.puzzle_id = $2\n                AND tp.state >= 0\n                AND COALESCE(p.release_at, g.start_at) <= NOW()\n        );",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b06b50e348ee5fd04ec29a10893b22392a58a132cbc157cf363f04d0c2f3d21f"
+}

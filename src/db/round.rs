@@ -207,7 +207,8 @@ pub async fn get_state_for_team(
     .await?;
 
     let row = sqlx::query!(
-        "SELECT tp.ctime_at AS utime_at, tp.state, tp.cooldown_till,
+        "SELECT GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) AS \"utime_at!\",
+                tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
                 COUNT(DISTINCT fs.id) AS submit_count,
                 ARRAY_AGG(DISTINCT s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
@@ -225,7 +226,8 @@ pub async fn get_state_for_team(
         WHERE tp.team_id = $1 AND tp.puzzle_id = r.puzzle
             AND tp.state >= 0
             AND COALESCE(p.release_at, g.start_at) <= NOW()
-        GROUP BY tp.ctime_at, tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
+        GROUP BY GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)),
+            tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         round_id
     )

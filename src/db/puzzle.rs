@@ -304,12 +304,14 @@ pub async fn get_puzzle_team_state(
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleTeamStateShowData>, RbInternalError> {
     let row = sqlx::query!(
-        "SELECT tp.ctime_at AS utime_at, tp.state, tp.cooldown_till,
+        "SELECT GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) AS \"utime_at!\",
+                tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
                 COUNT(DISTINCT fs.id) AS submit_count,
                 ARRAY_AGG(DISTINCT s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        JOIN rb_game g ON g.id = p.game_id
         LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
             AND fs.team_id = tp.team_id
             AND fs.saction = 0
@@ -318,7 +320,10 @@ pub async fn get_puzzle_team_state(
             AND s.team_id = tp.team_id
             AND s.saction = 1
         WHERE tp.team_id = $1 AND tp.puzzle_id = $2
-        GROUP BY tp.ctime_at, tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
+            AND tp.state >= 0
+            AND COALESCE(p.release_at, g.start_at) <= NOW()
+        GROUP BY GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)),
+            tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         puzzle_id
     )
@@ -1668,7 +1673,7 @@ pub async fn get_hints_show_for_team(
         "SELECT h.id,
             CASE
                 WHEN h.title_hidden
-                    AND NOW() < tp.ctime_at + (h.cooldown * INTERVAL '1 second')
+                    AND NOW() < GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (h.cooldown * INTERVAL '1 second')
                 THEN NULL
                 ELSE h.title
             END AS \"title?\",
@@ -1749,7 +1754,7 @@ pub async fn sync_due_hints(
     let _ = get_hints_view_for_team(db_pool, team_id, puzzle_id).await?;
 
     let next_unlock_at = sqlx::query!(
-        "SELECT MIN(tp.ctime_at + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
+        "SELECT MIN(GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_game g ON g.id = p.game_id
@@ -1758,7 +1763,7 @@ pub async fn sync_due_hints(
             AND tp.state >= 0
             AND COALESCE(p.release_at, g.start_at) <= NOW()
             AND h.title_hidden
-            AND tp.ctime_at + (h.cooldown * INTERVAL '1 second') > NOW();",
+            AND GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (h.cooldown * INTERVAL '1 second') > NOW();",
         team_id,
         puzzle_id
     )
@@ -1796,7 +1801,7 @@ pub async fn purchase_hint(
         WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
             AND COALESCE(p.release_at, g.start_at) <= NOW()
             AND NOT COALESCE(th.unlocked, FALSE)
-            AND tp.ctime_at <= NOW() - (h.cooldown * INTERVAL '1 second');",
+            AND GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) <= NOW() - (h.cooldown * INTERVAL '1 second');",
         user_id,
         hint_id
     )

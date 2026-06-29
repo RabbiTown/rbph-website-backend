@@ -1441,9 +1441,11 @@ pub async fn open_puzzle_ticket(
         "SELECT p.ticket_enabled, p.title AS puzzle_title, p.round_id, r.game_id,
             EXISTS (
                 SELECT 1 FROM rb_team_puzzle tp
+                JOIN rb_puzzle sp ON sp.id = tp.puzzle_id
+                JOIN rb_game sg ON sg.id = sp.game_id
                 WHERE tp.puzzle_id = p.id AND tp.team_id = $1
                     AND tp.state >= 0
-                    AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
+                    AND GREATEST(tp.ctime_at, COALESCE(sp.release_at, sg.start_at)) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS cooldown_ready
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -1592,10 +1594,10 @@ pub async fn get_team_puzzle_tickets(
                 WHERE p.id = $2 AND p.ticket_enabled
                     AND tp.state >= 0
                     AND COALESCE(p.release_at, g.start_at) <= NOW()
-                    AND tp.ctime_at <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
+                    AND GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS ready,
             (
-                SELECT tp.ctime_at + (p.ticket_cooldown * INTERVAL '1 second')
+                SELECT GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (p.ticket_cooldown * INTERVAL '1 second')
                 FROM rb_puzzle p
                 JOIN rb_game g ON g.id = p.game_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1

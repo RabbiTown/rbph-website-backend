@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_release_phase (\n            game_id, title, description, content_type, release_at, visibility\n        ) SELECT id, $2, $3, $4, $5, $6 FROM rb_game WHERE id = $1\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Timestamptz",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f2f660229d924e909b9a192ba1e1270497484a249f409f7904c1098fba5d022c"
+}

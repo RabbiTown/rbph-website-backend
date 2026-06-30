@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.id,\n            CASE\n                WHEN h.title_hidden\n                    AND NOW() < GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')\n                THEN NULL\n                ELSE h.title\n            END AS \"title?\",\n            h.title_hidden,\n            h.cooldown, h.cost_id, h.cost_amount\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_release_phase rp ON rp.id = p.release_phase_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1\n        WHERE p.id = $2 AND tp.state >= 0 AND rp.release_at <= NOW()\n        ORDER BY h.sort, h.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "b6291be33260ac5368d0941e9d0a299acb7a678bc99e4472c03eae20570ba712"
+}

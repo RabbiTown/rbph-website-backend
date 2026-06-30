@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_release_phase rp\n        SET title = COALESCE($3, rp.title), description = COALESCE($4, rp.description),\n            content_type = COALESCE($5, rp.content_type),\n            release_at = COALESCE($6, rp.release_at), visibility = COALESCE($7, rp.visibility)\n        WHERE rp.game_id = $1 AND rp.id = $2\n        RETURNING rp.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Timestamptz",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d504db241595a5ed9754a3789eecb10cff0184c5d494899a2986d31e3fbf0d0c"
+}

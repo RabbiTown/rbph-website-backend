@@ -1,10 +1,31 @@
 -- game
 
-INSERT INTO rb_game (id, title, cover, is_shown, is_online, start_at, end_at, settings)
-VALUES (1, 'RBPH Test Game', '', TRUE, TRUE,
-        '2025-11-08 20:00:00+08', '2025-11-20 20:00:00+08', '{"team":{"max_members":6}}');
+INSERT INTO rb_game (id, title, cover, is_shown, is_online, settings)
+VALUES (1, 'RBPH Test Game', '', TRUE, TRUE, '{"team":{"max_members":6}}');
 
 SELECT setval('rb_game_id_seq', 100);
+
+-- release phase
+
+INSERT INTO rb_release_phase (id, game_id, title, description, content_type, release_at, visibility)
+VALUES (1, 1, '开放组队', '现在可以创建或加入队伍。', 0, '2025-11-08 19:00:00+08', 1);
+
+INSERT INTO rb_release_phase (id, game_id, title, description, content_type, release_at, visibility)
+VALUES (2, 1, '比赛开始', '比赛正式开始，祝各位玩得开心。', 0, '2025-11-08 20:00:00+08', 1);
+
+INSERT INTO rb_release_phase (id, game_id, title, description, content_type, release_at, visibility)
+VALUES (3, 1, '隐藏阶段', '新的谜题已经开放。', 0, '2025-11-09 20:00:00+08', 0);
+
+INSERT INTO rb_release_phase (id, game_id, title, description, content_type, release_at, visibility)
+VALUES (4, 1, '纪念时刻', '这是一个没有附加行为的阶段。', 0, '2025-11-10 20:00:00+08', 1);
+
+INSERT INTO rb_game_feature (game_id, feature_type, state)
+VALUES (1, 0, 0), (1, 1, 2), (1, 2, 2), (1, 3, 0);
+
+INSERT INTO rb_release_phase_feature_change (phase_id, game_id, feature_type, target_state)
+VALUES (1, 1, 0, 1), (4, 1, 1, 1), (4, 1, 2, 1), (4, 1, 3, 1);
+
+SELECT setval('rb_release_phase_id_seq', 100);
 
 -- round
 
@@ -18,25 +39,25 @@ SELECT setval('rb_round_id_seq', 100);
 
 -- puzzle
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, release_at, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, release_phase_id, round_id)
 VALUES (1, '序幕', 0, E'', 0,
         '[{"type":"exact","text":"START","action":"start_game"},{"type":"exact","text":"bili20fans","action":"easter_egg","result":"我的 B 站 20 粉丝啦，哇！"}]',
-        '[{"type":1,"args":[10]}]', NULL, 'default', '2025-11-08 19:00:00+08', 1);
+        '[{"type":1,"args":[10]}]', NULL, 'default', 1, 1);
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, release_phase_id, round_id)
 VALUES (2, '命名毋以讹传之', 0, E'::align{textAlign="center"}\n*只有起错的名字，没有叫错的外号。*\n::\n\n题目内容略。', 0,
         '[{"type":"exact","text":"ORME SHOE","action":"correct"}]',
-        '[{"type":2,"args":[10]}]', NULL, '(game-started)', 1);
+        '[{"type":2,"args":[10]}]', NULL, '(game-started)', 2, 1);
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, release_phase_id, round_id)
 VALUES (3, '只说明书', 0, E'::align{textAlign="center"}\n*不讲暗话，只说明书。*\n::\n\n题目内容略，请提交「MILESTONE」。', 0,
         '[{"type":"exact","text":"MILESTONE","action":"milestone","result":"本题答案是【BRUSH】"},{"type":"exact","text":"BRUSH","action":"correct"}]',
-        '[{"type":1,"args":[10]},{"type":3,"args":[1,10]}]', 20, '(game-started)', 1);
+        '[{"type":1,"args":[10]},{"type":3,"args":[1,10]}]', 20, '(game-started)', 2, 1);
 
-INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, round_id)
+INSERT INTO rb_puzzle (id, title, ptype, content, content_type, judge, penalty, max_submit, unlock_cond, release_phase_id, round_id)
 VALUES (4, '最终谜题', 0, E'::align{textAlign="center"}\n*最终谜题*\n::\n\n题目内容略。', 0,
         '[{"type":"exact","text":"FINAL ANSWER","action":"finish_game"}]',
-        '[{"type":1,"args":[10]}]', 20, '(ge (solved-count (round 1)) 2)', 2);
+        '[{"type":1,"args":[10]}]', 20, '(ge (solved-count (round 1)) 2)', 3, 2);
 
 SELECT setval('rb_puzzle_id_seq', 100);
 

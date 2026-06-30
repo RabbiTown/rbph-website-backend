@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_release_phase rp\n        WHERE rp.game_id = $1 AND rp.id = $2\n            AND NOT EXISTS (SELECT 1 FROM rb_puzzle p WHERE p.release_phase_id = rp.id);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "765b17e730d52483de07a6cf897f1e931ab23385b8affd7d4ac050b2c4d55d8a"
+}

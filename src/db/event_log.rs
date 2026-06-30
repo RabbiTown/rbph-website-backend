@@ -164,20 +164,20 @@ pub async fn list_team_activity(
             ) AS "data!",
             CASE
                 WHEN p.id IS NULL THEN el.ctime_at
-                ELSE GREATEST(el.ctime_at, COALESCE(p.release_at, g.start_at))
+                ELSE GREATEST(el.ctime_at, rp.release_at)
             END AS "ctime_at!"
         FROM rb_event_log el
         LEFT JOIN rb_user u ON u.id = el.user_id
         LEFT JOIN rb_user tu ON tu.id = el.target_user_id
         LEFT JOIN rb_puzzle p ON p.id = el.puzzle_id
-        LEFT JOIN rb_game g ON g.id = p.game_id
+        LEFT JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         WHERE el.team_id = $1
             AND el.event_scope = $2
             AND (
                 ($3::INT IS NULL AND el.event_type != 'currency.penalty')
                 OR ($3::INT IS NOT NULL AND el.currency_id = $3)
             )
-            AND (p.id IS NULL OR COALESCE(p.release_at, g.start_at) <= NOW())
+            AND (p.id IS NULL OR rp.release_at <= NOW())
             AND ($4::BIGINT IS NULL OR el.id < $4)
         ORDER BY el.id DESC
         LIMIT $5;"#,

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_game_feature_history (\n            game_id, feature_type, old_state, new_state, phase_id, actor_id, effective_at\n        ) VALUES ($1, $2, $3, $4, $5, $6, $7);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aa29e6ad9e9cccba242704b4313c9b2812a3daea27ed4b809c4c0a23e2a101f8"
+}

@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rp.id, rp.game_id, rp.title, rp.description,\n            rp.content_type AS \"content_type: RbContentType\", rp.release_at, rp.visibility,\n            COUNT(p.id) AS \"puzzle_count!\", (re.id IS NOT NULL) AS \"released!\"\n        FROM rb_release_phase rp\n        LEFT JOIN rb_release_event re ON re.phase_id = rp.id\n        LEFT JOIN rb_puzzle p ON p.release_phase_id = rp.id\n        WHERE rp.game_id = $1\n        GROUP BY rp.id, re.id\n        ORDER BY rp.release_at, rp.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "content_type: RbContentType",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "release_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "visibility",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "puzzle_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "released!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "6ef01a8986c14b2c34c23e55f0458d5569c248770a2d60e7bb1de930a59f2102"
+}

@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, title, cover, is_shown, is_online,\n            settings AS \"settings: RbGameSettings\", ctime_at\n        FROM rb_game WHERE id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "is_shown",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_online",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "settings: RbGameSettings",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1f7b4b708c48d3f63ffe85531abb17a0e1fa9bd8f3bcafa774870c70c627a330"
+}

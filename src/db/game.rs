@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::{QueryBuilder, prelude::FromRow};
-use time::OffsetDateTime;
 
 use crate::{
     DbPool,
@@ -21,10 +20,6 @@ pub struct RbGameCreateData {
     pub is_shown: bool,
     #[serde(default)]
     pub is_online: bool,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub start_at: OffsetDateTime,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub end_at: OffsetDateTime,
     pub settings: Option<Value>,
 }
 
@@ -38,16 +33,6 @@ pub struct RbGameUpdateData {
     pub cover: Option<Option<String>>,
     pub is_shown: Option<bool>,
     pub is_online: Option<bool>,
-    #[serde(
-        default,
-        with = "crate::serde_helpers::serialize_option_offset_datetime"
-    )]
-    pub start_at: Option<OffsetDateTime>,
-    #[serde(
-        default,
-        with = "crate::serde_helpers::serialize_option_offset_datetime"
-    )]
-    pub end_at: Option<OffsetDateTime>,
     pub settings: Option<Value>,
 }
 
@@ -135,10 +120,6 @@ pub async fn exists(
 pub struct RbGameShowData {
     pub id: i32,
     pub title: String,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub start_at: OffsetDateTime,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub end_at: OffsetDateTime,
     pub cover: Option<String>,
 }
 
@@ -148,8 +129,7 @@ pub async fn get_by_id(
 ) -> Result<Option<RbGameShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbGameShowData,
-        "SELECT id, title, start_at, end_at, cover
-        FROM rb_game WHERE id = $1;",
+        "SELECT id, title, cover FROM rb_game WHERE id = $1;",
         game_id
     )
     .fetch_optional(pool)
@@ -165,7 +145,6 @@ pub async fn get_full_by_id(
     let result = sqlx::query_as!(
         RbGame,
         "SELECT id, title, cover, is_shown, is_online,
-            start_at, end_at,
             settings AS \"settings: RbGameSettings\", ctime_at
         FROM rb_game WHERE id = $1;",
         game_id
@@ -337,28 +316,27 @@ pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, Rb
         patch,
     )));
 
-    let result = sqlx::query_as!(
-        RbGame,
-        "INSERT INTO rb_game (
-            title, cover, is_shown, is_online,
-            start_at, end_at, settings
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, title, cover, is_shown, is_online,
-            start_at, end_at,
-            settings AS \"settings: RbGameSettings\", ctime_at;",
+    let mut tx = pool.begin().await?;
+    let game_id = sqlx::query_scalar!(
+        "INSERT INTO rb_game (title, cover, is_shown, is_online, settings)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id;",
         data.title,
         data.cover,
         data.is_shown,
         data.is_online,
-        data.start_at,
-        data.end_at,
         settings
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    Ok(result)
+    db::feature::initialize_game_tx(&mut tx, game_id).await?;
+
+    tx.commit().await?;
+
+    get_full_by_id(pool, game_id)
+        .await?
+        .ok_or_else(|| "Created game not found".into())
 }
 
 pub async fn update(
@@ -366,12 +344,13 @@ pub async fn update(
     game_id: i32,
     data: &RbGameUpdateData,
 ) -> Result<Option<RbGame>, RbInternalError> {
+    let mut tx = pool.begin().await?;
     let cover_is_set = data.cover.is_some();
     let cover = data.cover.clone().flatten();
     let settings_is_set = data.settings.is_some();
     let settings = if let Some(patch) = data.settings.clone() {
         let current = sqlx::query_scalar!("SELECT settings FROM rb_game WHERE id = $1;", game_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?;
 
         let Some(current) = current else {
@@ -385,35 +364,32 @@ pub async fn update(
         None
     };
 
-    let result = sqlx::query_as!(
-        RbGame,
+    let updated = sqlx::query_scalar!(
         "UPDATE rb_game
         SET title = COALESCE($2, title),
             cover = CASE WHEN $3 THEN $4 ELSE cover END,
             is_shown = COALESCE($5, is_shown),
             is_online = COALESCE($6, is_online),
-            start_at = COALESCE($7, start_at),
-            end_at = COALESCE($8, end_at),
-            settings = CASE WHEN $9 THEN $10 ELSE settings END
+            settings = CASE WHEN $7 THEN $8 ELSE settings END
         WHERE id = $1
-        RETURNING id, title, cover, is_shown, is_online,
-            start_at, end_at,
-            settings AS \"settings: RbGameSettings\", ctime_at;",
+        RETURNING id;",
         game_id,
         data.title,
         cover_is_set,
         cover,
         data.is_shown,
         data.is_online,
-        data.start_at,
-        data.end_at,
         settings_is_set,
         settings
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    Ok(result)
+    tx.commit().await?;
+    match updated {
+        Some(_) => get_full_by_id(pool, game_id).await,
+        None => Ok(None),
+    }
 }
 
 pub async fn list_all(
@@ -421,18 +397,21 @@ pub async fn list_all(
     only_shown: bool,
     only_online: bool,
 ) -> Result<Vec<RbGame>, RbInternalError> {
-    let mut qb = QueryBuilder::new("SELECT * FROM rb_game WHERE 1=1");
+    let mut qb = QueryBuilder::new(
+        "SELECT g.id, g.title, g.cover, g.is_shown, g.is_online,
+            g.settings, g.ctime_at FROM rb_game g WHERE 1=1",
+    );
 
     if only_shown {
-        qb.push(" AND is_shown = true");
+        qb.push(" AND g.is_shown = true");
     }
 
     if only_online {
-        qb.push(" AND is_online = true");
+        qb.push(" AND g.is_online = true");
     }
 
     let result = qb
-        .push(" ORDER BY id")
+        .push(" ORDER BY g.id")
         .build_query_as::<RbGame>()
         .fetch_all(pool)
         .await?;
@@ -445,21 +424,18 @@ pub async fn list_show(
     only_shown: bool,
     only_online: bool,
 ) -> Result<Vec<RbGameShowData>, RbInternalError> {
-    let mut qb = QueryBuilder::new(
-        "SELECT id, title, start_at, end_at, cover
-        FROM rb_game WHERE 1=1",
-    );
+    let mut qb = QueryBuilder::new("SELECT g.id, g.title, g.cover FROM rb_game g WHERE 1=1");
 
     if only_shown {
-        qb.push(" AND is_shown = true");
+        qb.push(" AND g.is_shown = true");
     }
 
     if only_online {
-        qb.push(" AND is_online = true");
+        qb.push(" AND g.is_online = true");
     }
 
     let result = qb
-        .push(" ORDER BY id")
+        .push(" ORDER BY g.id")
         .build_query_as::<RbGameShowData>()
         .fetch_all(pool)
         .await?;

@@ -81,6 +81,19 @@ impl SyncHub {
         Ok(())
     }
 
+    pub fn notify_game_release_updated(&self, game_id: i32, cursor: i64) {
+        let users = self
+            .users
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        self.push_users(
+            &users,
+            SyncMessageType::GameReleaseUpdated,
+            json!({ "game_id": game_id, "cursor": cursor }),
+        );
+    }
+
     pub async fn notify_puzzle_submitted(
         &self,
         db_pool: &DbPool,
@@ -502,6 +515,7 @@ pub struct WsEnvelope<T: Serialize> {
 pub enum SyncMessageType {
     // 100 - game
     GameNewAnnouncement = 101,
+    GameReleaseUpdated = 102,
 
     // 200 - team
     TeamInfoUpdated = 201,

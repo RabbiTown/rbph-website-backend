@@ -276,6 +276,7 @@ pub enum TicketSendBlock {
     NoAccess = -1,
     Closed = -2,
     Pending = -3,
+    FeatureClosed = -4,
 }
 
 #[derive(Serialize)]
@@ -364,6 +365,25 @@ pub enum TicketOpenBlock {
     PendingLimit = -2,
     Cooldown = -3,
     Disabled = -4,
+    FeatureClosed = -5,
+}
+
+pub async fn player_can_send_ticket(
+    db_pool: &DbPool,
+    ticket_id: i32,
+) -> Result<bool, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT COALESCE(gf.state <> 0, TRUE) AS \"allowed!\"
+        FROM rb_ticket tk
+        JOIN rb_team t ON t.id = tk.team_id
+        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
+            AND gf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END
+        WHERE tk.id = $1;",
+        ticket_id
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .unwrap_or(false))
 }
 
 #[derive(Serialize)]
@@ -584,6 +604,18 @@ pub async fn get_or_create_dm_ticket_id(
     Ok(result.id)
 }
 
+pub async fn get_dm_ticket_id(
+    db_pool: &DbPool,
+    team_id: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT id FROM rb_ticket WHERE team_id = $1 AND puzzle_id IS NULL;",
+        team_id
+    )
+    .fetch_optional(db_pool)
+    .await?)
+}
+
 pub async fn get_dm_ticket_thread(
     db_pool: &DbPool,
     team_id: i32,
@@ -598,6 +630,17 @@ pub async fn get_dm_ticket_thread(
     .fetch_optional(db_pool)
     .await?;
 
+    let feature_state = sqlx::query_scalar!(
+        "SELECT COALESCE(gf.state, 2) AS \"state!\"
+        FROM rb_team t LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
+            AND gf.feature_type = 1
+        WHERE t.id = $1;",
+        team_id
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .unwrap_or(2);
+
     let Some(ticket_id) = ticket_id else {
         return Ok(TicketThread {
             ticket: None,
@@ -607,7 +650,11 @@ pub async fn get_dm_ticket_thread(
                 can_view_locked,
                 can_use_trusted_content,
                 vec![],
-                TicketSendBlock::Ok,
+                if can_view_locked || feature_state == 2 {
+                    TicketSendBlock::Ok
+                } else {
+                    TicketSendBlock::FeatureClosed
+                },
             ),
         });
     };
@@ -621,7 +668,11 @@ pub async fn get_dm_ticket_thread(
         .as_ref()
         .map(|x| x.state)
         .unwrap_or(RbTicketState::Invalid);
-    let send_block = calc_send_block(db_pool, ticket_id, state, true, Some(3)).await?;
+    let send_block = if !can_view_locked && feature_state == 0 {
+        TicketSendBlock::FeatureClosed
+    } else {
+        calc_send_block(db_pool, ticket_id, state, true, Some(3)).await?
+    };
 
     Ok(TicketThread {
         ticket,
@@ -723,14 +774,19 @@ pub async fn get_ticket_thread(
         ticket.hide_assignee();
     }
     let messages = get_ticket_messages(db_pool, ticket_id, info.mod_access).await?;
-    let send_block = calc_send_block(
-        db_pool,
-        ticket_id,
-        ticket.state,
-        info.member_access,
-        Some(1),
-    )
-    .await?;
+    let player_can_send = player_can_send_ticket(db_pool, ticket_id).await?;
+    let send_block = if info.member_access && !info.mod_access && !player_can_send {
+        TicketSendBlock::FeatureClosed
+    } else {
+        calc_send_block(
+            db_pool,
+            ticket_id,
+            ticket.state,
+            info.member_access || info.mod_access,
+            Some(1),
+        )
+        .await?
+    };
     let currency = if info.mod_access {
         ticket.currency_ids()
     } else {
@@ -1407,6 +1463,7 @@ pub enum OpenPuzzleTicketResult {
     PendingExists,
     Cooldown,
     Disabled,
+    FeatureClosed,
 }
 
 pub async fn open_puzzle_ticket(
@@ -1442,16 +1499,16 @@ pub async fn open_puzzle_ticket(
             EXISTS (
                 SELECT 1 FROM rb_team_puzzle tp
                 JOIN rb_puzzle sp ON sp.id = tp.puzzle_id
-                JOIN rb_game sg ON sg.id = sp.game_id
+                JOIN rb_release_phase srp ON srp.id = sp.release_phase_id
                 WHERE tp.puzzle_id = p.id AND tp.team_id = $1
                     AND tp.state >= 0
-                    AND GREATEST(tp.ctime_at, COALESCE(sp.release_at, sg.start_at)) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
+                    AND GREATEST(tp.ctime_at, srp.release_at) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS cooldown_ready
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         WHERE p.id = $2
-            AND COALESCE(p.release_at, g.start_at) <= NOW();",
+            AND rp.release_at <= NOW();",
         team_id,
         puzzle_id
     )
@@ -1460,6 +1517,19 @@ pub async fn open_puzzle_ticket(
     let Some(ticket_availability) = ticket_availability else {
         return Ok(OpenPuzzleTicketResult::Disabled);
     };
+    if matches!(message.sender_type, RbTicketSenderType::Team) {
+        let state = sqlx::query_scalar!(
+            "SELECT COALESCE(state, 2) AS \"state!\" FROM rb_game_feature
+            WHERE game_id = $1 AND feature_type = 2;",
+            ticket_availability.game_id
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or(2);
+        if state != 2 {
+            return Ok(OpenPuzzleTicketResult::FeatureClosed);
+        }
+    }
     if !ticket_availability.ticket_enabled {
         return Ok(OpenPuzzleTicketResult::Disabled);
     }
@@ -1535,6 +1605,7 @@ pub async fn get_team_puzzle_tickets(
     db_pool: &DbPool,
     team_id: i32,
     puzzle_id: i32,
+    feature_exempt: bool,
 ) -> Result<TicketPuzzleList, RbInternalError> {
     let info = sqlx::query!(
         "WITH stats AS (
@@ -1582,28 +1653,28 @@ pub async fn get_team_puzzle_tickets(
         "SELECT
             (SELECT p.ticket_enabled
                 FROM rb_puzzle p
-                JOIN rb_game g ON g.id = p.game_id
+                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND tp.state >= 0
-                    AND COALESCE(p.release_at, g.start_at) <= NOW()
+                    AND rp.release_at <= NOW()
             ) AS ticket_enabled,
             EXISTS (
                 SELECT 1 FROM rb_puzzle p
-                JOIN rb_game g ON g.id = p.game_id
+                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND p.ticket_enabled
                     AND tp.state >= 0
-                    AND COALESCE(p.release_at, g.start_at) <= NOW()
-                    AND GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
+                    AND rp.release_at <= NOW()
+                    AND GREATEST(tp.ctime_at, rp.release_at) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS ready,
             (
-                SELECT GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (p.ticket_cooldown * INTERVAL '1 second')
+                SELECT GREATEST(tp.ctime_at, rp.release_at) + (p.ticket_cooldown * INTERVAL '1 second')
                 FROM rb_puzzle p
-                JOIN rb_game g ON g.id = p.game_id
+                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND p.ticket_enabled
                     AND tp.state >= 0
-                    AND COALESCE(p.release_at, g.start_at) <= NOW()
+                    AND rp.release_at <= NOW()
             ) AS cooldown_till;",
         team_id,
         puzzle_id
@@ -1611,7 +1682,20 @@ pub async fn get_team_puzzle_tickets(
     .fetch_one(db_pool)
     .await?;
 
-    let open_block = if has_current_puzzle_open {
+    let feature_open = sqlx::query_scalar!(
+        "SELECT COALESCE(gf.state = 2, TRUE) AS \"open!\"
+        FROM rb_puzzle p JOIN rb_round r ON r.id = p.round_id
+        LEFT JOIN rb_game_feature gf ON gf.game_id = r.game_id AND gf.feature_type = 2
+        WHERE p.id = $1;",
+        puzzle_id
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .unwrap_or(false);
+
+    let open_block = if !feature_exempt && !feature_open {
+        TicketOpenBlock::FeatureClosed
+    } else if has_current_puzzle_open {
         TicketOpenBlock::CurrentPuzzlePending
     } else if !cooldown.ticket_enabled.unwrap_or(false) {
         TicketOpenBlock::Disabled

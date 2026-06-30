@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_release_phase_feature_change (\n                phase_id, game_id, feature_type, target_state\n            ) VALUES ($1, $2, $3, $4);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37eb7ae47ae86752dec562de0a72ebbc03fea850ff206b1b5d9f15971ce82d9e"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(state, 2) AS \"state!\" FROM rb_game_feature\n            WHERE game_id = $1 AND feature_type = 2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c3645dc9743dfa74c1b5718c6ca6700300d5ac7c3bc7e2387e4e0131fe930bc4"
+}

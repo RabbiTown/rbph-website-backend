@@ -24,6 +24,18 @@ pub struct LeaderBoardTeamInfo {
 pub struct LeaderBoardInfo {
     pub data: Vec<LeaderBoardTeamInfo>,
     pub version: u32,
+    pub state: &'static str,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub locked_at: Option<OffsetDateTime>,
+}
+
+struct LeaderBoardTeamRow {
+    id: i32,
+    name: String,
+    bio: String,
+    finish_at: Option<OffsetDateTime>,
+    last_solved_at: Option<OffsetDateTime>,
+    solves: i64,
 }
 
 struct LeaderBoard {
@@ -32,6 +44,7 @@ struct LeaderBoard {
 
     order_dirty: bool,
     json_cache: Option<String>,
+    locked_at: Option<OffsetDateTime>,
 
     pub version: u32,
 }
@@ -69,6 +82,21 @@ impl LeaderBoardCache {
         db_pool: &DbPool,
         game_id: i32,
     ) -> Result<Vec<i32>, RbInternalError> {
+        let locked = sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT 1 FROM rb_leaderboard_lock WHERE game_id = $1) AS \"locked!\";",
+            game_id
+        )
+        .fetch_one(db_pool)
+        .await?;
+        if locked {
+            return Ok(sqlx::query_scalar!(
+                "SELECT team_id FROM rb_leaderboard_lock_team
+                WHERE game_id = $1 ORDER BY rank;",
+                game_id
+            )
+            .fetch_all(db_pool)
+            .await?);
+        }
         let result = sqlx::query_scalar!(
             "SELECT t.id
             FROM rb_team t
@@ -109,21 +137,57 @@ impl LeaderBoardCache {
         db_pool: &DbPool,
         game_id: i32,
     ) -> Result<Vec<LeaderBoardTeamInfo>, RbInternalError> {
-        let teams = sqlx::query!(
-            "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
-                COUNT(tp.puzzle_id) AS \"solves!\"
-            FROM rb_team t
-            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
-            WHERE t.game_id = $1 AND t.state > 0
-            GROUP BY t.id
-            ORDER BY t.state DESC,
-                finish_at ASC NULLS LAST,
-                \"solves!\" DESC,
-                MAX(tp.solve_at) ASC NULLS LAST;",
+        let locked = sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT 1 FROM rb_leaderboard_lock WHERE game_id = $1) AS \"locked!\";",
             game_id
         )
-        .fetch_all(db_pool)
+        .fetch_one(db_pool)
         .await?;
+        let teams: Vec<LeaderBoardTeamRow> = if locked {
+            sqlx::query!(
+                "SELECT t.id, t.name, t.bio, s.finish_at, s.last_solved_at, s.solves
+                FROM rb_leaderboard_lock_team s
+                JOIN rb_team t ON t.id = s.team_id
+                WHERE s.game_id = $1 ORDER BY s.rank;",
+                game_id
+            )
+            .fetch_all(db_pool)
+            .await?
+            .into_iter()
+            .map(|team| LeaderBoardTeamRow {
+                id: team.id,
+                name: team.name,
+                bio: team.bio,
+                finish_at: team.finish_at,
+                last_solved_at: team.last_solved_at,
+                solves: team.solves,
+            })
+            .collect()
+        } else {
+            sqlx::query!(
+                "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
+                    COUNT(tp.puzzle_id) AS \"solves!\"
+                FROM rb_team t
+                LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
+                WHERE t.game_id = $1 AND t.state > 0
+                GROUP BY t.id
+                ORDER BY t.state DESC, finish_at ASC NULLS LAST,
+                    \"solves!\" DESC, MAX(tp.solve_at) ASC NULLS LAST;",
+                game_id
+            )
+            .fetch_all(db_pool)
+            .await?
+            .into_iter()
+            .map(|team| LeaderBoardTeamRow {
+                id: team.id,
+                name: team.name,
+                bio: team.bio,
+                finish_at: team.finish_at,
+                last_solved_at: team.last_solved_at,
+                solves: team.solves,
+            })
+            .collect()
+        };
 
         let members = sqlx::query!(
             "SELECT tm.team_id, u.nickname
@@ -145,15 +209,25 @@ impl LeaderBoardCache {
         }
 
         let result = teams
-            .iter()
-            .map(|t| LeaderBoardTeamInfo {
-                id: t.id,
-                bio: t.bio.clone(),
-                name: t.name.clone(),
-                finish_at: t.finish_at,
-                last_solved_at: t.last_solved_at,
-                solves: t.solves,
-                members: team_members.get(&t.id).cloned().unwrap_or_default(),
+            .into_iter()
+            .map(|team| {
+                let LeaderBoardTeamRow {
+                    id,
+                    name,
+                    bio,
+                    finish_at,
+                    last_solved_at,
+                    solves,
+                } = team;
+                LeaderBoardTeamInfo {
+                    id,
+                    name,
+                    bio,
+                    finish_at,
+                    last_solved_at,
+                    solves,
+                    members: team_members.get(&id).cloned().unwrap_or_default(),
+                }
             })
             .collect();
 
@@ -162,6 +236,12 @@ impl LeaderBoardCache {
 
     pub async fn update_all(&self, db_pool: &DbPool, game_id: i32) -> Result<(), RbInternalError> {
         let data = self.fetch_teams(db_pool, game_id).await?;
+        let locked_at = sqlx::query_scalar!(
+            "SELECT locked_at FROM rb_leaderboard_lock WHERE game_id = $1;",
+            game_id
+        )
+        .fetch_optional(db_pool)
+        .await?;
 
         let new_order = data.iter().map(|x| x.id).collect();
         let new_teams = data.into_iter().map(|x| (x.id, x)).collect();
@@ -174,6 +254,7 @@ impl LeaderBoardCache {
                 teams: new_teams,
                 order_dirty: false,
                 json_cache: None,
+                locked_at,
                 version: 0,
             },
         );
@@ -186,6 +267,39 @@ impl LeaderBoardCache {
         db_pool: &DbPool,
         team_id: i32,
     ) -> Result<Option<(i32, LeaderBoardTeamInfo)>, RbInternalError> {
+        let locked_team = sqlx::query!(
+            "SELECT s.game_id, t.id, t.name, t.bio, s.finish_at,
+                s.last_solved_at, s.solves
+            FROM rb_leaderboard_lock_team s
+            JOIN rb_team t ON t.id = s.team_id
+            WHERE s.team_id = $1;",
+            team_id
+        )
+        .fetch_optional(db_pool)
+        .await?;
+        if let Some(team) = locked_team {
+            let members = sqlx::query_scalar!(
+                "SELECT u.nickname FROM rb_team_member tm
+                JOIN rb_user u ON u.id = tm.user_id
+                WHERE tm.team_id = $1
+                ORDER BY tm.is_captain DESC, tm.ctime_at ASC;",
+                team_id
+            )
+            .fetch_all(db_pool)
+            .await?;
+            return Ok(Some((
+                team.game_id,
+                LeaderBoardTeamInfo {
+                    id: team.id,
+                    bio: team.bio,
+                    name: team.name,
+                    finish_at: team.finish_at,
+                    last_solved_at: team.last_solved_at,
+                    solves: team.solves,
+                    members,
+                },
+            )));
+        }
         let team = sqlx::query!(
             "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,
                 COUNT(tp.puzzle_id) AS \"solves!\", t.game_id
@@ -263,6 +377,10 @@ impl LeaderBoardCache {
         Ok(())
     }
 
+    pub async fn invalidate_game(&self, game_id: i32) {
+        self.cache.write().await.remove(&game_id);
+    }
+
     // TODO : use scheduled update (5-10s maybe)
     pub async fn get_info_str(
         &self,
@@ -288,7 +406,7 @@ impl LeaderBoardCache {
         }
 
         // get json cache (R LOCK)
-        let version = {
+        let (version, locked_at) = {
             let guard = self.cache.read().await;
             let leaderboard = guard.get(&game_id).ok_or("Not Found")?;
 
@@ -296,7 +414,7 @@ impl LeaderBoardCache {
                 return Ok(Some(result.clone()));
             }
 
-            leaderboard.version
+            (leaderboard.version, leaderboard.locked_at)
         };
 
         let teams_vec: Vec<LeaderBoardTeamInfo> = {
@@ -313,6 +431,12 @@ impl LeaderBoardCache {
         let info = LeaderBoardInfo {
             data: teams_vec,
             version,
+            state: if locked_at.is_some() {
+                "locked"
+            } else {
+                "live"
+            },
+            locked_at,
         };
 
         let result = serde_json::to_string(&info)?;

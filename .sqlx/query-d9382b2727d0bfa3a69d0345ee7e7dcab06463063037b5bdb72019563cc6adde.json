@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rp.id, rp.title, rp.description,\n            rp.content_type AS \"content_type: RbContentType\", rp.release_at\n        FROM rb_release_phase rp\n        LEFT JOIN rb_release_event re ON re.phase_id = rp.id\n        WHERE rp.game_id = $1\n            AND (rp.visibility = $2 OR re.id IS NOT NULL OR rp.release_at <= NOW())\n        ORDER BY rp.release_at, rp.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "content_type: RbContentType",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "release_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d9382b2727d0bfa3a69d0345ee7e7dcab06463063037b5bdb72019563cc6adde"
+}

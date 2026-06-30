@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf\n            WHERE gf.game_id = g.id AND gf.feature_type = 0), TRUE) AS \"team_open!\"\n        FROM rb_game g WHERE g.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_open!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "258af12896b42a237ddf3610574475bcbfbe0db137ac947892c0046b94f9b897"
+}

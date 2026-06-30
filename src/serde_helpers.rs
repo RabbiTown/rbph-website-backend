@@ -98,18 +98,3 @@ where
 {
     Option::<i32>::deserialize(deserializer).map(Some)
 }
-
-pub fn deserialize_nullable_offset_datetime_patch<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<OffsetDateTime>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer)?
-        .map(|s| {
-            OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
-                .map_err(serde::de::Error::custom)
-        })
-        .transpose()
-        .map(Some)
-}

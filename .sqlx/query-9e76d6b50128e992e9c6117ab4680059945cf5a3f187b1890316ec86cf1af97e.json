@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_game_feature\n        SET state = $3, source_phase_id = $4, utime_at = $5\n        WHERE game_id = $1 AND feature_type = $2;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int2",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e76d6b50128e992e9c6117ab4680059945cf5a3f187b1890316ec86cf1af97e"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT team_id FROM rb_leaderboard_lock_team\n                WHERE game_id = $1 ORDER BY rank;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f0599b320804e9a72d367ca05c0ce1e9b2aec133e6482aa8463ef111dbff0bc"
+}

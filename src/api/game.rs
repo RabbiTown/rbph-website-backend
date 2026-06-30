@@ -101,6 +101,9 @@ struct GameAggreInfo {
     currency: Option<Vec<RbCurrencyShowData>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rounds: Option<Vec<RbRoundSimpleData>>,
+    release_cursor: i64,
+    phases: Vec<db::release::PlayerReleasePhaseData>,
+    features: std::collections::BTreeMap<db::feature::GameFeature, db::feature::GameFeatureState>,
 
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     server_time: OffsetDateTime,
@@ -111,6 +114,7 @@ async fn get_aggre_info(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let game = db::game::get_by_id(&app.db, path.game_id).await?;
     if game.is_none() {
         RbError::not_found().err()?;
@@ -131,6 +135,47 @@ async fn get_aggre_info(
         team,
         currency,
         rounds,
+        release_cursor: db::release::release_cursor(&app.db, path.game_id).await?,
+        phases: db::release::list_player(&app.db, path.game_id).await?,
+        features: db::feature::player_states(&app.db, path.game_id).await?,
+        server_time: OffsetDateTime::now_utc(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct ReleaseSyncRequest {
+    after: i64,
+}
+
+#[derive(Serialize)]
+struct ReleaseSyncResponse {
+    release_cursor: i64,
+    events: Vec<db::release::ReleaseSyncEvent>,
+    phases: Vec<db::release::PlayerReleasePhaseData>,
+    features: std::collections::BTreeMap<db::feature::GameFeature, db::feature::GameFeatureState>,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    server_time: OffsetDateTime,
+}
+
+async fn sync_releases(
+    path: web::Path<GamePathInfo>,
+    body: web::Json<ReleaseSyncRequest>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?;
+    crate::module::release::process_due_releases(app.get_ref()).await?;
+    let events =
+        db::release::sync_events(&app.db, path.game_id, team_id, body.after.max(0)).await?;
+    let release_cursor = events
+        .last()
+        .map(|event| event.id)
+        .unwrap_or(db::release::release_cursor(&app.db, path.game_id).await?);
+    Ok(HttpResponse::Ok().json(ReleaseSyncResponse {
+        release_cursor,
+        events,
+        phases: db::release::list_player(&app.db, path.game_id).await?,
+        features: db::feature::player_states(&app.db, path.game_id).await?,
         server_time: OffsetDateTime::now_utc(),
     }))
 }
@@ -179,6 +224,7 @@ async fn get_leaderboard(
     req: web::Query<LeaderBoardQuery>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let result = db::board::LEADER_BOARD_CACHE
         .get_info_str(&app.db, path.game_id, req.version)
         .await?;
@@ -247,6 +293,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
                             .default_service(web::route().to(error_handler)),
                     )
                     .route("/info", web::get().to(get_aggre_info))
+                    .route("/releases/sync", web::post().to(sync_releases))
                     .route("/rounds", web::get().to(get_rounds))
                     .route("/rounds/{round_ref}", web::get().to(get_round))
                     .route("/puzzles/{puzzle_ref}", web::get().to(get_puzzle))

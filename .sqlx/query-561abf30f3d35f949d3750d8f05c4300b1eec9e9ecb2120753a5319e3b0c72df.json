@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT feature_type, target_state\n        FROM rb_release_phase_feature_change\n        WHERE phase_id = $1 ORDER BY feature_type;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feature_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "target_state",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "561abf30f3d35f949d3750d8f05c4300b1eec9e9ecb2120753a5319e3b0c72df"
+}

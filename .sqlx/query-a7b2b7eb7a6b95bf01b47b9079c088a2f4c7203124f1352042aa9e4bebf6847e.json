@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_leaderboard_lock_team (\n            game_id, team_id, rank, solves, finish_at, last_solved_at\n        )\n        SELECT $1, ranked.id, ranked.rank::INT, ranked.solves,\n            ranked.finish_at, ranked.last_solved_at\n        FROM (\n            SELECT t.id, t.finish_at,\n                COUNT(tp.puzzle_id) AS solves,\n                MAX(tp.solve_at) AS last_solved_at,\n                ROW_NUMBER() OVER (ORDER BY t.state DESC, t.finish_at ASC NULLS LAST,\n                    COUNT(tp.puzzle_id) DESC, MAX(tp.solve_at) ASC NULLS LAST, t.id) AS rank\n            FROM rb_team t\n            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1\n            WHERE t.game_id = $1 AND t.state > 0\n            GROUP BY t.id\n        ) ranked;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a7b2b7eb7a6b95bf01b47b9079c088a2f4c7203124f1352042aa9e4bebf6847e"
+}

@@ -17,10 +17,6 @@ pub struct RbGame {
     pub cover: Option<String>,
     pub is_shown: bool,
     pub is_online: bool,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub start_at: OffsetDateTime,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub end_at: OffsetDateTime,
     pub settings: RbGameSettings,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -297,6 +293,13 @@ pub enum RbContentType {
 
     #[num_enum(default)]
     Invalid,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for RbContentType {
+    fn default() -> Self {
+        Self::Markdown
+    }
 }
 
 impl RbContentType {

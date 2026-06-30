@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_leaderboard_lock WHERE game_id = $1;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5af9653fd9eb274a705fcf100fa5f5f6aa46b6ee0c0653774898732eaba183c7"
+}

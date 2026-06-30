@@ -69,6 +69,7 @@ async fn get_ticket(
     info: TicketUserInfo,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info).await?;
     if result.is_none() {
         RbError::not_found().err()?
@@ -78,6 +79,7 @@ async fn get_ticket(
 }
 
 async fn get_dm_ticket(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let result = db::ticket::get_dm_ticket_thread(
         &app.db,
@@ -129,6 +131,7 @@ struct TicketSendRequest {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TicketSendResult {
+    FeatureClosed = -8,
     AssignedToOther = -7,
     Invalid = -6,
     BadCost = -5,
@@ -161,6 +164,7 @@ async fn do_send_ticket_message(
     app: &AppState,
     max_pending: Option<i64>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app).await?;
     let accessible = match req.sender_type {
         RbTicketSenderType::Team => info.member_access,
         RbTicketSenderType::Host => info.mod_access,
@@ -168,6 +172,12 @@ async fn do_send_ticket_message(
     };
     if !accessible {
         RbError::forbid().err()?
+    }
+
+    if matches!(req.sender_type, RbTicketSenderType::Team)
+        && !db::ticket::player_can_send_ticket(&app.db, info.ticket_id).await?
+    {
+        return RbError::conflict(TicketSendResult::FeatureClosed.into()).http_err();
     }
 
     req.validate()
@@ -240,14 +250,20 @@ async fn do_send_ticket_message(
     {
         ticket.hide_assignee();
     }
-    let send_block = db::ticket::calc_send_block(
-        &app.db,
-        info.ticket_id,
-        info.state,
-        info.member_access,
-        max_pending,
-    )
-    .await?;
+    let send_block = if info.member_access
+        && !db::ticket::player_can_send_ticket(&app.db, info.ticket_id).await?
+    {
+        db::ticket::TicketSendBlock::FeatureClosed
+    } else {
+        db::ticket::calc_send_block(
+            &app.db,
+            info.ticket_id,
+            info.state,
+            info.member_access,
+            max_pending,
+        )
+        .await?
+    };
     let currency = if info.mod_access {
         ticket
             .as_ref()
@@ -287,9 +303,27 @@ async fn send_dm_ticket_message(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    if db::ticket::get_dm_ticket_id(&app.db, team_id)
+        .await?
+        .is_none()
+    {
+        let game_id = sqlx::query_scalar!("SELECT game_id FROM rb_team WHERE id = $1;", team_id)
+            .fetch_one(&app.db)
+            .await
+            .map_err(crate::error::RbInternalError::from)?;
+        if !matches!(
+            db::feature::current_state(&app.db, game_id, db::feature::GameFeature::DirectMessage,)
+                .await?,
+            db::feature::GameFeatureState::Open
+        ) {
+            return RbError::conflict(TicketSendResult::FeatureClosed.into()).http_err();
+        }
+    }
     let ticket_id = db::ticket::get_or_create_dm_ticket_id(
         &app.db,
-        user.req_team_id()?.ok_or(RbError::forbid())?,
+        team_id,
         user.uid,
         RbTicketSenderType::Team,
     )
@@ -514,6 +548,7 @@ async fn purchase_ticket_message(
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TicketOpenResult {
+    FeatureClosed = -6,
     ContentTooLong = -5,
     BadContentType = -4,
     Cooldown = -3,
@@ -536,6 +571,7 @@ async fn open_ticket(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
 
     open_ticket_for_team(
@@ -591,6 +627,9 @@ async fn open_ticket_for_team(
         }
         db::ticket::OpenPuzzleTicketResult::Disabled => {
             RbError::conflict(TicketOpenResult::Cooldown.into()).http_err()
+        }
+        db::ticket::OpenPuzzleTicketResult::FeatureClosed => {
+            RbError::conflict(TicketOpenResult::FeatureClosed.into()).http_err()
         }
         db::ticket::OpenPuzzleTicketResult::Ok(thread) => {
             let thread = *thread;
@@ -660,7 +699,8 @@ async fn get_staff_team_puzzle_tickets(
     if !staff_puzzle_team_exists(&app, &path, &user).await? {
         return RbError::not_found().http_err();
     }
-    let result = db::ticket::get_team_puzzle_tickets(&app.db, path.team_id, path.puzzle_id).await?;
+    let result =
+        db::ticket::get_team_puzzle_tickets(&app.db, path.team_id, path.puzzle_id, true).await?;
     Ok(HttpResponse::Ok().json(result))
 }
 
@@ -691,8 +731,10 @@ async fn get_team_puzzle_tickets(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
-    let result = db::ticket::get_team_puzzle_tickets(&app.db, team_id, path.puzzle_id).await?;
+    let result =
+        db::ticket::get_team_puzzle_tickets(&app.db, team_id, path.puzzle_id, false).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

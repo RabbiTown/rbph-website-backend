@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rp.id, rp.title, rp.description,\n            rp.content_type AS \"content_type: RbContentType\", rp.release_at\n        FROM rb_release_phase rp WHERE rp.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "content_type: RbContentType",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "release_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f83453368c448127469a1911a8e38c9c42bf7c694738cb3896fe7f301d00ed3e"
+}

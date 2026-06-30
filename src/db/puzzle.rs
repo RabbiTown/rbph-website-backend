@@ -119,11 +119,11 @@ pub async fn can_team_access_puzzle(
             SELECT 1
             FROM rb_team_puzzle tp
             JOIN rb_puzzle p ON p.id = tp.puzzle_id
-            JOIN rb_game g ON g.id = p.game_id
+            JOIN rb_release_phase rp ON rp.id = p.release_phase_id
             WHERE tp.team_id = $1
                 AND tp.puzzle_id = $2
                 AND tp.state >= 0
-                AND COALESCE(p.release_at, g.start_at) <= NOW()
+                AND rp.release_at <= NOW()
         );",
         team_id,
         puzzle_id
@@ -304,14 +304,14 @@ pub async fn get_puzzle_team_state(
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleTeamStateShowData>, RbInternalError> {
     let row = sqlx::query!(
-        "SELECT GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) AS \"utime_at!\",
+        "SELECT GREATEST(tp.ctime_at, rp.release_at) AS \"utime_at!\",
                 tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
                 COUNT(DISTINCT fs.id) AS submit_count,
                 ARRAY_AGG(DISTINCT s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
             AND fs.team_id = tp.team_id
             AND fs.saction = 0
@@ -321,8 +321,8 @@ pub async fn get_puzzle_team_state(
             AND s.saction = 1
         WHERE tp.team_id = $1 AND tp.puzzle_id = $2
             AND tp.state >= 0
-            AND COALESCE(p.release_at, g.start_at) <= NOW()
-        GROUP BY GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)),
+            AND rp.release_at <= NOW()
+        GROUP BY GREATEST(tp.ctime_at, rp.release_at),
             tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         puzzle_id
@@ -817,10 +817,10 @@ pub async fn submit_answer(
     let team_id = user.req_team_id()?.ok_or("Require team_id")?;
 
     let access = sqlx::query_scalar!(
-        "SELECT tp.state >= 0 AND COALESCE(p.release_at, g.start_at) <= NOW() AS \"access!\"
+        "SELECT tp.state >= 0 AND rp.release_at <= NOW() AS \"access!\"
         FROM rb_team_puzzle tp
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         WHERE tp.team_id = $1 AND tp.puzzle_id = $2
         FOR UPDATE OF tp;",
         team_id,
@@ -1673,7 +1673,7 @@ pub async fn get_hints_show_for_team(
         "SELECT h.id,
             CASE
                 WHEN h.title_hidden
-                    AND NOW() < GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (h.cooldown * INTERVAL '1 second')
+                    AND NOW() < GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')
                 THEN NULL
                 ELSE h.title
             END AS \"title?\",
@@ -1681,9 +1681,9 @@ pub async fn get_hints_show_for_team(
             h.cooldown, h.cost_id, h.cost_amount
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
-        WHERE p.id = $2 AND tp.state >= 0 AND COALESCE(p.release_at, g.start_at) <= NOW()
+        WHERE p.id = $2 AND tp.state >= 0 AND rp.release_at <= NOW()
         ORDER BY h.sort, h.id;",
         team_id,
         puzzle_id
@@ -1713,13 +1713,13 @@ pub async fn get_hints_team_state(
         FROM rb_hint h
         JOIN rb_team_hint th ON th.hint_id = h.id
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = th.team_id
         WHERE th.team_id = $1
             AND h.puzzle_id = $2
             AND th.unlocked
             AND tp.state >= 0
-            AND COALESCE(p.release_at, g.start_at) <= NOW();",
+            AND rp.release_at <= NOW();",
         team_id,
         puzzle_id
     )
@@ -1754,16 +1754,16 @@ pub async fn sync_due_hints(
     let _ = get_hints_view_for_team(db_pool, team_id, puzzle_id).await?;
 
     let next_unlock_at = sqlx::query!(
-        "SELECT MIN(GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
+        "SELECT MIN(GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
         WHERE h.puzzle_id = $2
             AND tp.state >= 0
-            AND COALESCE(p.release_at, g.start_at) <= NOW()
+            AND rp.release_at <= NOW()
             AND h.title_hidden
-            AND GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) + (h.cooldown * INTERVAL '1 second') > NOW();",
+            AND GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second') > NOW();",
         team_id,
         puzzle_id
     )
@@ -1792,16 +1792,16 @@ pub async fn purchase_hint(
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_round r ON r.id = p.round_id
-        JOIN rb_game g ON g.id = r.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         JOIN rb_team_member tm ON tm.game_id = r.game_id
         JOIN rb_team t ON t.id = tm.team_id
         JOIN rb_user u ON u.id = tm.user_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
         WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
-            AND COALESCE(p.release_at, g.start_at) <= NOW()
+            AND rp.release_at <= NOW()
             AND NOT COALESCE(th.unlocked, FALSE)
-            AND GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) <= NOW() - (h.cooldown * INTERVAL '1 second');",
+            AND GREATEST(tp.ctime_at, rp.release_at) <= NOW() - (h.cooldown * INTERVAL '1 second');",
         user_id,
         hint_id
     )
@@ -2019,8 +2019,7 @@ pub struct RbPuzzleAdminData {
     pub penalty: serde_json::Value,
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
-    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
-    pub release_at: Option<OffsetDateTime>,
+    pub release_phase_id: i32,
     pub round_id: i32,
     pub ticket_enabled: bool,
     pub ticket_cooldown: i32,
@@ -2045,11 +2044,7 @@ pub struct RbPuzzleCreateData {
     pub penalty: serde_json::Value,
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
-    #[serde(
-        default,
-        with = "crate::serde_helpers::serialize_option_offset_datetime"
-    )]
-    pub release_at: Option<OffsetDateTime>,
+    pub release_phase_id: i32,
     pub round_id: i32,
     #[serde(default = "default_ticket_enabled")]
     pub ticket_enabled: bool,
@@ -2077,11 +2072,7 @@ pub struct RbPuzzleUpdateData {
     )]
     pub max_submit: Option<Option<i32>>,
     pub unlock_cond: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::serde_helpers::deserialize_nullable_offset_datetime_patch"
-    )]
-    pub release_at: Option<Option<OffsetDateTime>>,
+    pub release_phase_id: Option<i32>,
     pub round_id: Option<i32>,
     pub ticket_enabled: Option<bool>,
     pub ticket_cooldown: Option<i32>,
@@ -2107,7 +2098,7 @@ pub async fn admin_list(
         sqlx::query_as!(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_at, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -2121,7 +2112,7 @@ pub async fn admin_list(
         sqlx::query_as!(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_at, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -2141,7 +2132,7 @@ pub async fn admin_get(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_at, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -2162,14 +2153,16 @@ pub async fn admin_create(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
             slug, sort, title, ptype, content, content_type, judge, penalty,
-            max_submit, unlock_cond, release_at, round_id, ticket_enabled, ticket_cooldown
+            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, r.id, $13, $14
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, rp.id, r.id, $13, $14
         FROM rb_round r
+        JOIN rb_release_phase rp ON rp.id = $12 AND rp.game_id = r.game_id
         WHERE r.id = $1
+            AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)
         RETURNING id, game_id,
             slug, sort, title, ptype, content, content_type, judge, penalty,
-            max_submit, unlock_cond, release_at, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
+            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
         data.round_id,
         data.slug,
         data.sort,
@@ -2181,7 +2174,7 @@ pub async fn admin_create(
         data.penalty,
         data.max_submit,
         data.unlock_cond,
-        data.release_at,
+        data.release_phase_id,
         data.ticket_enabled,
         data.ticket_cooldown
     )
@@ -2198,8 +2191,6 @@ pub async fn admin_update(
 ) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
     let max_submit_is_set = data.max_submit.is_some();
     let max_submit = data.max_submit.flatten();
-    let release_at_is_set = data.release_at.is_some();
-    let release_at = data.release_at.flatten();
     let slug_is_set = data.slug.is_some();
     let slug = data.slug.clone().flatten();
 
@@ -2219,23 +2210,31 @@ pub async fn admin_update(
             penalty = COALESCE($10, p.penalty),
             max_submit = CASE WHEN $11 THEN $12 ELSE p.max_submit END,
             unlock_cond = COALESCE($13, p.unlock_cond),
-            release_at = CASE WHEN $14 THEN $15 ELSE p.release_at END,
+            release_phase_id = COALESCE($14, p.release_phase_id),
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $16::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $15::INT
             ), p.round_id),
-            ticket_enabled = COALESCE($17, p.ticket_enabled),
-            ticket_cooldown = COALESCE($18, p.ticket_cooldown)
+            ticket_enabled = COALESCE($16, p.ticket_enabled),
+            ticket_cooldown = COALESCE($17, p.ticket_cooldown)
         WHERE p.id = $1
-            AND ($16::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $16::INT
+            AND ($14::INT IS NULL OR (
+                NOT EXISTS (SELECT 1 FROM rb_release_event current_event WHERE current_event.phase_id = p.release_phase_id)
+                AND EXISTS (
+                    SELECT 1 FROM rb_release_phase target_phase
+                    WHERE target_phase.id = $14::INT AND target_phase.game_id = p.game_id
+                        AND NOT EXISTS (SELECT 1 FROM rb_release_event target_event WHERE target_event.phase_id = target_phase.id)
+                )
             ))
-            AND ($16::INT IS NULL OR NOT EXISTS (
+            AND ($15::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $15::INT
+            ))
+            AND ($15::INT IS NULL OR NOT EXISTS (
                 SELECT 1 FROM rb_round owner_round
-                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $16::INT
+                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $15::INT
             ))
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_at, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         puzzle_id,
         slug_is_set,
@@ -2250,8 +2249,7 @@ pub async fn admin_update(
         max_submit_is_set,
         max_submit,
         data.unlock_cond,
-        release_at_is_set,
-        release_at,
+        data.release_phase_id,
         data.round_id,
         data.ticket_enabled,
         data.ticket_cooldown

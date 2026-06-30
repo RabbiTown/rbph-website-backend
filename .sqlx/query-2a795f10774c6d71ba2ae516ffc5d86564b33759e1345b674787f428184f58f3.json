@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_game\n        SET title = COALESCE($2, title),\n            cover = CASE WHEN $3 THEN $4 ELSE cover END,\n            is_shown = COALESCE($5, is_shown),\n            is_online = COALESCE($6, is_online),\n            settings = CASE WHEN $7 THEN $8 ELSE settings END\n        WHERE id = $1\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Bool",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2a795f10774c6d71ba2ae516ffc5d86564b33759e1345b674787f428184f58f3"
+}

@@ -93,6 +93,7 @@ async fn judge_puzzle(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let submit_result = db::puzzle::submit_answer(&app, &user, path.puzzle_id, &req.answer).await?;
 
@@ -120,11 +121,11 @@ async fn judge_puzzle(
                 "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
-                JOIN rb_game g ON g.id = p.game_id
+                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
                 WHERE p.id = ANY($1)
                     AND tp.state >= 0
-                    AND COALESCE(p.release_at, g.start_at) <= NOW()
+                    AND rp.release_at <= NOW()
                 ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
                 &unlocks,
                 team_id

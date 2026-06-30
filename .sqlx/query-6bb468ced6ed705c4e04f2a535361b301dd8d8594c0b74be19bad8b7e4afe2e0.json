@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT gf.feature_type, gf.state, gf.source_phase_id, gf.utime_at,\n            next.phase_id AS \"phase_id?\", next.phase_title AS \"phase_title?\",\n            next.target_state AS \"target_state?\", next.release_at AS \"release_at?\"\n        FROM rb_game_feature gf\n        LEFT JOIN LATERAL (\n            SELECT c.phase_id, rp.title AS phase_title, c.target_state, rp.release_at\n            FROM rb_release_phase_feature_change c\n            JOIN rb_release_phase rp ON rp.id = c.phase_id\n            WHERE c.game_id = gf.game_id AND c.feature_type = gf.feature_type\n                AND rp.release_at > NOW()\n            ORDER BY rp.release_at, rp.id\n            LIMIT 1\n        ) next ON TRUE\n        WHERE gf.game_id = $1\n        ORDER BY gf.feature_type;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "feature_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_phase_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "phase_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "phase_title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "target_state?",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "release_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6bb468ced6ed705c4e04f2a535361b301dd8d8594c0b74be19bad8b7e4afe2e0"
+}

@@ -218,6 +218,7 @@ async fn append(
     }
 
     let game = db::game::create(&app.db, &req).await?;
+    app.release_schedule_changed.notify_one();
 
     Ok(HttpResponse::Ok().json(GameAdminResponse {
         code: GameAdminResult::Ok,
@@ -236,13 +237,18 @@ async fn edit(
         return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
     }
 
-    let game = db::game::update(&app.db, path.game_id, &req).await?;
+    let game = match db::game::update(&app.db, path.game_id, &req).await {
+        Ok(game) => game,
+        Err(error) if is_unique_violation(&error) => {
+            return RbError::conflict(GameAdminResult::Conflict.into()).http_err();
+        }
+        Err(error) => return Err(error.into()),
+    };
     let Some(game) = game else {
         return RbError::not_found()
             .code(GameAdminResult::NotFound.into())
             .http_err();
     };
-
     Ok(HttpResponse::Ok().json(GameAdminResponse {
         code: GameAdminResult::Ok,
         game,

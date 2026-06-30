@@ -60,9 +60,9 @@ pub async fn get_round_state(
         "SELECT EXISTS (
             SELECT 1 FROM rb_team_puzzle tp
             JOIN rb_puzzle p ON p.id = tp.puzzle_id AND p.round_id = $2
-            JOIN rb_game g ON g.id = p.game_id
+            JOIN rb_release_phase rp ON rp.id = p.release_phase_id
             WHERE tp.team_id = $1 AND tp.state >= 0
-                AND COALESCE(p.release_at, g.start_at) <= NOW()
+                AND rp.release_at <= NOW()
         );",
         team_id,
         round_id
@@ -189,14 +189,14 @@ pub async fn get_state_for_team(
         "SELECT p.id, p.slug, p.title, tp.state AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
         FROM rb_puzzle p
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
         LEFT JOIN rb_submission s ON s.puzzle_id = p.id
             AND s.team_id = tp.team_id
             AND (s.saction = 1 OR s.saction = 5)
             AND s.real_answer IS NOT NULL
         WHERE p.round_id = $1 AND tp.team_id = $2 AND tp.state >= 0
-            AND COALESCE(p.release_at, g.start_at) <= NOW()
+            AND rp.release_at <= NOW()
             AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)
         GROUP BY p.id, p.slug, p.title, p.sort, tp.state
         ORDER BY p.sort, p.id;",
@@ -207,7 +207,7 @@ pub async fn get_state_for_team(
     .await?;
 
     let row = sqlx::query!(
-        "SELECT GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)) AS \"utime_at!\",
+        "SELECT GREATEST(tp.ctime_at, rp.release_at) AS \"utime_at!\",
                 tp.state, tp.cooldown_till,
                 tp.max_submit + p.max_submit AS max_submit,
                 COUNT(DISTINCT fs.id) AS submit_count,
@@ -215,7 +215,7 @@ pub async fn get_state_for_team(
         FROM rb_team_puzzle tp
         JOIN rb_round r ON r.id = $2
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
             AND fs.team_id = tp.team_id
             AND fs.saction = 0
@@ -225,8 +225,8 @@ pub async fn get_state_for_team(
             AND s.saction = 1
         WHERE tp.team_id = $1 AND tp.puzzle_id = r.puzzle
             AND tp.state >= 0
-            AND COALESCE(p.release_at, g.start_at) <= NOW()
-        GROUP BY GREATEST(tp.ctime_at, COALESCE(p.release_at, g.start_at)),
+            AND rp.release_at <= NOW()
+        GROUP BY GREATEST(tp.ctime_at, rp.release_at),
             tp.state, tp.max_submit, tp.cooldown_till, p.max_submit;",
         team_id,
         round_id
@@ -253,14 +253,14 @@ async fn get_state_cache_ttl(
     round_id: i32,
 ) -> Result<u64, RbInternalError> {
     let seconds = sqlx::query_scalar!(
-        "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(COALESCE(p.release_at, g.start_at)) - NOW())))::BIGINT
+        "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(rp.release_at) - NOW())))::BIGINT
         FROM rb_puzzle p
-        JOIN rb_game g ON g.id = p.game_id
+        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
             AND tp.team_id = $1
             AND tp.state >= 0
         WHERE p.round_id = $2
-            AND COALESCE(p.release_at, g.start_at) > NOW();",
+            AND rp.release_at > NOW();",
         team_id,
         round_id
     )
@@ -335,11 +335,11 @@ pub async fn get_simple_list_for_team(
         WHERE r.game_id = $1
         AND EXISTS (
             SELECT 1 FROM rb_puzzle p
-            JOIN rb_game g ON g.id = p.game_id
+            JOIN rb_release_phase rp ON rp.id = p.release_phase_id
             JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
                 AND tp.team_id = $2 AND tp.state >= 0
             WHERE p.round_id = r.id
-                AND COALESCE(p.release_at, g.start_at) <= NOW()
+                AND rp.release_at <= NOW()
         )
         ORDER BY r.sort, r.id;",
         game_id,

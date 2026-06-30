@@ -17,7 +17,7 @@ use crate::{
     AppState,
     db::{
         self,
-        team::{RbTeamPutData, TeamJoinResult},
+        team::{RbTeamPutData, TeamCreateResult as TeamCreateDbResult, TeamJoinResult},
     },
     error::RbError,
     extractor::auth::AuthUser,
@@ -49,6 +49,7 @@ struct TeamCreateResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum TeamCreateResult {
+    NotOpen = -3,
     Invalid = -2,
     ToMany = -1,
     Ok = 0,
@@ -62,6 +63,7 @@ async fn create_self(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let req = req.into_inner();
 
     let trimmed_pwd = req.pass.trim();
@@ -76,14 +78,19 @@ async fn create_self(
         game_id: path.game_id,
     };
 
-    let team_id = db::team::user_create(&app.db, user.uid, &data).await?;
-    if team_id.is_none() {
-        RbError::conflict(TeamCreateResult::ToMany.into()).err()?
-    }
+    let team_id = match db::team::user_create(&app.db, user.uid, &data).await? {
+        TeamCreateDbResult::NotOpen => {
+            return RbError::conflict(TeamCreateResult::NotOpen.into()).http_err();
+        }
+        TeamCreateDbResult::ToMany => {
+            return RbError::conflict(TeamCreateResult::ToMany.into()).http_err();
+        }
+        TeamCreateDbResult::Ok(team_id) => team_id,
+    };
 
     Ok(HttpResponse::Ok().json(TeamCreateResponse {
         code: TeamCreateResult::Ok,
-        tid: team_id.unwrap(),
+        tid: team_id,
     }))
 }
 
@@ -178,6 +185,7 @@ async fn join(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    crate::module::release::process_due_releases(app.get_ref()).await?;
     let result = db::team::join(&app, path.team_id, user.uid, &req.password).await?;
     if matches!(result, TeamJoinResult::NotFound) {
         RbError::not_found().err()?

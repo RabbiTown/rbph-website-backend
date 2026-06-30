@@ -35,14 +35,95 @@ CREATE TABLE rb_game (
     cover           TEXT,
     is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
     is_online       BOOLEAN NOT NULL DEFAULT FALSE,
-    start_at        TIMESTAMPTZ NOT NULL,
-    end_at          TIMESTAMPTZ NOT NULL,
     settings        JSONB NOT NULL,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 ALTER TABLE rb_game ADD CONSTRAINT rb_ck_game_settings_object
 CHECK (jsonb_typeof(settings) = 'object');
+
+-- release phase
+
+CREATE TABLE rb_release_phase (
+    id              SERIAL PRIMARY KEY,
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
+    title           VARCHAR(120) NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    content_type    SMALLINT NOT NULL DEFAULT 0,
+    release_at      TIMESTAMPTZ NOT NULL,
+    visibility      SMALLINT NOT NULL DEFAULT 0,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (id, game_id),
+    UNIQUE (game_id, release_at)
+);
+
+ALTER TABLE rb_release_phase ADD CONSTRAINT rb_ck_release_phase_visibility
+CHECK (visibility IN (0, 1));
+
+CREATE INDEX rb_idx_release_phase_due
+ON rb_release_phase(release_at, id);
+
+CREATE TABLE rb_release_phase_feature_change (
+    phase_id        INT NOT NULL,
+    game_id         INT NOT NULL,
+    feature_type    SMALLINT NOT NULL,
+    target_state    SMALLINT NOT NULL,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (phase_id, feature_type),
+    FOREIGN KEY (phase_id, game_id)
+        REFERENCES rb_release_phase(id, game_id) ON DELETE CASCADE
+);
+
+ALTER TABLE rb_release_phase_feature_change ADD CONSTRAINT rb_ck_release_phase_feature_change
+CHECK (
+    (feature_type = 0 AND target_state IN (0, 1)) OR
+    (feature_type IN (1, 2) AND target_state IN (0, 1, 2)) OR
+    (feature_type = 3 AND target_state IN (0, 1))
+);
+
+CREATE TABLE rb_game_feature (
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
+    feature_type    SMALLINT NOT NULL,
+    state           SMALLINT NOT NULL,
+    source_phase_id INT REFERENCES rb_release_phase(id) ON DELETE SET NULL,
+    utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (game_id, feature_type)
+);
+
+ALTER TABLE rb_game_feature ADD CONSTRAINT rb_ck_game_feature_state
+CHECK (
+    (feature_type = 0 AND state IN (0, 1)) OR
+    (feature_type IN (1, 2) AND state IN (0, 1, 2)) OR
+    (feature_type = 3 AND state IN (0, 1))
+);
+
+CREATE TABLE rb_game_feature_history (
+    id              BIGSERIAL PRIMARY KEY,
+    game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
+    feature_type    SMALLINT NOT NULL,
+    old_state       SMALLINT NOT NULL,
+    new_state       SMALLINT NOT NULL,
+    phase_id        INT REFERENCES rb_release_phase(id) ON DELETE SET NULL,
+    actor_id        INT REFERENCES rb_user(id) ON DELETE SET NULL,
+    effective_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX rb_idx_game_feature_history_phase
+ON rb_game_feature_history(phase_id, feature_type)
+WHERE phase_id IS NOT NULL;
+
+CREATE TABLE rb_release_event (
+    id              BIGSERIAL PRIMARY KEY,
+    phase_id        INT NOT NULL UNIQUE REFERENCES rb_release_phase(id) ON DELETE CASCADE,
+    occurred_at     TIMESTAMPTZ NOT NULL,
+    notified_at     TIMESTAMPTZ,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX rb_idx_release_event_pending_notification
+ON rb_release_event(id)
+WHERE notified_at IS NULL;
 
 -- team
 
@@ -59,6 +140,24 @@ CREATE TABLE rb_team (
 
 CREATE INDEX rb_idx_team_game_state_finish
 ON rb_team(game_id, state, finish_at);
+
+CREATE TABLE rb_leaderboard_lock (
+    game_id         INT PRIMARY KEY REFERENCES rb_game(id) ON DELETE CASCADE,
+    phase_id        INT REFERENCES rb_release_phase(id) ON DELETE SET NULL,
+    locked_at       TIMESTAMPTZ NOT NULL,
+    ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE rb_leaderboard_lock_team (
+    game_id         INT NOT NULL REFERENCES rb_leaderboard_lock(game_id) ON DELETE CASCADE,
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    rank            INT NOT NULL,
+    solves          BIGINT NOT NULL,
+    finish_at       TIMESTAMPTZ,
+    last_solved_at  TIMESTAMPTZ,
+    PRIMARY KEY (game_id, team_id),
+    UNIQUE (game_id, rank)
+);
 
 -- team member
 
@@ -124,7 +223,7 @@ CREATE TABLE rb_puzzle (
     penalty         JSONB NOT NULL DEFAULT '[]',
     max_submit      INT,
     unlock_cond     TEXT NOT NULL,
-    release_at      TIMESTAMPTZ,
+    release_phase_id INT NOT NULL,
     round_id        INT NOT NULL REFERENCES rb_round(id),
     game_id         INT NOT NULL REFERENCES rb_game(id),
     ticket_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
@@ -144,6 +243,10 @@ CREATE TRIGGER rb_trg_puzzle_set_game_id
 BEFORE INSERT OR UPDATE OF round_id ON rb_puzzle
 FOR EACH ROW
 EXECUTE FUNCTION rb_puzzle_set_game_id();
+
+ALTER TABLE rb_puzzle ADD CONSTRAINT rb_fk_puzzle_release_phase_game
+FOREIGN KEY (release_phase_id, game_id)
+REFERENCES rb_release_phase(id, game_id);
 
 CREATE UNIQUE INDEX rb_idx_puzzle_game_slug
 ON rb_puzzle(game_id, slug)

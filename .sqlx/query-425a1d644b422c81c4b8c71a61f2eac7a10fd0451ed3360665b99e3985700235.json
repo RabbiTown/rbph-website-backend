@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_release_event SET notified_at = NOW()\n        WHERE id = $1 AND notified_at IS NULL;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "425a1d644b422c81c4b8c71a61f2eac7a10fd0451ed3360665b99e3985700235"
+}

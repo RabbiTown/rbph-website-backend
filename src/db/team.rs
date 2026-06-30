@@ -106,6 +106,7 @@ pub async fn get_by_user_game(
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TeamJoinResult {
     NotFound = -104,
+    NotOpen = -5,
     WrongPwd = -4,
     TeamFull = -3,
     Locked = -2,
@@ -122,7 +123,10 @@ pub async fn join(
     let mut tx = app.db.begin().await?;
 
     let verify = sqlx::query!(
-        "SELECT state, pass, game_id FROM rb_team
+        "SELECT t.state, t.pass, t.game_id,
+            COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf
+                WHERE gf.game_id = t.game_id AND gf.feature_type = 0), TRUE) AS \"team_open!\"
+        FROM rb_team t
         WHERE id = $1
         FOR UPDATE;",
         team_id
@@ -134,6 +138,10 @@ pub async fn join(
         return Ok(TeamJoinResult::NotFound);
     }
     let verify = verify.unwrap();
+
+    if !verify.team_open {
+        return Ok(TeamJoinResult::NotOpen);
+    }
 
     if verify.state == i16::from(RbTeamState::Banned) {
         return Ok(TeamJoinResult::Locked);
@@ -198,12 +206,31 @@ pub async fn join(
     }
 }
 
+pub enum TeamCreateResult {
+    NotOpen,
+    ToMany,
+    Ok(i32),
+}
+
 pub async fn user_create(
     db_pool: &DbPool,
     user_id: i32,
     data: &RbTeamPutData,
-) -> Result<Option<i32>, RbInternalError> {
+) -> Result<TeamCreateResult, RbInternalError> {
     let mut tx = db_pool.begin().await?;
+
+    let team_open = sqlx::query_scalar!(
+        "SELECT COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf
+            WHERE gf.game_id = g.id AND gf.feature_type = 0), TRUE) AS \"team_open!\"
+        FROM rb_game g WHERE g.id = $1;",
+        data.game_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .unwrap_or(false);
+    if !team_open {
+        return Ok(TeamCreateResult::NotOpen);
+    }
 
     let team_id = sqlx::query_scalar!(
         "INSERT INTO rb_team (name, pass, bio, game_id)
@@ -228,7 +255,7 @@ pub async fn user_create(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Ok(None);
+        return Ok(TeamCreateResult::ToMany);
     }
 
     sqlx::query!(
@@ -261,7 +288,7 @@ pub async fn user_create(
     .await?;
 
     tx.commit().await?;
-    Ok(Some(team_id))
+    Ok(TeamCreateResult::Ok(team_id))
 }
 
 pub async fn leave(app: &AppState, team_id: i32, user_id: i32) -> Result<bool, RbInternalError> {

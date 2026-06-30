@@ -18,7 +18,7 @@ use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
 use sqlx::PgPool;
-use tokio::time;
+use tokio::{sync::Notify, time};
 
 use crate::{
     config::Settings,
@@ -34,6 +34,7 @@ pub struct AppState {
     pub kv: KvPool,
     pub settings: Settings,
     pub sync_hub: Arc<SyncHub>,
+    pub release_schedule_changed: Arc<Notify>,
     pub email: Option<Arc<EmailService>>,
     pub storage: module::storage::LocalStorage,
 }
@@ -67,6 +68,7 @@ async fn main() -> std::io::Result<()> {
     let secret_key = Key::from(&app_config.get_secret_key());
 
     let sync_hub = Arc::new(SyncHub::default());
+    let release_schedule_changed = Arc::new(Notify::new());
 
     let email_service = if settings.auth.email.enabled {
         Some(Arc::new(
@@ -89,15 +91,21 @@ async fn main() -> std::io::Result<()> {
         kv: kv_pool,
         settings,
         sync_hub: sync_hub.clone(),
+        release_schedule_changed: release_schedule_changed.clone(),
         email: email_service.clone(),
         storage,
     };
     let app_state_data = web::Data::new(app_state);
 
+    if let Err(error) = module::release::process_due_releases(app_state_data.get_ref()).await {
+        log::error!("failed to initialize release scheduler: {error}");
+    }
+
     let (host, port) = (&app_config.bind_addr.0, app_config.bind_addr.1);
+    let http_app_state = app_state_data.clone();
     let server = HttpServer::new(move || {
         App::new()
-            .app_data(app_state_data.clone())
+            .app_data(http_app_state.clone())
             .wrap(Logger::default())
             .wrap(
                 SessionMiddleware::builder(session_store.clone(), secret_key.clone())
@@ -123,6 +131,12 @@ async fn main() -> std::io::Result<()> {
                 hub.cleanup();
             }
         });
+    }
+
+    {
+        let state = app_state_data.get_ref().clone();
+        let changed = release_schedule_changed.clone();
+        tokio::spawn(module::release::run_scheduler(state, changed));
     }
 
     log::info!(

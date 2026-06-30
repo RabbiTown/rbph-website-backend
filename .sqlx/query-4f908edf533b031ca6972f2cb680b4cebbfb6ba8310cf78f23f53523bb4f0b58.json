@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_game_feature (game_id, feature_type, state)\n            VALUES ($1, $2, $3);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4f908edf533b031ca6972f2cb680b4cebbfb6ba8310cf78f23f53523bb4f0b58"
+}

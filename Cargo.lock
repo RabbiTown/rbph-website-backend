@@ -3018,6 +3018,7 @@ dependencies = [
  "log",
  "num_enum",
  "once_cell",
+ "percent-encoding",
  "rand 0.9.3",
  "regex",
  "serde",

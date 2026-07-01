@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 use tokio::{
     fs,
@@ -13,6 +14,13 @@ use tokio::{
 use zip::read::ZipArchive;
 
 use crate::error::RbInternalError;
+
+const URL_PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+const STORAGE_OBJECT_KEY_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_');
 
 #[derive(Clone)]
 pub struct LocalStorage {
@@ -72,7 +80,7 @@ impl LocalStorage {
     }
 
     pub fn object_dir(&self, object_key: &str) -> PathBuf {
-        self.root().join(object_key)
+        self.root().join(sanitize_object_key(object_key))
     }
 
     pub fn object_path(&self, object_key: &str, relative_path: &str) -> PathBuf {
@@ -81,7 +89,8 @@ impl LocalStorage {
     }
 
     pub fn temp_path(&self, object_key: &str) -> PathBuf {
-        self.root().join(format!("{object_key}.tmp"))
+        self.root()
+            .join(format!("{}.tmp", sanitize_object_key(object_key)))
     }
 
     pub async fn store(
@@ -258,8 +267,23 @@ impl LocalStorage {
 }
 
 pub fn build_public_path(object_key: &str, original_name: &str) -> String {
+    let encoded_object_key =
+        utf8_percent_encode(object_key, URL_PATH_SEGMENT_ENCODE_SET).to_string();
     let safe_name = sanitize_relative_path(original_name);
-    format!("/assets/{object_key}/{safe_name}")
+    let encoded_name = safe_name
+        .split('/')
+        .map(|segment| utf8_percent_encode(segment, URL_PATH_SEGMENT_ENCODE_SET).to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("/assets/{encoded_object_key}/{encoded_name}")
+}
+
+fn sanitize_object_key(value: &str) -> String {
+    if value.is_empty() {
+        "invalid-object-key".to_string()
+    } else {
+        utf8_percent_encode(value, STORAGE_OBJECT_KEY_ENCODE_SET).to_string()
+    }
 }
 
 pub fn sanitize_relative_path(value: &str) -> String {
@@ -357,5 +381,40 @@ fn uniquify_relative_path(path: String, used_paths: &mut HashMap<String, usize>)
             return candidate;
         }
         current += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{LocalStorage, build_public_path};
+
+    #[test]
+    fn public_path_encodes_literal_percent_signs() {
+        assert_eq!(
+            build_public_path(
+                "group-test",
+                "%7BC5F0FF2C-5587-4b4a-876D-2431FA496E48%7D.png"
+            ),
+            "/assets/group-test/%257BC5F0FF2C-5587-4b4a-876D-2431FA496E48%257D.png"
+        );
+    }
+
+    #[test]
+    fn public_path_encodes_each_path_segment() {
+        assert_eq!(
+            build_public_path("group-test", "目录/a b#c.png"),
+            "/assets/group-test/%E7%9B%AE%E5%BD%95/a%20b%23c.png"
+        );
+    }
+
+    #[test]
+    fn object_keys_cannot_escape_the_storage_root() {
+        let storage = LocalStorage::new("/tmp/rbph-assets");
+        let object_dir = storage.object_dir("../outside");
+
+        assert!(object_dir.starts_with(Path::new("/tmp/rbph-assets")));
+        assert_eq!(object_dir, Path::new("/tmp/rbph-assets/%2E%2E%2Foutside"));
     }
 }

@@ -223,7 +223,7 @@ CREATE TABLE rb_puzzle (
     penalty         JSONB NOT NULL DEFAULT '[]',
     max_submit      INT,
     unlock_cond     TEXT NOT NULL,
-    release_phase_id INT NOT NULL,
+    release_phase_id INT,
     round_id        INT NOT NULL REFERENCES rb_round(id),
     game_id         INT NOT NULL REFERENCES rb_game(id),
     ticket_enabled  BOOLEAN NOT NULL DEFAULT TRUE,

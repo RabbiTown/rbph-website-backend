@@ -373,7 +373,12 @@ pub async fn player_can_send_ticket(
     ticket_id: i32,
 ) -> Result<bool, RbInternalError> {
     Ok(sqlx::query_scalar!(
-        "SELECT COALESCE(gf.state <> 0, TRUE) AS \"allowed!\"
+        "SELECT COALESCE(gf.state <> 0, TRUE)
+            AND (tk.puzzle_id IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p
+                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+                WHERE p.id = tk.puzzle_id AND rp.release_at <= NOW()
+            )) AS \"allowed!\"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id
         LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id

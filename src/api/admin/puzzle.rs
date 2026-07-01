@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use actix_web::{HttpResponse, Result, web};
 use deadpool_redis::redis::AsyncCommands;
 use num_enum::IntoPrimitive;
@@ -31,6 +33,13 @@ struct PuzzlePathInfo {
 #[derive(Deserialize)]
 struct PuzzleListQuery {
     game_id: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct PuzzleBatchReleaseRequest {
+    game_id: i32,
+    puzzle_ids: Vec<i32>,
+    release_phase_id: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -335,6 +344,49 @@ async fn append(
     }))
 }
 
+async fn batch_update_release_phase(
+    req: web::Json<PuzzleBatchReleaseRequest>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let puzzle_ids = req.puzzle_ids.iter().copied().collect::<HashSet<_>>();
+    if req.game_id <= 0
+        || req.release_phase_id.is_some_and(|id| id <= 0)
+        || puzzle_ids.is_empty()
+        || puzzle_ids.len() > 500
+        || puzzle_ids.iter().any(|id| *id <= 0)
+    {
+        return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+    }
+
+    let mut puzzle_ids = puzzle_ids.into_iter().collect::<Vec<_>>();
+    puzzle_ids.sort_unstable();
+    let Some(puzzles) = db::puzzle::admin_batch_update_release_phase(
+        &app.db,
+        req.game_id,
+        &puzzle_ids,
+        req.release_phase_id,
+    )
+    .await?
+    else {
+        return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+    };
+
+    let mut round_ids = HashSet::new();
+    for puzzle in &puzzles {
+        invalidate_puzzle_cache(&app, puzzle.game_id, puzzle.id).await;
+        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
+        round_ids.insert(puzzle.round_id);
+    }
+    for round_id in round_ids {
+        invalidate_round_state_cache(&app, round_id).await;
+    }
+
+    Ok(HttpResponse::Ok().json(PuzzleAdminListResponse {
+        code: PuzzleAdminResult::Ok,
+        puzzles,
+    }))
+}
+
 async fn edit(
     path: web::Path<PuzzlePathInfo>,
     req: web::Json<RbPuzzleUpdateData>,
@@ -489,6 +541,10 @@ pub fn config(cfg: &mut web::ServiceConfig) {
         web::scope("puzzles")
             .route("", web::get().to(list))
             .route("", web::post().to(append))
+            .route(
+                "/batch/release-phase",
+                web::patch().to(batch_update_release_phase),
+            )
             .route("/{puzzle_id}", web::get().to(get))
             .route("/{puzzle_id}", web::patch().to(edit))
             .route("/{puzzle_id}/unlock-check", web::post().to(unlock_check))

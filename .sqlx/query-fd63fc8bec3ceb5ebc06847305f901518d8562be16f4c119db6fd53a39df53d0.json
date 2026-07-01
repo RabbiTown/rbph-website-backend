@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE p.id = $1;",
+  "query": "UPDATE rb_puzzle p\n        SET release_phase_id = $3\n        WHERE p.game_id = $1 AND p.id = ANY($2)\n            AND ($3::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_release_phase target\n                WHERE target.id = $3::INT AND target.game_id = p.game_id\n                    AND target.release_at > NOW()\n                    AND NOT EXISTS (\n                        SELECT 1 FROM rb_release_event target_event\n                        WHERE target_event.phase_id = target.id\n                    )\n            ))\n        RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype, p.content,\n            p.content_type, p.judge, p.penalty, p.max_submit, p.unlock_cond,\n            p.release_phase_id, p.round_id, p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
   "describe": {
     "columns": [
       {
@@ -91,6 +91,8 @@
     ],
     "parameters": {
       "Left": [
+        "Int4",
+        "Int4Array",
         "Int4"
       ]
     },
@@ -114,5 +116,5 @@
       false
     ]
   },
-  "hash": "f7c678d63ebae066188bed9def6f60d085dc611cd3691ab801f044bfbca1760b"
+  "hash": "fd63fc8bec3ceb5ebc06847305f901518d8562be16f4c119db6fd53a39df53d0"
 }

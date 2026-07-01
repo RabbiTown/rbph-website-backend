@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, rp.id, r.id, $13, $14\n        FROM rb_round r\n        JOIN rb_release_phase rp ON rp.id = $12 AND rp.game_id = r.game_id\n        WHERE r.id = $1\n            AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)\n        RETURNING id, game_id,\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
+  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::INT, r.id, $13, $14\n        FROM rb_round r\n        WHERE r.id = $1\n            AND ($12::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_release_phase rp\n                WHERE rp.id = $12::INT AND rp.game_id = r.game_id\n                    AND rp.release_at > NOW()\n                    AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)\n            ))\n        RETURNING id, game_id,\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -120,12 +120,12 @@
       false,
       true,
       false,
-      false,
+      true,
       false,
       false,
       false,
       false
     ]
   },
-  "hash": "412479d834a6f803d49da22f530ab6ef015edd300a67258df84af59260c57bb8"
+  "hash": "1dbdd54e81f2cddac7158a9363803420e1dd3bf515e6fd99d31c44fd4a72407d"
 }

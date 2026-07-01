@@ -2019,7 +2019,7 @@ pub struct RbPuzzleAdminData {
     pub penalty: serde_json::Value,
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
-    pub release_phase_id: i32,
+    pub release_phase_id: Option<i32>,
     pub round_id: i32,
     pub ticket_enabled: bool,
     pub ticket_cooldown: i32,
@@ -2044,7 +2044,7 @@ pub struct RbPuzzleCreateData {
     pub penalty: serde_json::Value,
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
-    pub release_phase_id: i32,
+    pub release_phase_id: Option<i32>,
     pub round_id: i32,
     #[serde(default = "default_ticket_enabled")]
     pub ticket_enabled: bool,
@@ -2072,7 +2072,11 @@ pub struct RbPuzzleUpdateData {
     )]
     pub max_submit: Option<Option<i32>>,
     pub unlock_cond: Option<String>,
-    pub release_phase_id: Option<i32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
+    )]
+    pub release_phase_id: Option<Option<i32>>,
     pub round_id: Option<i32>,
     pub ticket_enabled: Option<bool>,
     pub ticket_cooldown: Option<i32>,
@@ -2155,11 +2159,15 @@ pub async fn admin_create(
             slug, sort, title, ptype, content, content_type, judge, penalty,
             max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, rp.id, r.id, $13, $14
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::INT, r.id, $13, $14
         FROM rb_round r
-        JOIN rb_release_phase rp ON rp.id = $12 AND rp.game_id = r.game_id
         WHERE r.id = $1
-            AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)
+            AND ($12::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_release_phase rp
+                WHERE rp.id = $12::INT AND rp.game_id = r.game_id
+                    AND rp.release_at > NOW()
+                    AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)
+            ))
         RETURNING id, game_id,
             slug, sort, title, ptype, content, content_type, judge, penalty,
             max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
@@ -2193,6 +2201,8 @@ pub async fn admin_update(
     let max_submit = data.max_submit.flatten();
     let slug_is_set = data.slug.is_some();
     let slug = data.slug.clone().flatten();
+    let release_phase_is_set = data.release_phase_id.is_some();
+    let release_phase_id = data.release_phase_id.flatten();
 
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
@@ -2210,27 +2220,25 @@ pub async fn admin_update(
             penalty = COALESCE($10, p.penalty),
             max_submit = CASE WHEN $11 THEN $12 ELSE p.max_submit END,
             unlock_cond = COALESCE($13, p.unlock_cond),
-            release_phase_id = COALESCE($14, p.release_phase_id),
+            release_phase_id = CASE WHEN $14 THEN $15 ELSE p.release_phase_id END,
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $15::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $16::INT
             ), p.round_id),
-            ticket_enabled = COALESCE($16, p.ticket_enabled),
-            ticket_cooldown = COALESCE($17, p.ticket_cooldown)
+            ticket_enabled = COALESCE($17, p.ticket_enabled),
+            ticket_cooldown = COALESCE($18, p.ticket_cooldown)
         WHERE p.id = $1
-            AND ($14::INT IS NULL OR (
-                NOT EXISTS (SELECT 1 FROM rb_release_event current_event WHERE current_event.phase_id = p.release_phase_id)
-                AND EXISTS (
-                    SELECT 1 FROM rb_release_phase target_phase
-                    WHERE target_phase.id = $14::INT AND target_phase.game_id = p.game_id
-                        AND NOT EXISTS (SELECT 1 FROM rb_release_event target_event WHERE target_event.phase_id = target_phase.id)
-                )
+            AND (NOT $14 OR $15::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_release_phase target_phase
+                WHERE target_phase.id = $15::INT AND target_phase.game_id = p.game_id
+                    AND target_phase.release_at > NOW()
+                    AND NOT EXISTS (SELECT 1 FROM rb_release_event target_event WHERE target_event.phase_id = target_phase.id)
             ))
-            AND ($15::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $15::INT
+            AND ($16::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $16::INT
             ))
-            AND ($15::INT IS NULL OR NOT EXISTS (
+            AND ($16::INT IS NULL OR NOT EXISTS (
                 SELECT 1 FROM rb_round owner_round
-                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $15::INT
+                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $16::INT
             ))
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
@@ -2249,7 +2257,8 @@ pub async fn admin_update(
         max_submit_is_set,
         max_submit,
         data.unlock_cond,
-        data.release_phase_id,
+        release_phase_is_set,
+        release_phase_id,
         data.round_id,
         data.ticket_enabled,
         data.ticket_cooldown
@@ -2258,6 +2267,45 @@ pub async fn admin_update(
     .await?;
 
     Ok(result)
+}
+
+pub async fn admin_batch_update_release_phase(
+    pool: &DbPool,
+    game_id: i32,
+    puzzle_ids: &[i32],
+    release_phase_id: Option<i32>,
+) -> Result<Option<Vec<RbPuzzleAdminData>>, RbInternalError> {
+    let mut tx = pool.begin().await?;
+    let puzzles = sqlx::query_as!(
+        RbPuzzleAdminData,
+        "UPDATE rb_puzzle p
+        SET release_phase_id = $3
+        WHERE p.game_id = $1 AND p.id = ANY($2)
+            AND ($3::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_release_phase target
+                WHERE target.id = $3::INT AND target.game_id = p.game_id
+                    AND target.release_at > NOW()
+                    AND NOT EXISTS (
+                        SELECT 1 FROM rb_release_event target_event
+                        WHERE target_event.phase_id = target.id
+                    )
+            ))
+        RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype, p.content,
+            p.content_type, p.judge, p.penalty, p.max_submit, p.unlock_cond,
+            p.release_phase_id, p.round_id, p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
+        game_id,
+        puzzle_ids,
+        release_phase_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if puzzles.len() != puzzle_ids.len() {
+        return Ok(None);
+    }
+
+    tx.commit().await?;
+    Ok(Some(puzzles))
 }
 
 pub async fn admin_delete(pool: &DbPool, puzzle_id: i32) -> Result<bool, RbInternalError> {

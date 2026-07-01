@@ -40,6 +40,9 @@ async fn call(
     }
 
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    if !db::puzzle::can_team_access_puzzle(&app.db, team_id, path.puzzle_id).await? {
+        return RbError::not_found().http_err();
+    }
     let Some(backend) = db::puzzle_backend::get_backend(&app.db, path.puzzle_id).await? else {
         return RbError::not_found().http_err();
     };

@@ -33,8 +33,8 @@ CREATE TABLE rb_game (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(60) NOT NULL,
     cover           TEXT,
-    is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
-    is_online       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_listed       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active       BOOLEAN NOT NULL DEFAULT FALSE,
     settings        JSONB NOT NULL,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -17,9 +17,9 @@ pub struct RbGameCreateData {
     pub title: String,
     pub cover: Option<String>,
     #[serde(default)]
-    pub is_shown: bool,
+    pub is_listed: bool,
     #[serde(default)]
-    pub is_online: bool,
+    pub is_active: bool,
     pub settings: Option<Value>,
 }
 
@@ -31,9 +31,18 @@ pub struct RbGameUpdateData {
         deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
     )]
     pub cover: Option<Option<String>>,
-    pub is_shown: Option<bool>,
-    pub is_online: Option<bool>,
+    pub is_listed: Option<bool>,
+    pub is_active: Option<bool>,
     pub settings: Option<Value>,
+}
+
+pub fn valid_game_title(title: &str) -> bool {
+    let title = title.trim();
+    !title.is_empty() && title.chars().count() <= 60
+}
+
+pub fn game_accessible_for_role(is_active: bool, role: RbUserRole) -> bool {
+    is_active || role.is_admin()
 }
 
 #[derive(Serialize)]
@@ -100,20 +109,11 @@ pub async fn exists(
     game_id: i32,
     user_role: RbUserRole,
 ) -> Result<bool, RbInternalError> {
-    let mut qb = QueryBuilder::new("SELECT 1 FROM rb_game WHERE id = ");
-    qb.push_bind(game_id);
-
-    if user_role != RbUserRole::Admin {
-        qb.push(" AND is_shown = true");
-    }
-
-    let result = qb
-        .build_query_scalar::<i32>()
+    let result = sqlx::query_scalar!("SELECT is_active FROM rb_game WHERE id = $1", game_id)
         .fetch_optional(pool)
-        .await?
-        .is_some();
+        .await?;
 
-    Ok(result)
+    Ok(result.is_some_and(|is_active| game_accessible_for_role(is_active, user_role)))
 }
 
 #[derive(FromRow, Serialize)]
@@ -144,7 +144,7 @@ pub async fn get_full_by_id(
 ) -> Result<Option<RbGame>, RbInternalError> {
     let result = sqlx::query_as!(
         RbGame,
-        "SELECT id, title, cover, is_shown, is_online,
+        "SELECT id, title, cover, is_listed, is_active,
             settings AS \"settings: RbGameSettings\", ctime_at
         FROM rb_game WHERE id = $1;",
         game_id
@@ -318,13 +318,13 @@ pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, Rb
 
     let mut tx = pool.begin().await?;
     let game_id = sqlx::query_scalar!(
-        "INSERT INTO rb_game (title, cover, is_shown, is_online, settings)
+        "INSERT INTO rb_game (title, cover, is_listed, is_active, settings)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING id;",
         data.title,
         data.cover,
-        data.is_shown,
-        data.is_online,
+        data.is_listed,
+        data.is_active,
         settings
     )
     .fetch_one(&mut *tx)
@@ -368,8 +368,8 @@ pub async fn update(
         "UPDATE rb_game
         SET title = COALESCE($2, title),
             cover = CASE WHEN $3 THEN $4 ELSE cover END,
-            is_shown = COALESCE($5, is_shown),
-            is_online = COALESCE($6, is_online),
+            is_listed = COALESCE($5, is_listed),
+            is_active = COALESCE($6, is_active),
             settings = CASE WHEN $7 THEN $8 ELSE settings END
         WHERE id = $1
         RETURNING id;",
@@ -377,8 +377,8 @@ pub async fn update(
         data.title,
         cover_is_set,
         cover,
-        data.is_shown,
-        data.is_online,
+        data.is_listed,
+        data.is_active,
         settings_is_set,
         settings
     )
@@ -394,20 +394,20 @@ pub async fn update(
 
 pub async fn list_all(
     pool: &DbPool,
-    only_shown: bool,
-    only_online: bool,
+    only_listed: bool,
+    only_active: bool,
 ) -> Result<Vec<RbGame>, RbInternalError> {
     let mut qb = QueryBuilder::new(
-        "SELECT g.id, g.title, g.cover, g.is_shown, g.is_online,
+        "SELECT g.id, g.title, g.cover, g.is_listed, g.is_active,
             g.settings, g.ctime_at FROM rb_game g WHERE 1=1",
     );
 
-    if only_shown {
-        qb.push(" AND g.is_shown = true");
+    if only_listed {
+        qb.push(" AND g.is_listed = true");
     }
 
-    if only_online {
-        qb.push(" AND g.is_online = true");
+    if only_active {
+        qb.push(" AND g.is_active = true");
     }
 
     let result = qb
@@ -419,19 +419,48 @@ pub async fn list_all(
     Ok(result)
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::model::user::RbUserRole;
+
+    use super::{game_accessible_for_role, valid_game_title};
+
+    #[test]
+    fn validates_game_title_length() {
+        assert!(!valid_game_title(""));
+        assert!(!valid_game_title("   "));
+        assert!(valid_game_title("Game"));
+        assert!(valid_game_title(&"a".repeat(60)));
+        assert!(!valid_game_title(&"a".repeat(61)));
+    }
+
+    #[test]
+    fn active_games_are_accessible_to_players() {
+        assert!(game_accessible_for_role(true, RbUserRole::User));
+        assert!(game_accessible_for_role(true, RbUserRole::Moderator));
+    }
+
+    #[test]
+    fn only_admins_can_access_inactive_games() {
+        assert!(!game_accessible_for_role(false, RbUserRole::User));
+        assert!(!game_accessible_for_role(false, RbUserRole::Moderator));
+        assert!(game_accessible_for_role(false, RbUserRole::Admin));
+    }
+}
+
 pub async fn list_show(
     pool: &DbPool,
-    only_shown: bool,
-    only_online: bool,
+    only_listed: bool,
+    only_active: bool,
 ) -> Result<Vec<RbGameShowData>, RbInternalError> {
     let mut qb = QueryBuilder::new("SELECT g.id, g.title, g.cover FROM rb_game g WHERE 1=1");
 
-    if only_shown {
-        qb.push(" AND g.is_shown = true");
+    if only_listed {
+        qb.push(" AND g.is_listed = true");
     }
 
-    if only_online {
-        qb.push(" AND g.is_online = true");
+    if only_active {
+        qb.push(" AND g.is_active = true");
     }
 
     let result = qb
@@ -493,9 +522,9 @@ pub async fn get_game_user_info(
     db_pool: &DbPool,
     user_id: i32,
     game_id: i32,
+    user_role: RbUserRole,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
-    // TODO : check game is online & in progress
-    if exists(db_pool, game_id, RbUserRole::User).await? {
+    if exists(db_pool, game_id, user_role).await? {
         let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
         Ok(Some(GameUserInfo { game_id, team_id }))
     } else {

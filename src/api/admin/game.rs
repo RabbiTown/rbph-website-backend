@@ -211,6 +211,11 @@ async fn append(
     req: web::Json<db::game::RbGameCreateData>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let mut req = req.into_inner();
+    req.title = req.title.trim().to_string();
+    if !db::game::valid_game_title(&req.title) {
+        return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
+    }
     if let Some(settings) = &req.settings
         && !RbGameSettings::validate_patch(settings)
     {
@@ -231,6 +236,13 @@ async fn edit(
     req: web::Json<RbGameUpdateData>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let mut req = req.into_inner();
+    if let Some(title) = &mut req.title {
+        *title = title.trim().to_string();
+        if !db::game::valid_game_title(title) {
+            return RbError::bad_req(GameAdminResult::Invalid.into()).http_err();
+        }
+    }
     if let Some(settings) = &req.settings
         && !RbGameSettings::validate_patch(settings)
     {

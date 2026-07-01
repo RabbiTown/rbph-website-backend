@@ -15,8 +15,8 @@ pub struct RbGame {
     pub id: i32,
     pub title: String,
     pub cover: Option<String>,
-    pub is_shown: bool,
-    pub is_online: bool,
+    pub is_listed: bool,
+    pub is_active: bool,
     pub settings: RbGameSettings,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,

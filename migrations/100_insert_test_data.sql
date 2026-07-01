@@ -1,6 +1,6 @@
 -- game
 
-INSERT INTO rb_game (id, title, cover, is_shown, is_online, settings)
+INSERT INTO rb_game (id, title, cover, is_listed, is_active, settings)
 VALUES (1, 'RBPH Test Game', '', TRUE, TRUE, '{"team":{"max_members":6}}');
 
 SELECT setval('rb_game_id_seq', 100);

@@ -180,7 +180,7 @@ async fn sync_releases(
     }))
 }
 
-async fn list_online(app: web::Data<AppState>) -> Result<HttpResponse> {
+async fn list_active(app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::game::list_show(&app.db, true, true).await?;
 
     Ok(HttpResponse::Ok().json(result))
@@ -252,8 +252,12 @@ async fn check_game_middleware(
     let app = req.app_data::<web::Data<AppState>>().unwrap();
 
     if let Some(user_id) = user_id {
-        match db::game::get_game_user_info(&app.db, user_id, game_id).await? {
+        let role = db::user::get_role_by_id(&app.db, user_id)
+            .await?
+            .ok_or_else(RbError::not_found)?;
+        match db::game::get_game_user_info(&app.db, user_id, game_id, role).await? {
             Some(info) => {
+                req.extensions_mut().insert(role);
                 req.extensions_mut().insert(info);
             }
             None => {
@@ -268,7 +272,7 @@ async fn check_game_middleware(
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.route("/online", web::get().to(list_online));
+    cfg.route("/active", web::get().to(list_active));
     cfg.service(
         web::scope("/{game_id}")
             .wrap(middleware::from_fn(check_game_middleware))

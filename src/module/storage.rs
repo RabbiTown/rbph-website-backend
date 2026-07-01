@@ -386,7 +386,7 @@ fn uniquify_relative_path(path: String, used_paths: &mut HashMap<String, usize>)
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Component, Path};
 
     use super::{LocalStorage, build_public_path};
 
@@ -416,5 +416,45 @@ mod tests {
 
         assert!(object_dir.starts_with(Path::new("/tmp/rbph-assets")));
         assert_eq!(object_dir, Path::new("/tmp/rbph-assets/%2E%2E%2Foutside"));
+    }
+
+    #[test]
+    fn untrusted_paths_remain_inside_the_storage_root() {
+        let root = Path::new("/tmp/rbph-assets");
+        let storage = LocalStorage::new(root);
+        let object_keys = [
+            "..",
+            "../outside",
+            "/absolute",
+            "a/b",
+            r"a\b",
+            "%2e%2e",
+            "group-safe",
+        ];
+        let relative_paths = [
+            "..",
+            "../secret",
+            "../../etc/passwd",
+            "/etc/passwd",
+            r"..\..\secret",
+            "a/../../../secret",
+            "%2e%2e/%2fetc",
+            "safe/file.png",
+        ];
+
+        for object_key in object_keys {
+            for relative_path in relative_paths {
+                let path = storage.object_path(object_key, relative_path);
+                let remainder = path
+                    .strip_prefix(root)
+                    .expect("asset path must remain under its storage root");
+                assert!(
+                    remainder
+                        .components()
+                        .all(|component| matches!(component, Component::Normal(_))),
+                    "unsafe path for object_key={object_key:?}, relative_path={relative_path:?}: {path:?}"
+                );
+            }
+        }
     }
 }

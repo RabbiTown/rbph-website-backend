@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team SET finish_at = COALESCE(finish_at, NOW())\n                    WHERE id = $1 AND is_locked;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "317072f4647a672209fbc8183888185f03165facef6ab798cd9c11f360533906"
+}

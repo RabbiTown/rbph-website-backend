@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NOT t.is_banned\n            AND COALESCE(tf.enabled, TRUE)\n            AND COALESCE(gf.state = 2, TRUE) AS \"allowed!\"\n        FROM rb_team t\n        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id AND gf.feature_type = 1\n        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id AND tf.feature_type = 1\n        WHERE t.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "42e2e6438d9fbb7860c250349477e86ea0bedd712528714d340f90e25bca2c4e"
+}

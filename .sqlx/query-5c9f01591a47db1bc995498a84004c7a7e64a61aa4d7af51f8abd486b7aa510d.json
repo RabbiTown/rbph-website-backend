@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(gf.state <> 0, TRUE)\n            AND NOT t.is_banned\n            AND COALESCE(tf.enabled, TRUE)\n            AND (tk.puzzle_id IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p\n                JOIN rb_release_phase rp ON rp.id = p.release_phase_id\n                WHERE p.id = tk.puzzle_id AND rp.release_at <= NOW()\n            )) AS \"allowed!\"\n        FROM rb_ticket tk\n        JOIN rb_team t ON t.id = tk.team_id\n        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id\n            AND gf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END\n        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id\n            AND tf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END\n        WHERE tk.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allowed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5c9f01591a47db1bc995498a84004c7a7e64a61aa4d7af51f8abd486b7aa510d"
+}

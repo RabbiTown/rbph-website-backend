@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tm.user_id\n        FROM rb_team_member tm\n        JOIN rb_team t ON t.id = tm.team_id\n        WHERE tm.team_id = $1 AND t.game_id = $2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e9ffaafa458534796d0808877ac3f30fa9794cdc3d4e7061f2143e4954b81eb1"
+}

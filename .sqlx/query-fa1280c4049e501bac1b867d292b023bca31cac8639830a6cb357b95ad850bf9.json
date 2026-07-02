@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.game_id, t.id, t.name, t.bio, s.finish_at,\n                s.last_solved_at, s.solves\n            FROM rb_leaderboard_lock_team s\n            JOIN rb_team t ON t.id = s.team_id\n            LEFT JOIN rb_team_feature tf\n                ON tf.team_id = t.id AND tf.feature_type = 3\n            WHERE s.team_id = $1 AND NOT t.is_banned AND COALESCE(tf.enabled, TRUE);",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "bio",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "finish_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_solved_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "solves",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "fa1280c4049e501bac1b867d292b023bca31cac8639830a6cb357b95ad850bf9"
+}

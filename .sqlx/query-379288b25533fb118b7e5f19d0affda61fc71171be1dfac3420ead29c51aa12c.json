@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team SET is_locked = TRUE\n                WHERE id = $1 AND NOT is_locked;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "379288b25533fb118b7e5f19d0affda61fc71171be1dfac3420ead29c51aa12c"
+}

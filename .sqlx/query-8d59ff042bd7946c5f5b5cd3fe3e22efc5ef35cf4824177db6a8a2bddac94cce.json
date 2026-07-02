@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH stats AS (\n            SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at\n            FROM rb_message m\n            WHERE m.ticket_id = $1\n            GROUP BY m.ticket_id\n        ),\n        last_msg AS (\n            SELECT DISTINCT ON (m.ticket_id) m.ticket_id, m.sender_type\n            FROM rb_message m\n            WHERE m.ticket_id = $1\n            ORDER BY m.ticket_id, m.ctime_at DESC, m.id DESC\n        )\n        SELECT tk.state,\n                t.id AS t_id, t.name AS t_name,\n                (CASE\n                    WHEN t.is_banned THEN -1\n                    WHEN t.finish_at IS NOT NULL THEN 2\n                    WHEN t.is_locked THEN 1\n                    ELSE 0\n                END)::SMALLINT AS \"t_state!\",\n                t.game_id AS g_id,\n                p.id AS \"p_id?\", p.slug AS \"p_slug?\", p.title AS \"p_title?\", tp.state AS \"p_state?\",\n                r.id AS \"r_id?\", r.slug AS \"r_slug?\", r.title AS \"r_title?\",\n                stats.msg_count, stats.last_at,\n                last_msg.sender_type AS \"last_by?\",\n                au.id AS \"a_id?\", au.nickname AS \"a_nickname?\", au.email AS \"a_email?\"\n        FROM rb_ticket tk\n        JOIN rb_team t ON t.id = tk.team_id\n        LEFT JOIN rb_user au ON au.id = tk.assignee\n        LEFT JOIN rb_puzzle p ON p.id = tk.puzzle_id\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.puzzle_id = p.id\n        LEFT JOIN rb_round r ON r.id = p.round_id\n        LEFT JOIN stats ON stats.ticket_id = tk.id\n        LEFT JOIN last_msg ON last_msg.ticket_id = tk.id\n        WHERE tk.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "t_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "t_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "t_state!",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "g_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "p_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "p_slug?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "p_title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "p_state?",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 9,
+        "name": "r_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "r_slug?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "r_title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "msg_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "last_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "last_by?",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 15,
+        "name": "a_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "a_nickname?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 17,
+        "name": "a_email?",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8d59ff042bd7946c5f5b5cd3fe3e22efc5ef35cf4824177db6a8a2bddac94cce"
+}

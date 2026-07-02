@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, name,\n            (CASE\n                WHEN is_banned THEN -1\n                WHEN finish_at IS NOT NULL THEN 2\n                WHEN is_locked THEN 1\n                ELSE 0\n            END)::SMALLINT AS \"state!\"\n        FROM rb_team\n        WHERE game_id = $1 AND ($2 = '' OR name ILIKE '%' || $2 || '%')\n        ORDER BY name, id\n        LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "state!",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "9661bfea2d76d575c2187624bc16be0b0b3a08bb4027467ca6f4758693c1ecb1"
+}

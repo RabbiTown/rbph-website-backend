@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.email, u.nickname,\n            tm.team_id AS \"in_team_id?\",\n            t.name AS \"in_team_name?\"\n        FROM rb_user u\n        LEFT JOIN rb_team_member tm ON tm.user_id = u.id AND tm.game_id = $1\n        LEFT JOIN rb_team t ON t.id = tm.team_id\n        WHERE $2 = ''\n            OR u.email ILIKE '%' || $2 || '%'\n            OR u.nickname ILIKE '%' || $2 || '%'\n        ORDER BY u.id\n        LIMIT 50;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "in_team_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "in_team_name?",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6bfe89fe3fe796ce6714a7eff07cd226a4f2f5d17a03212c10c3acbea87b77d6"
+}

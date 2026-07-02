@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_game (title, cover, is_listed, is_active, settings)\n        VALUES ($1, $2, $3, $4, $5)\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Bool",
+        "Bool",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb09d9c89f0737f1a4f0f8a9ca4fce7772054f471fc26e459ef48c0b9cb27981"
+}

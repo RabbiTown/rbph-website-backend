@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.* FROM rb_team t\n        JOIN rb_team_member m ON m.team_id = t.id\n        WHERE m.user_id = $1 AND t.game_id = $2;",
+  "query": "SELECT * FROM rb_team WHERE game_id = $1 AND id = $2;",
   "describe": {
     "columns": [
       {
@@ -67,5 +67,5 @@
       true
     ]
   },
-  "hash": "44b67e1eb00b1c604ae4982d03d2f85c586611d21b806abe00aab9874ec84f11"
+  "hash": "672786a4f6d54d62e24a36576cf98730cef3d948a2df66d9083ff2ce41060d0f"
 }

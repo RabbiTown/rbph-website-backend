@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team (name, pass, bio, game_id)\n        SELECT $2, $3, $4, g.id FROM rb_game g WHERE g.id = $1\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4091f780d91352d623949d2445a88ce9ea085645ce018e2e7decd463540e053f"
+}

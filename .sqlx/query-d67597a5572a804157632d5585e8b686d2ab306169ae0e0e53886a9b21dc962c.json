@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_member\n            SET is_captain = TRUE\n            WHERE ctid = (\n                SELECT ctid FROM rb_team_member\n                WHERE team_id = $1\n                ORDER BY ctime_at ASC\n                LIMIT 1\n            );",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d67597a5572a804157632d5585e8b686d2ab306169ae0e0e53886a9b21dc962c"
+}

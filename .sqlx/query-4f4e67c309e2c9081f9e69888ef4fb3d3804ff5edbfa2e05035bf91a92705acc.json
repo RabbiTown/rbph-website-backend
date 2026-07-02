@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tm.user_id FROM rb_team_member tm\n        JOIN rb_team t ON t.id = tm.team_id\n        WHERE tm.team_id = $1 AND NOT t.is_locked;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4f4e67c309e2c9081f9e69888ef4fb3d3804ff5edbfa2e05035bf91a92705acc"
+}

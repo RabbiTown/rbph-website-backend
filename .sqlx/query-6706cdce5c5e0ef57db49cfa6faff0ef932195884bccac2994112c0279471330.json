@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_member (team_id, user_id, is_captain)\n        VALUES ($1, $2, TRUE);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6706cdce5c5e0ef57db49cfa6faff0ef932195884bccac2994112c0279471330"
+}

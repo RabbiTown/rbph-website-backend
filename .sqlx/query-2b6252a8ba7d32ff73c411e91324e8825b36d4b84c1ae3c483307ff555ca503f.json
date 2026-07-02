@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.name, t.bio, t.finish_at, MAX(tp.solve_at) AS last_solved_at,\n                COUNT(tp.puzzle_id) AS \"solves!\", t.game_id\n            FROM rb_team t\n            LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1\n            LEFT JOIN rb_team_feature tf\n                ON tf.team_id = t.id AND tf.feature_type = 3\n            WHERE t.id = $1 AND t.is_locked AND NOT t.is_banned AND COALESCE(tf.enabled, TRUE)\n            GROUP BY t.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "bio",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "finish_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_solved_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "solves!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "game_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "2b6252a8ba7d32ff73c411e91324e8825b36d4b84c1ae3c483307ff555ca503f"
+}

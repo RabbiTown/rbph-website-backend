@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.game_id, t.is_locked, tp.puzzle_id AS \"puzzle_id?\"\n        FROM rb_team t\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1\n        WHERE t.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_locked",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "puzzle_id?",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7670139e3d576ed8491ca89bc49cef2546b01f514a8cd9a95cd4962ea246a6aa"
+}

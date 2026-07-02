@@ -91,7 +91,8 @@ async fn login(
         Err(e) => RbError::internal(e).err()?,
     }
 
-    session::append(&app.kv, &sess, user.id, app.settings.auth.max_session).await?;
+    let max_sessions = app.system_settings.read().await.max_sessions as usize;
+    session::append(&app.kv, &sess, user.id, max_sessions).await?;
     sess.renew();
 
     db::event_log::insert_pool(
@@ -143,6 +144,7 @@ struct UserRegisterResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum UserRegisterResult {
+    RegistrationClosed = -3,
     Invalid = -2,
     UserExists = -1,
     Ok = 0,
@@ -154,6 +156,13 @@ async fn register(
     req: web::Json<UserRegisterRequest>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let settings = app.system_settings.read().await.clone();
+    if !settings.registration_open {
+        return RbError::forbid()
+            .code(UserRegisterResult::RegistrationClosed.into())
+            .http_err();
+    }
+
     let req = req.normalized();
     if let Err(e) = req.validate() {
         RbError::bad_req(UserRegisterResult::Invalid.into())
@@ -165,7 +174,7 @@ async fn register(
         RbError::conflict(UserRegisterResult::UserExists.into()).err()?
     }
 
-    if app.settings.auth.email.enabled
+    if settings.require_email_verification
         && let Some(email) = &app.email
     {
         if db::user::pending_exists(&app.kv, &req.email).await? {

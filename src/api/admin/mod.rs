@@ -7,6 +7,7 @@ mod puzzle;
 mod puzzle_backend;
 mod release;
 mod round;
+mod system_settings;
 mod team;
 mod user;
 
@@ -29,5 +30,6 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     .configure(puzzle_backend::config)
     .configure(puzzle::config)
     .configure(round::config);
-    cfg.configure(user::config);
+    cfg.configure(user::config)
+        .configure(system_settings::config);
 }

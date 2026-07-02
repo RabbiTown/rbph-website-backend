@@ -11,6 +11,7 @@ use serde::Serialize;
 #[repr(i32)]
 #[derive(IntoPrimitive)]
 enum RbErrorCode {
+    Maintenance = -107,
     PasswordChangeRequired = -106,
     NotFound = -104,
     Forbidden = -103,
@@ -91,7 +92,7 @@ impl RbError {
         Self {
             code: RbErrorCode::Forbidden.into(),
             message: Some("Forbidden".to_string()),
-            status_code: StatusCode::UNAUTHORIZED,
+            status_code: StatusCode::FORBIDDEN,
         }
     }
 
@@ -100,6 +101,14 @@ impl RbError {
             code: RbErrorCode::PasswordChangeRequired.into(),
             message: Some("Password change required".to_string()),
             status_code: StatusCode::FORBIDDEN,
+        }
+    }
+
+    pub fn maintenance(message: impl Into<String>) -> Self {
+        Self {
+            code: RbErrorCode::Maintenance.into(),
+            message: Some(message.into()),
+            status_code: StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 

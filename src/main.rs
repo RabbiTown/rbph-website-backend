@@ -18,10 +18,14 @@ use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
 use sqlx::PgPool;
-use tokio::{sync::Notify, time};
+use tokio::{
+    sync::{Notify, RwLock},
+    time,
+};
 
 use crate::{
     config::Settings,
+    middleware::maintenance::MaintenanceMiddleware,
     module::{email::EmailService, sync::SyncHub},
 };
 
@@ -33,6 +37,7 @@ pub struct AppState {
     pub db: DbPool,
     pub kv: KvPool,
     pub settings: Settings,
+    pub system_settings: Arc<RwLock<db::system_settings::SystemSettings>>,
     pub sync_hub: Arc<SyncHub>,
     pub release_schedule_changed: Arc<Notify>,
     pub email: Option<Arc<EmailService>>,
@@ -69,6 +74,9 @@ async fn main() -> std::io::Result<()> {
 
     let sync_hub = Arc::new(SyncHub::default());
     let release_schedule_changed = Arc::new(Notify::new());
+    let system_settings = Arc::new(RwLock::new(
+        db::system_settings::get(&db_pool).await.unwrap(),
+    ));
 
     let email_service = if settings.auth.email.enabled {
         Some(Arc::new(
@@ -90,6 +98,7 @@ async fn main() -> std::io::Result<()> {
         db: db_pool,
         kv: kv_pool,
         settings,
+        system_settings,
         sync_hub: sync_hub.clone(),
         release_schedule_changed: release_schedule_changed.clone(),
         email: email_service.clone(),
@@ -116,7 +125,11 @@ async fn main() -> std::io::Result<()> {
                     .build(),
             )
             .configure(asset::config)
-            .service(web::scope("/api").configure(api::config))
+            .service(
+                web::scope("/api")
+                    .wrap(MaintenanceMiddleware)
+                    .configure(api::config),
+            )
     })
     .bind((host.as_str(), port))?
     .run();

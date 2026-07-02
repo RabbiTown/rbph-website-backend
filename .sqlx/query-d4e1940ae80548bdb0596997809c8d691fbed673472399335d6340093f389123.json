@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT registration_open, require_email_verification, max_sessions,\n            maintenance_enabled, maintenance_message, updated_by, updated_at\n        FROM rb_system_settings WHERE singleton = TRUE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "registration_open",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "require_email_verification",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_sessions",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "maintenance_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "maintenance_message",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_by",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "d4e1940ae80548bdb0596997809c8d691fbed673472399335d6340093f389123"
+}

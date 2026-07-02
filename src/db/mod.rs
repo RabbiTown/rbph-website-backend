@@ -10,6 +10,7 @@ pub mod puzzle;
 pub mod puzzle_backend;
 pub mod release;
 pub mod round;
+pub mod system_settings;
 pub mod team;
 pub mod ticket;
 pub mod user;

@@ -13,7 +13,6 @@ kind = "local"
 asset_root = "./assets"
 
 [auth]
-max_session = 3
 
 [auth.captcha]
 

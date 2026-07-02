@@ -54,7 +54,6 @@ fn default_storage_kind() -> String {
 
 #[derive(Deserialize, Clone)]
 pub struct AuthConfig {
-    pub max_session: usize,
     pub captcha: CaptchaConfig,
     pub email: EmailConfig,
 }

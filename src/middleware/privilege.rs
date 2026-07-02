@@ -70,9 +70,19 @@ where
         Box::pin(async move {
             // quick check if previously used
             // TODO : split out an auth middleware
-            let role_cache = req.extensions().get::<RbUserRole>().copied();
-            if let Some(role) = role_cache {
-                if role >= required {
+            let auth_cache = req.extensions().get::<db::user::UserAuthState>().copied();
+            if let Some(auth) = auth_cache {
+                let path = req.path();
+                let password_route =
+                    path.ends_with("/user/info") || path.ends_with("/user/password");
+                if auth.must_change_password && !password_route {
+                    return Ok(req.into_response(
+                        RbError::password_change_required()
+                            .resp()
+                            .map_into_right_body(),
+                    ));
+                }
+                if auth.role >= required {
                     return Ok(srv.call(req).await?.map_into_left_body());
                 } else {
                     return Ok(req.into_response(RbError::forbid().resp().map_into_right_body()));
@@ -95,8 +105,19 @@ where
             let user_id = sess.get::<i32>("user_id").ok().flatten();
 
             if let Some(uid) = user_id {
-                match db::user::get_role_by_id(&app.db, uid).await {
-                    Ok(Some(role)) => {
+                match db::user::get_auth_state_by_id(&app.db, uid).await {
+                    Ok(Some(auth)) => {
+                        let path = req.path();
+                        let password_route =
+                            path.ends_with("/user/info") || path.ends_with("/user/password");
+                        if auth.must_change_password && !password_route {
+                            return Ok(req.into_response(
+                                RbError::password_change_required()
+                                    .resp()
+                                    .map_into_right_body(),
+                            ));
+                        }
+                        let role = auth.role;
                         if role >= required {
                             req.extensions_mut().insert(role);
                             return Ok(srv.call(req).await?.map_into_left_body());

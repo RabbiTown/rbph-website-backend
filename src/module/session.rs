@@ -68,6 +68,12 @@ pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInterna
     }
 }
 
+pub async fn invalidate_all(pool: &KvPool, user_id: i32) -> Result<(), RbInternalError> {
+    let mut conn = pool.get().await?;
+    let _: () = conn.del(format!("{USER_SESSIONS}:{user_id}")).await?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub async fn invalidate_others(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();

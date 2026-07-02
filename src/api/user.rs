@@ -65,7 +65,7 @@ pub async fn update_info(
 
 #[derive(Deserialize)]
 struct UserPasswordUpdateRequest {
-    current_password: String,
+    current_password: Option<String>,
     new_password: String,
 }
 
@@ -94,12 +94,22 @@ async fn update_password(
     req: web::Json<UserPasswordUpdateRequest>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    if !valid_password(&req.current_password) || !valid_password(&req.new_password) {
+    if !valid_password(&req.new_password)
+        || req
+            .current_password
+            .as_deref()
+            .is_some_and(|password| !valid_password(password))
+    {
         return RbError::bad_req(UserPasswordUpdateResult::Invalid.into()).http_err();
     }
 
-    match db::user::change_password(&app.db, user.uid, &req.current_password, &req.new_password)
-        .await?
+    match db::user::change_password(
+        &app.db,
+        user.uid,
+        req.current_password.as_deref(),
+        &req.new_password,
+    )
+    .await?
     {
         db::user::ChangePasswordResult::WrongCurrent => {
             return RbError::bad_req(UserPasswordUpdateResult::WrongCurrent.into()).http_err();

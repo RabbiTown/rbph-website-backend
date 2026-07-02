@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id AS game_id, g.title AS game_title, t.id AS team_id,\n            t.name AS team_name, tm.is_captain\n        FROM rb_team_member tm\n        JOIN rb_team t ON t.id = tm.team_id\n        JOIN rb_game g ON g.id = tm.game_id\n        WHERE tm.user_id = $1\n        ORDER BY g.id, t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "team_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "is_captain",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4b2edb71d13b60dcd821392c14931e9b1cfb11d443802ec76cee5668107532a0"
+}

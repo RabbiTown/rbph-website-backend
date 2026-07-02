@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pass, must_change_password FROM rb_user WHERE id = $1 FOR UPDATE;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pass",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "must_change_password",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "dfb3e30a47f0ae8efd34e70b1afc3cb211cefdba00d412afbdbc6affa976c015"
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE rb_user SET pass = $2 WHERE id = $1;",
+  "query": "UPDATE rb_user SET pass = $2, must_change_password = FALSE WHERE id = $1;",
   "describe": {
     "columns": [],
     "parameters": {
@@ -11,5 +11,5 @@
     },
     "nullable": []
   },
-  "hash": "da90db2cbedee71b55f94cbb24bcfc572cc3e3fbcfa966a922da7cd3d0108f6d"
+  "hash": "353686a6f9f77d8642f39faf788a4db34139db7f659b48f64c3fddfcdb82f7fc"
 }

@@ -1,3 +1,4 @@
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -284,7 +285,55 @@ pub struct TicketThread {
     #[serde(skip_serializing_if = "Option::is_none")]
     ticket: Option<TicketSummary>,
     messages: Vec<TicketThreadItem>,
+    history: TicketHistory,
     perm: TicketPerm,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TicketCursor {
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    at: OffsetDateTime,
+    rank: i8,
+    id: i32,
+}
+
+impl TicketCursor {
+    pub fn decode(value: &str) -> Option<Self> {
+        URL_SAFE_NO_PAD
+            .decode(value)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    fn encode(&self) -> String {
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(self).expect("ticket cursor serialization"))
+    }
+}
+
+#[derive(Default)]
+pub struct TicketPageRequest {
+    pub before: Option<TicketCursor>,
+    pub after: Option<TicketCursor>,
+    pub stop: Option<TicketCursor>,
+    pub(crate) oldest: bool,
+}
+
+#[derive(Default, Serialize)]
+pub struct TicketHistory {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    newer: Option<String>,
+    has_more: bool,
+}
+
+struct TicketMessagePage {
+    items: Vec<TicketThreadItem>,
+    history: TicketHistory,
 }
 
 impl TicketThread {
@@ -451,12 +500,31 @@ fn make_message(
     })
 }
 
-pub async fn get_ticket_messages(
+fn item_cursor(item: &TicketThreadItem) -> TicketCursor {
+    TicketCursor {
+        at: item.ctime_at(),
+        rank: item.same_time_rank(),
+        id: item.id(),
+    }
+}
+
+async fn get_ticket_messages_page(
     db_pool: &DbPool,
     ticket_id: i32,
     can_view_locked: bool,
-) -> Result<Vec<TicketThreadItem>, RbInternalError> {
+    request: &TicketPageRequest,
+    limit: usize,
+) -> Result<TicketMessagePage, RbInternalError> {
     let mut items: Vec<TicketThreadItem> = Vec::new();
+    let after = request.after.is_some() || request.oldest;
+    let cursor = request.after.as_ref().or(request.before.as_ref());
+    let cursor_at = cursor.map(|value| value.at);
+    let cursor_rank = cursor.map(|value| value.rank).unwrap_or(0);
+    let cursor_id = cursor.map(|value| value.id).unwrap_or(0);
+    let stop_at = request.stop.as_ref().map(|value| value.at);
+    let stop_rank = request.stop.as_ref().map(|value| value.rank).unwrap_or(0);
+    let stop_id = request.stop.as_ref().map(|value| value.id).unwrap_or(0);
+    let query_limit = (limit + 1) as i64;
 
     let result = sqlx::query!(
         "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,
@@ -472,9 +540,27 @@ pub async fn get_ticket_messages(
             FROM rb_ticket_operation o
             WHERE o.message_id = m.id
         )
-        ORDER BY m.ctime_at ASC",
+        AND ($3::TIMESTAMPTZ IS NULL OR
+            ($4 AND (m.ctime_at > $3 OR (m.ctime_at = $3 AND (1 > $5 OR (1 = $5 AND m.id > $6))))) OR
+            (NOT $4 AND (m.ctime_at < $3 OR (m.ctime_at = $3 AND (1 < $5 OR (1 = $5 AND m.id < $6))))))
+        AND ($7::TIMESTAMPTZ IS NULL OR m.ctime_at < $7 OR
+            (m.ctime_at = $7 AND (1 < $8 OR (1 = $8 AND m.id < $9))))
+        ORDER BY
+            CASE WHEN $4 THEN m.ctime_at END ASC,
+            CASE WHEN NOT $4 THEN m.ctime_at END DESC,
+            CASE WHEN $4 THEN m.id END ASC,
+            CASE WHEN NOT $4 THEN m.id END DESC
+        LIMIT $10",
         ticket_id,
-        can_view_locked
+        can_view_locked,
+        cursor_at,
+        after,
+        i32::from(cursor_rank),
+        cursor_id,
+        stop_at,
+        i32::from(stop_rank),
+        stop_id,
+        query_limit,
     )
     .fetch_all(db_pool)
     .await?
@@ -515,9 +601,35 @@ pub async fn get_ticket_messages(
         JOIN rb_user u ON u.id = o.actor
         LEFT JOIN rb_message m ON m.id = o.message_id
         LEFT JOIN rb_user mu ON mu.id = m.sender
-        WHERE o.ticket_id = $1",
+        WHERE o.ticket_id = $1
+        AND ($3::TIMESTAMPTZ IS NULL OR
+            ($4 AND (o.ctime_at > $3 OR (o.ctime_at = $3 AND
+                ((CASE WHEN o.action = 1 THEN 0 ELSE 2 END) > $5 OR
+                ((CASE WHEN o.action = 1 THEN 0 ELSE 2 END) = $5 AND o.id > $6))))) OR
+            (NOT $4 AND (o.ctime_at < $3 OR (o.ctime_at = $3 AND
+                ((CASE WHEN o.action = 1 THEN 0 ELSE 2 END) < $5 OR
+                ((CASE WHEN o.action = 1 THEN 0 ELSE 2 END) = $5 AND o.id < $6))))))
+        AND ($7::TIMESTAMPTZ IS NULL OR o.ctime_at < $7 OR (o.ctime_at = $7 AND
+            ((CASE WHEN o.action = 1 THEN 0 ELSE 2 END) < $8 OR
+            ((CASE WHEN o.action = 1 THEN 0 ELSE 2 END) = $8 AND o.id < $9))))
+        ORDER BY
+            CASE WHEN $4 THEN o.ctime_at END ASC,
+            CASE WHEN NOT $4 THEN o.ctime_at END DESC,
+            CASE WHEN $4 THEN (CASE WHEN o.action = 1 THEN 0 ELSE 2 END) END ASC,
+            CASE WHEN NOT $4 THEN (CASE WHEN o.action = 1 THEN 0 ELSE 2 END) END DESC,
+            CASE WHEN $4 THEN o.id END ASC,
+            CASE WHEN NOT $4 THEN o.id END DESC
+        LIMIT $10",
         ticket_id,
-        can_view_locked
+        can_view_locked,
+        cursor_at,
+        after,
+        i32::from(cursor_rank),
+        cursor_id,
+        stop_at,
+        i32::from(stop_rank),
+        stop_id,
+        query_limit,
     )
     .fetch_all(db_pool)
     .await?
@@ -549,7 +661,115 @@ pub async fn get_ticket_messages(
             .then_with(|| a.id().cmp(&b.id()))
     });
 
-    Ok(items)
+    let has_more = items.len() > limit;
+    if after {
+        items.truncate(limit);
+    } else if items.len() > limit {
+        items = items.split_off(items.len() - limit);
+    }
+
+    let before = (!after && has_more)
+        .then(|| items.first().map(item_cursor).map(|cursor| cursor.encode()))
+        .flatten();
+    let next_after = (after && has_more)
+        .then(|| items.last().map(item_cursor).map(|cursor| cursor.encode()))
+        .flatten();
+
+    let newer = items.last().map(item_cursor).map(|cursor| cursor.encode());
+    Ok(TicketMessagePage {
+        items,
+        history: TicketHistory {
+            before,
+            after: next_after,
+            stop: request.stop.as_ref().map(TicketCursor::encode),
+            newer,
+            has_more,
+        },
+    })
+}
+
+async fn get_ticket_page(
+    db_pool: &DbPool,
+    ticket_id: i32,
+    can_view_locked: bool,
+    is_puzzle: bool,
+    request: &TicketPageRequest,
+) -> Result<TicketMessagePage, RbInternalError> {
+    if request.before.is_some() || request.after.is_some() {
+        return get_ticket_messages_page(db_pool, ticket_id, can_view_locked, request, 50).await;
+    }
+
+    let mut latest = get_ticket_messages_page(
+        db_pool,
+        ticket_id,
+        can_view_locked,
+        &TicketPageRequest::default(),
+        50,
+    )
+    .await?;
+    if !is_puzzle || latest.history.before.is_none() {
+        return Ok(latest);
+    }
+
+    let first = get_ticket_messages_page(
+        db_pool,
+        ticket_id,
+        can_view_locked,
+        &TicketPageRequest {
+            oldest: true,
+            ..Default::default()
+        },
+        1,
+    )
+    .await?;
+    let Some(first_item) = first.items.into_iter().next() else {
+        return Ok(latest);
+    };
+    let first_cursor = item_cursor(&first_item);
+    let stop_cursor = latest.items.first().map(item_cursor);
+    if !latest
+        .items
+        .iter()
+        .any(|item| item_cursor(item).encode() == first_cursor.encode())
+    {
+        latest.items.insert(0, first_item);
+    }
+    let gap_probe = get_ticket_messages_page(
+        db_pool,
+        ticket_id,
+        can_view_locked,
+        &TicketPageRequest {
+            after: Some(first_cursor.clone()),
+            stop: stop_cursor.clone(),
+            ..Default::default()
+        },
+        1,
+    )
+    .await?;
+    if gap_probe.items.is_empty() {
+        latest.history = TicketHistory {
+            newer: latest
+                .items
+                .last()
+                .map(item_cursor)
+                .map(|cursor| cursor.encode()),
+            ..Default::default()
+        };
+        return Ok(latest);
+    }
+    let newer = latest
+        .items
+        .last()
+        .map(item_cursor)
+        .map(|cursor| cursor.encode());
+    latest.history = TicketHistory {
+        after: Some(first_cursor.encode()),
+        stop: stop_cursor.map(|cursor| cursor.encode()),
+        newer,
+        has_more: true,
+        ..Default::default()
+    };
+    Ok(latest)
 }
 
 pub async fn get_ticket_message(
@@ -646,6 +866,7 @@ pub async fn get_dm_ticket_thread(
     team_id: i32,
     can_view_locked: bool,
     can_use_trusted_content: bool,
+    page: &TicketPageRequest,
 ) -> Result<TicketThread, RbInternalError> {
     let ticket_id = sqlx::query_scalar!(
         "SELECT id FROM rb_ticket
@@ -676,6 +897,7 @@ pub async fn get_dm_ticket_thread(
         return Ok(TicketThread {
             ticket: None,
             messages: vec![],
+            history: TicketHistory::default(),
             perm: TicketPerm::new(
                 can_view_locked,
                 can_view_locked,
@@ -694,7 +916,7 @@ pub async fn get_dm_ticket_thread(
     if !can_view_locked && let Some(ticket) = ticket.as_mut() {
         ticket.hide_assignee();
     }
-    let messages = get_ticket_messages(db_pool, ticket_id, can_view_locked).await?;
+    let message_page = get_ticket_page(db_pool, ticket_id, can_view_locked, false, page).await?;
     let state = ticket
         .as_ref()
         .map(|x| x.state)
@@ -707,7 +929,8 @@ pub async fn get_dm_ticket_thread(
 
     Ok(TicketThread {
         ticket,
-        messages,
+        messages: message_page.items,
+        history: message_page.history,
         perm: TicketPerm::new(
             can_view_locked,
             can_view_locked,
@@ -804,6 +1027,7 @@ pub async fn get_ticket_thread(
     db_pool: &DbPool,
     ticket_id: i32,
     info: &TicketUserInfo,
+    page: &TicketPageRequest,
 ) -> Result<Option<TicketThread>, RbInternalError> {
     let Some(mut ticket) = get_ticket_summary(db_pool, ticket_id, true).await? else {
         return Ok(None);
@@ -811,7 +1035,14 @@ pub async fn get_ticket_thread(
     if !info.mod_access {
         ticket.hide_assignee();
     }
-    let messages = get_ticket_messages(db_pool, ticket_id, info.mod_access).await?;
+    let message_page = get_ticket_page(
+        db_pool,
+        ticket_id,
+        info.mod_access,
+        ticket.is_puzzle_ticket(),
+        page,
+    )
+    .await?;
     let player_can_send = player_can_send_ticket(db_pool, ticket_id).await?;
     let send_block = if info.member_access && !info.mod_access && !player_can_send {
         TicketSendBlock::FeatureClosed
@@ -833,7 +1064,8 @@ pub async fn get_ticket_thread(
 
     Ok(Some(TicketThread {
         ticket: Some(ticket),
-        messages,
+        messages: message_page.items,
+        history: message_page.history,
         perm: TicketPerm::new(
             info.mod_access,
             info.mod_access,
@@ -1648,7 +1880,7 @@ pub async fn open_puzzle_ticket(
         mod_access: matches!(message.sender_type, RbTicketSenderType::Host),
         admin_access: false,
     };
-    let thread = get_ticket_thread(db_pool, ticket_id, &info)
+    let thread = get_ticket_thread(db_pool, ticket_id, &info, &TicketPageRequest::default())
         .await?
         .ok_or("Opened ticket not found")?;
 

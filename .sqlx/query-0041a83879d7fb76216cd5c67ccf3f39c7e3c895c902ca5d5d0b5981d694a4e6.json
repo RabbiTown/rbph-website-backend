@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_user (email, pass, nickname, bio, urole, must_change_password)\n        VALUES ($1, $2, $3, $4, $5, TRUE)\n        ON CONFLICT (email) DO NOTHING RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0041a83879d7fb76216cd5c67ccf3f39c7e3c895c902ca5d5d0b5981d694a4e6"
+}

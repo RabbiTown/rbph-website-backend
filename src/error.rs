@@ -11,6 +11,7 @@ use serde::Serialize;
 #[repr(i32)]
 #[derive(IntoPrimitive)]
 enum RbErrorCode {
+    PasswordChangeRequired = -106,
     NotFound = -104,
     Forbidden = -103,
     Unauthorized = -101,
@@ -91,6 +92,14 @@ impl RbError {
             code: RbErrorCode::Forbidden.into(),
             message: Some("Forbidden".to_string()),
             status_code: StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    pub fn password_change_required() -> Self {
+        Self {
+            code: RbErrorCode::PasswordChangeRequired.into(),
+            message: Some("Password change required".to_string()),
+            status_code: StatusCode::FORBIDDEN,
         }
     }
 

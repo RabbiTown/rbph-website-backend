@@ -4,9 +4,10 @@ CREATE TABLE rb_user (
     id              SERIAL PRIMARY KEY,
     email           VARCHAR(255) UNIQUE NOT NULL,
     pass            VARCHAR(72) NOT NULL,
-    urole           SMALLINT NOT NULL DEFAULT 1,
+    urole           SMALLINT NOT NULL DEFAULT 1 CHECK (urole BETWEEN 0 AND 4),
     nickname        VARCHAR(60) NOT NULL DEFAULT '',
     bio             TEXT,
+    must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

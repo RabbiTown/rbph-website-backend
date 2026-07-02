@@ -51,6 +51,7 @@ impl UserLoginRequest {
 struct UserLoginResponse {
     code: UserLoginResult,
     uid: i32,
+    must_change_password: bool,
 }
 
 #[repr(i32)]
@@ -109,6 +110,7 @@ async fn login(
     Ok(HttpResponse::Ok().json(UserLoginResponse {
         code: UserLoginResult::Ok,
         uid: user.id,
+        must_change_password: user.must_change_password,
     }))
 }
 

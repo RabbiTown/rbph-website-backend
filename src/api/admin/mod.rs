@@ -8,6 +8,7 @@ mod puzzle_backend;
 mod release;
 mod round;
 mod team;
+mod user;
 
 use actix_web::web;
 
@@ -28,4 +29,5 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     .configure(puzzle_backend::config)
     .configure(puzzle::config)
     .configure(round::config);
+    cfg.configure(user::config);
 }

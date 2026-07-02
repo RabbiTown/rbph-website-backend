@@ -9,6 +9,7 @@ use crate::{DbPool, error::RbInternalError};
 
 #[derive(Clone, Serialize)]
 pub struct LeaderBoardTeamInfo {
+    pub rank: usize,
     pub id: i32,
     pub name: String,
     pub bio: String,
@@ -24,6 +25,9 @@ pub struct LeaderBoardTeamInfo {
 pub struct LeaderBoardInfo {
     pub data: Vec<LeaderBoardTeamInfo>,
     pub version: u32,
+    pub total: usize,
+    pub has_more: bool,
+    pub reset: bool,
     pub state: &'static str,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub locked_at: Option<OffsetDateTime>,
@@ -241,6 +245,7 @@ impl LeaderBoardCache {
                     solves,
                 } = team;
                 LeaderBoardTeamInfo {
+                    rank: 0,
                     id,
                     name,
                     bio,
@@ -313,6 +318,7 @@ impl LeaderBoardCache {
             return Ok(Some((
                 team.game_id,
                 LeaderBoardTeamInfo {
+                    rank: 0,
                     id: team.id,
                     bio: team.bio,
                     name: team.name,
@@ -356,6 +362,7 @@ impl LeaderBoardCache {
         Ok(Some((
             team.game_id,
             LeaderBoardTeamInfo {
+                rank: 0,
                 id: team.id,
                 bio: team.bio.clone(),
                 name: team.name,
@@ -407,12 +414,14 @@ impl LeaderBoardCache {
     }
 
     // TODO : use scheduled update (5-10s maybe)
-    pub async fn get_info_str(
+    pub async fn get_info(
         &self,
         db_pool: &DbPool,
         game_id: i32,
         prev_version: Option<u32>,
-    ) -> Result<Option<String>, RbInternalError> {
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<LeaderBoardInfo>, RbInternalError> {
         // check if anything needs updates (R LOCK)
         let (needs_all, needs_order, version) = {
             let guard = self.cache.read().await;
@@ -426,36 +435,46 @@ impl LeaderBoardCache {
             self.update_all(db_pool, game_id).await?;
         } else if needs_order {
             self.update_order(db_pool, game_id).await?;
-        } else if Some(version) == prev_version {
+        } else if Some(version) == prev_version && offset == 0 {
             return Ok(None);
         }
 
-        // get json cache (R LOCK)
-        let (version, locked_at) = {
+        let (version, locked_at, total, teams_vec, reset, page_offset) = {
             let guard = self.cache.read().await;
             let leaderboard = guard.get(&game_id).ok_or("Not Found")?;
-
-            if let Some(result) = &leaderboard.json_cache {
-                return Ok(Some(result.clone()));
-            }
-
-            (leaderboard.version, leaderboard.locked_at)
-        };
-
-        let teams_vec: Vec<LeaderBoardTeamInfo> = {
-            let guard = self.cache.read().await;
-            let leaderboard = guard.get(&game_id).ok_or("Not Found")?;
-            leaderboard
+            let total = leaderboard.order.len();
+            let reset =
+                offset > 0 && prev_version.is_some_and(|value| value != leaderboard.version);
+            let page_offset = if reset { 0 } else { offset };
+            let teams = leaderboard
                 .order
                 .iter()
-                .filter_map(|id| leaderboard.teams.get(id))
-                .cloned()
-                .collect()
+                .enumerate()
+                .skip(page_offset)
+                .take(limit)
+                .filter_map(|(index, id)| {
+                    leaderboard.teams.get(id).cloned().map(|mut team| {
+                        team.rank = index + 1;
+                        team
+                    })
+                })
+                .collect();
+            (
+                leaderboard.version,
+                leaderboard.locked_at,
+                total,
+                teams,
+                reset,
+                page_offset,
+            )
         };
 
         let info = LeaderBoardInfo {
             data: teams_vec,
             version,
+            total,
+            has_more: page_offset.saturating_add(limit) < total,
+            reset,
             state: if locked_at.is_some() {
                 "locked"
             } else {
@@ -464,16 +483,6 @@ impl LeaderBoardCache {
             locked_at,
         };
 
-        let result = serde_json::to_string(&info)?;
-
-        // update json cache (W LOCK)
-        {
-            let mut guard = self.cache.write().await;
-            if let Some(cache) = guard.get_mut(&game_id) {
-                cache.json_cache = Some(result.clone());
-            }
-        }
-
-        Ok(Some(result))
+        Ok(Some(info))
     }
 }

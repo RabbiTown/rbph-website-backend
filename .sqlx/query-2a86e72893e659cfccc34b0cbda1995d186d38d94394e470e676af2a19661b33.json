@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_user SET email = $2, nickname = $3, bio = $4, urole = $5\n        WHERE id = $1 AND NOT EXISTS (\n            SELECT 1 FROM rb_user other WHERE other.email = $2 AND other.id <> $1\n        ) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Varchar",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2a86e72893e659cfccc34b0cbda1995d186d38d94394e470e676af2a19661b33"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"count!\" FROM rb_user u\n        WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%'\n            OR u.nickname ILIKE '%' || $1 || '%'\n            OR u.id::TEXT = $1)\n            AND ($2::SMALLINT IS NULL OR u.urole = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7e7bba9c9e99f3936324f5201bb4726765112cc06eb2331bf703d26c6c0acb3e"
+}

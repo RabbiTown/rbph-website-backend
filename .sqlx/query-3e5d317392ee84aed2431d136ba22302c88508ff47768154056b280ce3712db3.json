@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT urole, must_change_password FROM rb_user WHERE id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "urole",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 1,
+        "name": "must_change_password",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "3e5d317392ee84aed2431d136ba22302c88508ff47768154056b280ce3712db3"
+}

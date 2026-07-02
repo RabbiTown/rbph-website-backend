@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_user SET pass = $2, must_change_password = TRUE\n        WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f0df3cec43f55d8d858ad70f64cc18f680e3294ab7c732db32785ab2f741b50b"
+}

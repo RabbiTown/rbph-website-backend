@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.email, u.nickname, u.urole,\n            u.must_change_password, u.ctime_at, COUNT(tm.team_id) AS \"team_count!\"\n        FROM rb_user u\n        LEFT JOIN rb_team_member tm ON tm.user_id = u.id\n        WHERE ($1 = '' OR u.email ILIKE '%' || $1 || '%'\n            OR u.nickname ILIKE '%' || $1 || '%'\n            OR u.id::TEXT = $1)\n            AND ($2::SMALLINT IS NULL OR u.urole = $2)\n        GROUP BY u.id\n        ORDER BY u.id\n        LIMIT $3 OFFSET $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "urole",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "must_change_password",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "team_count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int2",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "1c4371b3224246be3545b5eb75a20bd56397e33ff84b2ed7555160c55e391007"
+}

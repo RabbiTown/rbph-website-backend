@@ -37,6 +37,35 @@ struct TicketMessagePathInfo {
     message_id: i32,
 }
 
+#[derive(Deserialize, Default)]
+struct TicketThreadQuery {
+    before: Option<String>,
+    after: Option<String>,
+    stop: Option<String>,
+}
+
+fn ticket_page_request(query: &TicketThreadQuery) -> Result<db::ticket::TicketPageRequest> {
+    if (query.before.is_some() && query.after.is_some())
+        || (query.stop.is_some() && query.after.is_none())
+    {
+        return Err(RbError::bad_req(-1).into());
+    }
+    let decode = |value: &Option<String>| -> Result<Option<db::ticket::TicketCursor>> {
+        match value {
+            Some(value) => db::ticket::TicketCursor::decode(value)
+                .map(Some)
+                .ok_or_else(|| RbError::bad_req(-1).into()),
+            None => Ok(None),
+        }
+    };
+    Ok(db::ticket::TicketPageRequest {
+        before: decode(&query.before)?,
+        after: decode(&query.after)?,
+        stop: decode(&query.stop)?,
+        ..Default::default()
+    })
+}
+
 #[derive(Deserialize)]
 struct StaffDmPathInfo {
     game_id: i32,
@@ -66,11 +95,13 @@ impl FromRequest for TicketUserInfo {
 
 async fn get_ticket(
     path: web::Path<TicketPathInfo>,
+    query: web::Query<TicketThreadQuery>,
     info: TicketUserInfo,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     crate::module::release::process_due_releases(app.get_ref()).await?;
-    let result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info).await?;
+    let page = ticket_page_request(&query)?;
+    let result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info, &page).await?;
     if result.is_none() {
         RbError::not_found().err()?
     }
@@ -78,14 +109,20 @@ async fn get_ticket(
     Ok(HttpResponse::Ok().json(result))
 }
 
-async fn get_dm_ticket(user: AuthUser, app: web::Data<AppState>) -> Result<HttpResponse> {
+async fn get_dm_ticket(
+    query: web::Query<TicketThreadQuery>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
     crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let page = ticket_page_request(&query)?;
     let result = db::ticket::get_dm_ticket_thread(
         &app.db,
         team_id,
         user.req_role()?.is_moderator(),
         user.req_role()?.is_admin(),
+        &page,
     )
     .await?;
     let message_ids = result
@@ -479,9 +516,14 @@ async fn close_ticket(
     let refreshed_info = db::ticket::get_ticket_user_info(&app.db, path.ticket_id, user.uid)
         .await?
         .ok_or(RbError::internal("Invalid ticket id"))?;
-    let thread = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &refreshed_info)
-        .await?
-        .ok_or(RbError::internal("Closed ticket not found"))?;
+    let thread = db::ticket::get_ticket_thread(
+        &app.db,
+        path.ticket_id,
+        &refreshed_info,
+        &db::ticket::TicketPageRequest::default(),
+    )
+    .await?
+    .ok_or(RbError::internal("Closed ticket not found"))?;
     let perm = thread.perm().clone();
 
     Ok(HttpResponse::Ok().json(TicketCloseResponse {
@@ -745,6 +787,7 @@ struct StaffTicketListQuery {
 #[derive(Serialize)]
 struct StaffTicketListResponse {
     tickets: Vec<TicketSummary>,
+    has_more: bool,
 }
 
 #[derive(Deserialize)]
@@ -824,7 +867,7 @@ async fn list_staff_tickets(
     };
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     let offset = query.offset.unwrap_or(0).max(0);
-    let tickets = db::ticket::list_staff_tickets(
+    let mut tickets = db::ticket::list_staff_tickets(
         &app.db,
         path.game_id,
         kind,
@@ -834,11 +877,13 @@ async fn list_staff_tickets(
         user.uid,
         query.puzzle_id,
         query.team_id,
-        limit,
+        limit + 1,
         offset,
     )
     .await?;
-    Ok(HttpResponse::Ok().json(StaffTicketListResponse { tickets }))
+    let has_more = tickets.len() > limit as usize;
+    tickets.truncate(limit as usize);
+    Ok(HttpResponse::Ok().json(StaffTicketListResponse { tickets, has_more }))
 }
 
 #[derive(Deserialize)]

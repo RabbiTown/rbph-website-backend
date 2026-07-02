@@ -92,7 +92,7 @@ INSERT INTO rb_user (id, email, pass, urole, nickname)
 VALUES (2, 'mod@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 2, 'mod');
 
 INSERT INTO rb_user (id, email, pass, urole, nickname)
-VALUES (3, 'admin@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 3, 'admin');
+VALUES (3, 'admin@rabbi.town', '$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6', 4, 'admin');
 
 SELECT setval('rb_user_id_seq', 100);
 

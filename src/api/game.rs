@@ -3,7 +3,6 @@ use actix_web::{
     HttpMessage, HttpResponse, Result,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
-    http::header::ContentType,
     middleware::{self, Next},
     web::{self},
 };
@@ -217,6 +216,8 @@ async fn get_rounds(
 #[derive(Deserialize)]
 struct LeaderBoardQuery {
     version: Option<u32>,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 async fn get_leaderboard(
@@ -225,14 +226,14 @@ async fn get_leaderboard(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     crate::module::release::process_due_releases(app.get_ref()).await?;
+    let offset = req.offset.unwrap_or(0);
+    let limit = req.limit.unwrap_or(50).clamp(1, 100);
     let result = db::board::LEADER_BOARD_CACHE
-        .get_info_str(&app.db, path.game_id, req.version)
+        .get_info(&app.db, path.game_id, req.version, offset, limit)
         .await?;
 
     match result {
-        Some(json) => Ok(HttpResponse::Ok()
-            .content_type(ContentType::json())
-            .body(json)),
+        Some(info) => Ok(HttpResponse::Ok().json(info)),
         None => Ok(HttpResponse::NotModified().finish()),
     }
 }
@@ -252,12 +253,14 @@ async fn check_game_middleware(
     let app = req.app_data::<web::Data<AppState>>().unwrap();
 
     if let Some(user_id) = user_id {
-        let role = db::user::get_role_by_id(&app.db, user_id)
+        let auth = db::user::get_auth_state_by_id(&app.db, user_id)
             .await?
             .ok_or_else(RbError::not_found)?;
+        let role = auth.role;
         match db::game::get_game_user_info(&app.db, user_id, game_id, role).await? {
             Some(info) => {
                 req.extensions_mut().insert(role);
+                req.extensions_mut().insert(auth);
                 req.extensions_mut().insert(info);
             }
             None => {

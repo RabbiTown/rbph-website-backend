@@ -130,7 +130,8 @@ WHERE notified_at IS NULL;
 CREATE TABLE rb_team (
     id              SERIAL PRIMARY KEY,
     name           VARCHAR(60) NOT NULL,
-    state           SMALLINT NOT NULL DEFAULT 0,
+    is_banned       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_locked       BOOLEAN NOT NULL DEFAULT FALSE,
     pass            VARCHAR(32) NOT NULL,
     bio             TEXT NOT NULL,
     game_id         INT NOT NULL REFERENCES rb_game(id) ON DELETE CASCADE,
@@ -138,8 +139,16 @@ CREATE TABLE rb_team (
     finish_at       TIMESTAMPTZ
 );
 
-CREATE INDEX rb_idx_team_game_state_finish
-ON rb_team(game_id, state, finish_at);
+CREATE INDEX rb_idx_team_game_flags_finish
+ON rb_team(game_id, is_banned, is_locked, finish_at);
+
+CREATE TABLE rb_team_feature (
+    team_id         INT NOT NULL REFERENCES rb_team(id) ON DELETE CASCADE,
+    feature_type    SMALLINT NOT NULL,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (team_id, feature_type)
+);
 
 CREATE TABLE rb_leaderboard_lock (
     game_id         INT PRIMARY KEY REFERENCES rb_game(id) ON DELETE CASCADE,

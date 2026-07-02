@@ -239,24 +239,6 @@ pub async fn player_states(
     Ok(result)
 }
 
-pub async fn current_state(
-    pool: &DbPool,
-    game_id: i32,
-    feature: GameFeature,
-) -> Result<GameFeatureState, RbInternalError> {
-    let value = sqlx::query_scalar!(
-        "SELECT state FROM rb_game_feature WHERE game_id = $1 AND feature_type = $2;",
-        game_id,
-        feature.value()
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or("Game feature not found")?;
-    feature
-        .decode_state(value)
-        .ok_or_else(|| "Invalid game feature state".into())
-}
-
 async fn lock_leaderboard_tx(
     tx: &mut Transaction<'_, Postgres>,
     game_id: i32,
@@ -288,11 +270,11 @@ async fn lock_leaderboard_tx(
             SELECT t.id, t.finish_at,
                 COUNT(tp.puzzle_id) AS solves,
                 MAX(tp.solve_at) AS last_solved_at,
-                ROW_NUMBER() OVER (ORDER BY t.state DESC, t.finish_at ASC NULLS LAST,
+                ROW_NUMBER() OVER (ORDER BY (t.finish_at IS NULL), t.finish_at ASC NULLS LAST,
                     COUNT(tp.puzzle_id) DESC, MAX(tp.solve_at) ASC NULLS LAST, t.id) AS rank
             FROM rb_team t
             LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
-            WHERE t.game_id = $1 AND t.state > 0
+            WHERE t.game_id = $1 AND t.is_locked AND NOT t.is_banned
             GROUP BY t.id
         ) ranked;",
         game_id

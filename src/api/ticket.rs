@@ -308,18 +308,9 @@ async fn send_dm_ticket_message(
     if db::ticket::get_dm_ticket_id(&app.db, team_id)
         .await?
         .is_none()
+        && !db::ticket::player_can_open_dm(&app.db, team_id).await?
     {
-        let game_id = sqlx::query_scalar!("SELECT game_id FROM rb_team WHERE id = $1;", team_id)
-            .fetch_one(&app.db)
-            .await
-            .map_err(crate::error::RbInternalError::from)?;
-        if !matches!(
-            db::feature::current_state(&app.db, game_id, db::feature::GameFeature::DirectMessage,)
-                .await?,
-            db::feature::GameFeatureState::Open
-        ) {
-            return RbError::conflict(TicketSendResult::FeatureClosed.into()).http_err();
-        }
+        return RbError::conflict(TicketSendResult::FeatureClosed.into()).http_err();
     }
     let ticket_id = db::ticket::get_or_create_dm_ticket_id(
         &app.db,
@@ -781,7 +772,14 @@ async fn list_staff_teams(
     let search = query.search.as_deref().unwrap_or("").trim();
     let teams = sqlx::query_as!(
         StaffTeamListItem,
-        "SELECT id, name, state FROM rb_team
+        "SELECT id, name,
+            (CASE
+                WHEN is_banned THEN -1
+                WHEN finish_at IS NOT NULL THEN 2
+                WHEN is_locked THEN 1
+                ELSE 0
+            END)::SMALLINT AS \"state!\"
+        FROM rb_team
         WHERE game_id = $1 AND ($2 = '' OR name ILIKE '%' || $2 || '%')
         ORDER BY name, id
         LIMIT 50",

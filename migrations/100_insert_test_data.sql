@@ -98,8 +98,8 @@ SELECT setval('rb_user_id_seq', 100);
 
 -- team
 
-INSERT INTO rb_team (id, name, state, pass, bio, game_id)
-VALUES (1, '蜡笔糖', 0, 'bili20fans', '', 1);
+INSERT INTO rb_team (id, name, is_locked, pass, bio, game_id)
+VALUES (1, '蜡笔糖', FALSE, 'bili20fans', '', 1);
 
 SELECT setval('rb_team_id_seq', 100);
 
@@ -109,8 +109,8 @@ VALUES (1, 1, 1, TRUE);
 INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
 VALUES (1, 1, 0);
 
-INSERT INTO rb_team (id, name, state, pass, bio, game_id, finish_at)
-VALUES (2, '-------- 金牌线 --------', 2, '1', '', 1, '2025-12-23 12:11');
+INSERT INTO rb_team (id, name, is_locked, pass, bio, game_id, finish_at)
+VALUES (2, '-------- 金牌线 --------', TRUE, '1', '', 1, '2025-12-23 12:11');
 
 INSERT INTO rb_team_puzzle (team_id, puzzle_id, state)
 VALUES (2, 1, 0), (2, 2, 1), (2, 3, 1);

@@ -374,6 +374,8 @@ pub async fn player_can_send_ticket(
 ) -> Result<bool, RbInternalError> {
     Ok(sqlx::query_scalar!(
         "SELECT COALESCE(gf.state <> 0, TRUE)
+            AND NOT t.is_banned
+            AND COALESCE(tf.enabled, TRUE)
             AND (tk.puzzle_id IS NULL OR EXISTS (
                 SELECT 1 FROM rb_puzzle p
                 JOIN rb_release_phase rp ON rp.id = p.release_phase_id
@@ -383,8 +385,26 @@ pub async fn player_can_send_ticket(
         JOIN rb_team t ON t.id = tk.team_id
         LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
             AND gf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END
+        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id
+            AND tf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END
         WHERE tk.id = $1;",
         ticket_id
+    )
+    .fetch_optional(db_pool)
+    .await?
+    .unwrap_or(false))
+}
+
+pub async fn player_can_open_dm(db_pool: &DbPool, team_id: i32) -> Result<bool, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT NOT t.is_banned
+            AND COALESCE(tf.enabled, TRUE)
+            AND COALESCE(gf.state = 2, TRUE) AS \"allowed!\"
+        FROM rb_team t
+        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id AND gf.feature_type = 1
+        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id AND tf.feature_type = 1
+        WHERE t.id = $1;",
+        team_id
     )
     .fetch_optional(db_pool)
     .await?
@@ -636,9 +656,15 @@ pub async fn get_dm_ticket_thread(
     .await?;
 
     let feature_state = sqlx::query_scalar!(
-        "SELECT COALESCE(gf.state, 2) AS \"state!\"
-        FROM rb_team t LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
+        "SELECT CASE
+            WHEN t.is_banned OR NOT COALESCE(tf.enabled, TRUE) THEN 0
+            ELSE COALESCE(gf.state, 2)
+        END AS \"state!\"
+        FROM rb_team t
+        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
             AND gf.feature_type = 1
+        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id
+            AND tf.feature_type = 1
         WHERE t.id = $1;",
         team_id
     )
@@ -698,7 +724,7 @@ pub async fn get_ticket_summary(
     include_team: bool,
 ) -> Result<Option<TicketSummary>, RbInternalError> {
     let info = sqlx::query!(
-        "WITH stats AS (
+        r#"WITH stats AS (
             SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at
             FROM rb_message m
             WHERE m.ticket_id = $1
@@ -711,12 +737,19 @@ pub async fn get_ticket_summary(
             ORDER BY m.ticket_id, m.ctime_at DESC, m.id DESC
         )
         SELECT tk.state,
-                t.id AS t_id, t.name AS t_name, t.state AS t_state, t.game_id AS g_id,
-                p.id AS \"p_id?\", p.slug AS \"p_slug?\", p.title AS \"p_title?\", tp.state AS \"p_state?\",
-                r.id AS \"r_id?\", r.slug AS \"r_slug?\", r.title AS \"r_title?\",
+                t.id AS t_id, t.name AS t_name,
+                (CASE
+                    WHEN t.is_banned THEN -1
+                    WHEN t.finish_at IS NOT NULL THEN 2
+                    WHEN t.is_locked THEN 1
+                    ELSE 0
+                END)::SMALLINT AS "t_state!",
+                t.game_id AS g_id,
+                p.id AS "p_id?", p.slug AS "p_slug?", p.title AS "p_title?", tp.state AS "p_state?",
+                r.id AS "r_id?", r.slug AS "r_slug?", r.title AS "r_title?",
                 stats.msg_count, stats.last_at,
-                last_msg.sender_type AS \"last_by?\",
-                au.id AS \"a_id?\", au.nickname AS \"a_nickname?\", au.email AS \"a_email?\"
+                last_msg.sender_type AS "last_by?",
+                au.id AS "a_id?", au.nickname AS "a_nickname?", au.email AS "a_email?"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id
         LEFT JOIN rb_user au ON au.id = tk.assignee
@@ -725,7 +758,7 @@ pub async fn get_ticket_summary(
         LEFT JOIN rb_round r ON r.id = p.round_id
         LEFT JOIN stats ON stats.ticket_id = tk.id
         LEFT JOIN last_msg ON last_msg.ticket_id = tk.id
-        WHERE tk.id = $1",
+        WHERE tk.id = $1"#,
         ticket_id
     )
     .fetch_optional(db_pool)
@@ -854,7 +887,14 @@ pub async fn list_staff_tickets(
 ) -> Result<Vec<TicketSummary>, RbInternalError> {
     let rows = sqlx::query!(
         r#"SELECT tk.id, tk.state,
-                t.id AS t_id, t.name AS t_name, t.state AS t_state, t.game_id AS g_id,
+                t.id AS t_id, t.name AS t_name,
+                (CASE
+                    WHEN t.is_banned THEN -1
+                    WHEN t.finish_at IS NOT NULL THEN 2
+                    WHEN t.is_locked THEN 1
+                    ELSE 0
+                END)::SMALLINT AS "t_state!",
+                t.game_id AS g_id,
                 p.id AS "p_id?", p.slug AS "p_slug?", p.title AS "p_title?",
                 COALESCE(tp.state, -1)::SMALLINT AS "p_state?",
                 r.id AS "r_id?", r.slug AS "r_slug?", r.title AS "r_title?",
@@ -1524,13 +1564,22 @@ pub async fn open_puzzle_ticket(
     };
     if matches!(message.sender_type, RbTicketSenderType::Team) {
         let state = sqlx::query_scalar!(
-            "SELECT COALESCE(state, 2) AS \"state!\" FROM rb_game_feature
-            WHERE game_id = $1 AND feature_type = 2;",
+            "SELECT CASE
+                WHEN t.is_banned OR NOT COALESCE(tf.enabled, TRUE) THEN 0
+                ELSE COALESCE(gf.state, 2)
+            END AS \"state!\"
+            FROM rb_team t
+            LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
+                AND gf.feature_type = 2
+            LEFT JOIN rb_team_feature tf ON tf.team_id = t.id
+                AND tf.feature_type = 2
+            WHERE t.id = $1 AND t.game_id = $2;",
+            team_id,
             ticket_availability.game_id
         )
         .fetch_optional(&mut *tx)
         .await?
-        .unwrap_or(2);
+        .unwrap_or(0);
         if state != 2 {
             return Ok(OpenPuzzleTicketResult::FeatureClosed);
         }
@@ -1688,11 +1737,17 @@ pub async fn get_team_puzzle_tickets(
     .await?;
 
     let feature_open = sqlx::query_scalar!(
-        "SELECT COALESCE(gf.state = 2, TRUE) AS \"open!\"
-        FROM rb_puzzle p JOIN rb_round r ON r.id = p.round_id
+        "SELECT COALESCE(gf.state = 2, TRUE)
+            AND NOT t.is_banned
+            AND COALESCE(tf.enabled, TRUE) AS \"open!\"
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        JOIN rb_team t ON t.id = $2 AND t.game_id = r.game_id
         LEFT JOIN rb_game_feature gf ON gf.game_id = r.game_id AND gf.feature_type = 2
+        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id AND tf.feature_type = 2
         WHERE p.id = $1;",
-        puzzle_id
+        puzzle_id,
+        team_id
     )
     .fetch_optional(db_pool)
     .await?

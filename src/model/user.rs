@@ -1,5 +1,12 @@
+use md5::{Digest, Md5};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
+
+pub fn avatar_url(email: &str) -> String {
+    let normalized = email.trim().to_lowercase();
+    let hash = Md5::digest(normalized.as_bytes());
+    format!("https://cn.cravatar.com/avatar/{hash:x}.png?d=identicon")
+}
 
 #[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
 #[repr(i16)]

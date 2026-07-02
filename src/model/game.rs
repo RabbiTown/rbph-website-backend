@@ -260,7 +260,8 @@ pub enum RbTeamState {
 pub struct RbTeam {
     pub id: i32,
     pub name: String,
-    pub state: RbTeamState,
+    pub is_banned: bool,
+    pub is_locked: bool,
     pub pass: String,
     pub bio: String,
     pub game_id: i32,

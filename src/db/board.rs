@@ -90,8 +90,14 @@ impl LeaderBoardCache {
         .await?;
         if locked {
             return Ok(sqlx::query_scalar!(
-                "SELECT team_id FROM rb_leaderboard_lock_team
-                WHERE game_id = $1 ORDER BY rank;",
+                "SELECT rb_leaderboard_lock_team.team_id FROM rb_leaderboard_lock_team
+                JOIN rb_team t ON t.id = rb_leaderboard_lock_team.team_id
+                LEFT JOIN rb_team_feature tf
+                    ON tf.team_id = t.id AND tf.feature_type = 3
+                WHERE rb_leaderboard_lock_team.game_id = $1
+                    AND NOT t.is_banned
+                    AND COALESCE(tf.enabled, TRUE)
+                ORDER BY rank;",
                 game_id
             )
             .fetch_all(db_pool)
@@ -101,9 +107,14 @@ impl LeaderBoardCache {
             "SELECT t.id
             FROM rb_team t
             LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
-            WHERE t.game_id = $1 AND t.state > 0
+            LEFT JOIN rb_team_feature tf
+                ON tf.team_id = t.id AND tf.feature_type = 3
+            WHERE t.game_id = $1
+                AND t.is_locked
+                AND NOT t.is_banned
+                AND COALESCE(tf.enabled, TRUE)
             GROUP BY t.id
-            ORDER BY t.state DESC,
+            ORDER BY (t.finish_at IS NULL),
                 finish_at ASC NULLS LAST,
                 COUNT(tp.puzzle_id) DESC,
                 MAX(tp.solve_at) ASC NULLS LAST;",
@@ -148,7 +159,12 @@ impl LeaderBoardCache {
                 "SELECT t.id, t.name, t.bio, s.finish_at, s.last_solved_at, s.solves
                 FROM rb_leaderboard_lock_team s
                 JOIN rb_team t ON t.id = s.team_id
-                WHERE s.game_id = $1 ORDER BY s.rank;",
+                LEFT JOIN rb_team_feature tf
+                    ON tf.team_id = t.id AND tf.feature_type = 3
+                WHERE s.game_id = $1
+                    AND NOT t.is_banned
+                    AND COALESCE(tf.enabled, TRUE)
+                ORDER BY s.rank;",
                 game_id
             )
             .fetch_all(db_pool)
@@ -169,9 +185,14 @@ impl LeaderBoardCache {
                     COUNT(tp.puzzle_id) AS \"solves!\"
                 FROM rb_team t
                 LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
-                WHERE t.game_id = $1 AND t.state > 0
+                LEFT JOIN rb_team_feature tf
+                    ON tf.team_id = t.id AND tf.feature_type = 3
+                WHERE t.game_id = $1
+                    AND t.is_locked
+                    AND NOT t.is_banned
+                    AND COALESCE(tf.enabled, TRUE)
                 GROUP BY t.id
-                ORDER BY t.state DESC, finish_at ASC NULLS LAST,
+                ORDER BY (t.finish_at IS NULL), finish_at ASC NULLS LAST,
                     \"solves!\" DESC, MAX(tp.solve_at) ASC NULLS LAST;",
                 game_id
             )
@@ -272,7 +293,9 @@ impl LeaderBoardCache {
                 s.last_solved_at, s.solves
             FROM rb_leaderboard_lock_team s
             JOIN rb_team t ON t.id = s.team_id
-            WHERE s.team_id = $1;",
+            LEFT JOIN rb_team_feature tf
+                ON tf.team_id = t.id AND tf.feature_type = 3
+            WHERE s.team_id = $1 AND NOT t.is_banned AND COALESCE(tf.enabled, TRUE);",
             team_id
         )
         .fetch_optional(db_pool)
@@ -305,7 +328,9 @@ impl LeaderBoardCache {
                 COUNT(tp.puzzle_id) AS \"solves!\", t.game_id
             FROM rb_team t
             LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
-            WHERE t.id = $1
+            LEFT JOIN rb_team_feature tf
+                ON tf.team_id = t.id AND tf.feature_type = 3
+            WHERE t.id = $1 AND t.is_locked AND NOT t.is_banned AND COALESCE(tf.enabled, TRUE)
             GROUP BY t.id;",
             team_id
         )

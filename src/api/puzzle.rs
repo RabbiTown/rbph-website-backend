@@ -305,14 +305,14 @@ async fn check_puzzle_middleware(
 
     let app = req.app_data::<web::Data<AppState>>().unwrap();
 
-    match db::puzzle::get_puzzle_user_info(&app.db, user_id, puzzle_id).await? {
-        Some(info) => {
-            req.extensions_mut().insert(info);
-        }
-        None => {
-            RbError::not_found().err()?;
-        }
-    };
+    let info = db::puzzle::get_puzzle_user_info(&app.db, user_id, puzzle_id)
+        .await?
+        .ok_or_else(RbError::not_found)?;
+    let team_id = info.team_id.ok_or_else(RbError::not_found)?;
+    if !db::puzzle::can_team_access_puzzle(&app.db, team_id, puzzle_id).await? {
+        RbError::not_found().err()?;
+    }
+    req.extensions_mut().insert(info);
 
     next.call(req).await
 }
@@ -336,14 +336,16 @@ async fn check_hint_middleware(
 
     let app = req.app_data::<web::Data<AppState>>().unwrap();
 
-    match db::puzzle::get_hint_user_info(&app.db, &app.kv, user_id, hint_id).await? {
-        Some(info) => {
-            req.extensions_mut().insert(info);
-        }
-        None => {
-            RbError::not_found().err()?;
-        }
-    };
+    let puzzle_id = db::puzzle::get_hint_puzzle(&app.db, &app.kv, hint_id).await?;
+    let puzzle_id = puzzle_id.ok_or_else(RbError::not_found)?;
+    let info = db::puzzle::get_hint_user_info(&app.db, &app.kv, user_id, hint_id)
+        .await?
+        .ok_or_else(RbError::not_found)?;
+    let team_id = info.team_id.ok_or_else(RbError::not_found)?;
+    if !db::puzzle::can_team_access_puzzle(&app.db, team_id, puzzle_id).await? {
+        RbError::not_found().err()?;
+    }
+    req.extensions_mut().insert(info);
 
     next.call(req).await
 }

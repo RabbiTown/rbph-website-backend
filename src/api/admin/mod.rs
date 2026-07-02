@@ -7,6 +7,7 @@ mod puzzle;
 mod puzzle_backend;
 mod release;
 mod round;
+mod team;
 
 use actix_web::web;
 
@@ -18,6 +19,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .configure(feature::config)
             .configure(game::config)
             .configure(release::config)
+            .configure(team::config)
             .default_service(web::route().to(error_handler)),
     )
     .configure(asset::config)

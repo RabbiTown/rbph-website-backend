@@ -59,9 +59,10 @@ pub async fn get_round_state(
     let result = sqlx::query_scalar!(
         "SELECT EXISTS (
             SELECT 1 FROM rb_team_puzzle tp
+            JOIN rb_team t ON t.id = tp.team_id
             JOIN rb_puzzle p ON p.id = tp.puzzle_id AND p.round_id = $2
             JOIN rb_release_phase rp ON rp.id = p.release_phase_id
-            WHERE tp.team_id = $1 AND tp.state >= 0
+            WHERE tp.team_id = $1 AND NOT t.is_banned AND tp.state >= 0
                 AND rp.release_at <= NOW()
         );",
         team_id,

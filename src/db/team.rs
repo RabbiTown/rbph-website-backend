@@ -2,15 +2,11 @@ use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_repr::Serialize_repr;
-use sqlx::QueryBuilder;
+use sqlx::{Postgres, QueryBuilder, Transaction};
 use time::OffsetDateTime;
 use validator::Validate;
 
-use crate::{
-    AppState, DbPool, db,
-    error::RbInternalError,
-    model::game::{RbTeam, RbTeamState},
-};
+use crate::{AppState, DbPool, db, error::RbInternalError, model::game::RbTeam};
 
 #[derive(Deserialize)]
 pub struct RbTeamPutData {
@@ -18,6 +14,39 @@ pub struct RbTeamPutData {
     pub pass: String,
     pub bio: String,
     pub game_id: i32,
+}
+
+async fn init_team_resources_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    team_id: i32,
+    game_id: i32,
+) -> Result<(), RbInternalError> {
+    sqlx::query!(
+        "INSERT INTO rb_team_puzzle (team_id, puzzle_id)
+        SELECT $1 AS team_id, p.id AS puzzle_id
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id AND r.game_id = $2
+        WHERE p.unlock_cond = 'default'
+        ON CONFLICT DO NOTHING;",
+        team_id,
+        game_id
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query!(
+        "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
+        SELECT $1, c.id, c.init_amount, c.init_hidden
+        FROM rb_currency c
+        WHERE c.game_id = $2
+        ON CONFLICT DO NOTHING;",
+        team_id,
+        game_id
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
 }
 
 pub async fn get_id_by_user_game(
@@ -41,12 +70,22 @@ pub async fn get_id_by_user_game(
 pub struct RbTeamFullData {
     pub id: i32,
     pub name: String,
-    pub state: RbTeamState,
+    pub is_banned: bool,
+    pub is_locked: bool,
     pub pass: String,
     pub bio: String,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub finish_at: Option<OffsetDateTime>,
     pub members: Vec<RbTeamMemberData>,
+    pub features: Vec<RbTeamFeatureData>,
+}
+
+#[derive(Serialize)]
+pub struct RbTeamFeatureData {
+    pub feature: db::feature::GameFeature,
+    pub enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -54,8 +93,29 @@ pub struct RbTeamMemberData {
     pub id: i32,
     pub is_captain: bool,
     pub nickname: String,
+    pub avatar: String,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+}
+
+struct RbTeamMemberRow {
+    id: i32,
+    is_captain: bool,
+    nickname: String,
+    email: String,
+    ctime_at: OffsetDateTime,
+}
+
+impl From<RbTeamMemberRow> for RbTeamMemberData {
+    fn from(member: RbTeamMemberRow) -> Self {
+        Self {
+            id: member.id,
+            is_captain: member.is_captain,
+            nickname: member.nickname,
+            avatar: crate::model::user::avatar_url(&member.email),
+            ctime_at: member.ctime_at,
+        }
+    }
 }
 
 pub async fn get_by_user_game(
@@ -81,24 +141,30 @@ pub async fn get_by_user_game(
     let team = team.unwrap();
 
     let members = sqlx::query_as!(
-        RbTeamMemberData,
-        "SELECT u.id, m.is_captain, u.nickname, m.ctime_at
+        RbTeamMemberRow,
+        "SELECT u.id, m.is_captain, u.nickname, u.email, m.ctime_at
         FROM rb_team_member m
         JOIN rb_user u ON u.id = m.user_id
         WHERE m.team_id = $1",
         team.id
     )
     .fetch_all(pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(RbTeamMemberData::from)
+    .collect();
 
     Ok(Some(RbTeamFullData {
         id: team.id,
         name: team.name,
-        state: team.state,
+        is_banned: team.is_banned,
+        is_locked: team.is_locked,
         pass: team.pass,
         bio: team.bio,
         ctime_at: team.ctime_at,
+        finish_at: team.finish_at,
         members,
+        features: team_features(pool, team.id).await?,
     }))
 }
 
@@ -123,7 +189,7 @@ pub async fn join(
     let mut tx = app.db.begin().await?;
 
     let verify = sqlx::query!(
-        "SELECT t.state, t.pass, t.game_id,
+        "SELECT t.is_banned, t.is_locked, t.pass, t.game_id,
             COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf
                 WHERE gf.game_id = t.game_id AND gf.feature_type = 0), TRUE) AS \"team_open!\"
         FROM rb_team t
@@ -143,7 +209,7 @@ pub async fn join(
         return Ok(TeamJoinResult::NotOpen);
     }
 
-    if verify.state == i16::from(RbTeamState::Banned) {
+    if verify.is_banned || verify.is_locked {
         return Ok(TeamJoinResult::Locked);
     }
 
@@ -258,17 +324,7 @@ pub async fn user_create(
         return Ok(TeamCreateResult::ToMany);
     }
 
-    sqlx::query!(
-        "INSERT INTO rb_team_puzzle (team_id, puzzle_id)
-        SELECT $1 AS team_id, p.id AS puzzle_id
-        FROM rb_puzzle p
-        JOIN rb_round r ON r.id = p.round_id AND r.game_id = $2
-        WHERE p.unlock_cond = 'default';",
-        team_id,
-        data.game_id
-    )
-    .execute(&mut *tx)
-    .await?;
+    init_team_resources_tx(&mut tx, team_id, data.game_id).await?;
 
     db::event_log::insert_tx(
         &mut tx,
@@ -296,7 +352,7 @@ pub async fn leave(app: &AppState, team_id: i32, user_id: i32) -> Result<bool, R
         "DELETE FROM rb_team_member tm
         USING rb_team t
         WHERE tm.team_id = $1 AND tm.user_id = $2
-            AND t.id = tm.team_id AND t.state < 1
+            AND t.id = tm.team_id AND NOT t.is_locked
         RETURNING t.game_id;",
         team_id,
         user_id
@@ -335,7 +391,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
     let members = sqlx::query_scalar!(
         "SELECT tm.user_id FROM rb_team_member tm
         JOIN rb_team t ON t.id = tm.team_id
-        WHERE tm.team_id = $1 AND t.state < 1;",
+        WHERE tm.team_id = $1 AND NOT t.is_locked;",
         team_id
     )
     .fetch_all(&mut *tx)
@@ -477,8 +533,11 @@ pub async fn user_update(
 pub struct RbTeamShowData {
     pub id: i32,
     pub name: String,
-    pub state: RbTeamState,
+    pub is_banned: bool,
+    pub is_locked: bool,
     pub bio: String,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub finish_at: Option<OffsetDateTime>,
     pub members: Vec<RbTeamMemberShowData>,
 }
 
@@ -517,8 +576,10 @@ pub async fn get_by_id_show(
     Ok(Some(RbTeamShowData {
         id: team.id,
         name: team.name,
-        state: team.state,
+        is_banned: team.is_banned,
+        is_locked: team.is_locked,
         bio: team.bio,
+        finish_at: team.finish_at,
         members,
     }))
 }
@@ -529,6 +590,10 @@ pub struct RbCurrencyShowData {
     slug: String,
     name: String,
     growth: i64,
+    #[serde(skip)]
+    game_growth: i64,
+    #[serde(skip)]
+    team_growth: i64,
     init_amount: i64,
     prec: i32,
     amount: i64,
@@ -547,6 +612,7 @@ async fn get_currency_info_impl(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
                 LEAST(
                     tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
@@ -588,6 +654,7 @@ async fn get_currency_info_one_impl(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
                 LEAST(
                     tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
@@ -625,6 +692,7 @@ async fn get_currency_info_one_by_slug_impl(
     let result = sqlx::query_as!(
         RbCurrencyShowData,
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
+                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
                 LEAST(
                     tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
@@ -1123,7 +1191,7 @@ pub async fn kick_member(
     let result = sqlx::query_scalar!(
         "DELETE FROM rb_team_member tm
         USING rb_team t
-        WHERE tm.team_id = $1 AND tm.user_id = $2 AND t.id = tm.team_id
+        WHERE tm.team_id = $1 AND tm.user_id = $2 AND t.id = tm.team_id AND NOT t.is_locked
         RETURNING t.game_id;",
         team_id,
         user_id
@@ -1208,4 +1276,575 @@ pub async fn promote_member(
     } else {
         Ok(false)
     }
+}
+
+#[derive(Serialize)]
+pub struct AdminTeamListItem {
+    pub id: i32,
+    pub name: String,
+    pub is_banned: bool,
+    pub is_locked: bool,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub finish_at: Option<OffsetDateTime>,
+    pub member_count: i64,
+    pub captain_id: Option<i32>,
+    pub captain_name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct AdminUserOption {
+    pub id: i32,
+    pub email: String,
+    pub nickname: String,
+    pub in_team_id: Option<i32>,
+    pub in_team_name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct AdminTeamCurrencyData {
+    #[serde(flatten)]
+    currency: RbCurrencyShowData,
+    game_growth: i64,
+    team_growth: i64,
+}
+
+impl From<RbCurrencyShowData> for AdminTeamCurrencyData {
+    fn from(currency: RbCurrencyShowData) -> Self {
+        Self {
+            game_growth: currency.game_growth,
+            team_growth: currency.team_growth,
+            currency,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct AdminTeamDetail {
+    pub id: i32,
+    pub name: String,
+    pub pass: String,
+    pub bio: String,
+    pub is_banned: bool,
+    pub is_locked: bool,
+    pub game_id: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub finish_at: Option<OffsetDateTime>,
+    pub members: Vec<RbTeamMemberData>,
+    pub features: Vec<RbTeamFeatureData>,
+    pub currency: Vec<AdminTeamCurrencyData>,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct AdminTeamCreateData {
+    #[validate(length(min = 1, max = 40))]
+    pub name: String,
+    #[validate(length(min = 1, max = 32))]
+    pub pass: String,
+    #[validate(length(max = 200))]
+    pub bio: String,
+    pub captain_user_id: i32,
+}
+
+#[derive(Deserialize, Validate)]
+pub struct AdminTeamUpdateData {
+    #[validate(length(min = 1, max = 40))]
+    pub name: Option<String>,
+    #[validate(length(min = 1, max = 32))]
+    pub pass: Option<String>,
+    #[validate(length(max = 200))]
+    pub bio: Option<String>,
+    pub is_banned: Option<bool>,
+    pub is_locked: Option<bool>,
+    pub features: Option<Vec<AdminTeamFeatureDataInput>>,
+}
+
+#[derive(Deserialize)]
+pub struct AdminTeamFeatureDataInput {
+    pub feature: db::feature::GameFeature,
+    pub enabled: bool,
+}
+
+impl AdminTeamFeatureDataInput {
+    fn valid(&self) -> bool {
+        matches!(
+            self.feature,
+            db::feature::GameFeature::DirectMessage
+                | db::feature::GameFeature::PuzzleTicket
+                | db::feature::GameFeature::Leaderboard
+        )
+    }
+}
+
+const ADMIN_TEAM_FEATURES: [db::feature::GameFeature; 3] = [
+    db::feature::GameFeature::DirectMessage,
+    db::feature::GameFeature::PuzzleTicket,
+    db::feature::GameFeature::Leaderboard,
+];
+
+#[derive(Clone, Copy)]
+pub struct AdminTeamListFilter<'a> {
+    pub search: &'a str,
+    pub is_banned: Option<bool>,
+    pub is_locked: Option<bool>,
+    pub is_finished: Option<bool>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+pub async fn admin_list(
+    pool: &DbPool,
+    game_id: i32,
+    filter: AdminTeamListFilter<'_>,
+) -> Result<Vec<AdminTeamListItem>, RbInternalError> {
+    let rows = sqlx::query_as!(
+        AdminTeamListItem,
+        "SELECT t.id, t.name, t.is_banned, t.is_locked, t.finish_at,
+            COUNT(tm.user_id) AS \"member_count!\",
+            captain.user_id AS \"captain_id?\",
+            captain_user.nickname AS \"captain_name?\"
+        FROM rb_team t
+        LEFT JOIN rb_team_member tm ON tm.team_id = t.id
+        LEFT JOIN rb_team_member captain ON captain.team_id = t.id AND captain.is_captain
+        LEFT JOIN rb_user captain_user ON captain_user.id = captain.user_id
+        WHERE t.game_id = $1
+            AND ($2 = '' OR t.name ILIKE '%' || $2 || '%')
+            AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)
+            AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)
+            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5)
+        GROUP BY t.id, captain.user_id, captain_user.nickname
+        ORDER BY t.id
+        LIMIT $6 OFFSET $7;",
+        game_id,
+        filter.search,
+        filter.is_banned,
+        filter.is_locked,
+        filter.is_finished,
+        filter.limit,
+        filter.offset
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn admin_count(
+    pool: &DbPool,
+    game_id: i32,
+    filter: AdminTeamListFilter<'_>,
+) -> Result<i64, RbInternalError> {
+    let count = sqlx::query_scalar!(
+        "SELECT COUNT(*) AS \"count!\"
+        FROM rb_team t
+        WHERE t.game_id = $1
+            AND ($2 = '' OR t.name ILIKE '%' || $2 || '%')
+            AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)
+            AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)
+            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5);",
+        game_id,
+        filter.search,
+        filter.is_banned,
+        filter.is_locked,
+        filter.is_finished
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+pub async fn admin_search_users(
+    pool: &DbPool,
+    game_id: i32,
+    search: &str,
+) -> Result<Vec<AdminUserOption>, RbInternalError> {
+    let rows = sqlx::query_as!(
+        AdminUserOption,
+        "SELECT u.id, u.email, u.nickname,
+            tm.team_id AS \"in_team_id?\",
+            t.name AS \"in_team_name?\"
+        FROM rb_user u
+        LEFT JOIN rb_team_member tm ON tm.user_id = u.id AND tm.game_id = $1
+        LEFT JOIN rb_team t ON t.id = tm.team_id
+        WHERE $2 = ''
+            OR u.email ILIKE '%' || $2 || '%'
+            OR u.nickname ILIKE '%' || $2 || '%'
+        ORDER BY u.id
+        LIMIT 50;",
+        game_id,
+        search
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+async fn team_features(
+    pool: &DbPool,
+    team_id: i32,
+) -> Result<Vec<RbTeamFeatureData>, RbInternalError> {
+    let rows = sqlx::query!(
+        "SELECT feature_type, enabled
+        FROM rb_team_feature
+        WHERE team_id = $1;",
+        team_id
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut result = Vec::new();
+    for feature in ADMIN_TEAM_FEATURES {
+        let enabled = rows
+            .iter()
+            .find(|row| row.feature_type == feature.value())
+            .map(|row| row.enabled)
+            .unwrap_or(true);
+        result.push(RbTeamFeatureData { feature, enabled });
+    }
+    Ok(result)
+}
+
+pub async fn admin_get(
+    pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+) -> Result<Option<AdminTeamDetail>, RbInternalError> {
+    let team = sqlx::query_as!(
+        RbTeam,
+        "SELECT * FROM rb_team WHERE game_id = $1 AND id = $2;",
+        game_id,
+        team_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some(team) = team else {
+        return Ok(None);
+    };
+    let members = sqlx::query_as!(
+        RbTeamMemberRow,
+        "SELECT u.id, m.is_captain, u.nickname, u.email, m.ctime_at
+        FROM rb_team_member m
+        JOIN rb_user u ON u.id = m.user_id
+        WHERE m.team_id = $1
+        ORDER BY m.is_captain DESC, m.ctime_at ASC;",
+        team_id
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(RbTeamMemberData::from)
+    .collect();
+    Ok(Some(AdminTeamDetail {
+        id: team.id,
+        name: team.name,
+        pass: team.pass,
+        bio: team.bio,
+        is_banned: team.is_banned,
+        is_locked: team.is_locked,
+        game_id: team.game_id,
+        ctime_at: team.ctime_at,
+        finish_at: team.finish_at,
+        members,
+        features: team_features(pool, team_id).await?,
+        currency: get_currency_info_all(pool, team_id)
+            .await?
+            .into_iter()
+            .map(AdminTeamCurrencyData::from)
+            .collect(),
+    }))
+}
+
+pub enum AdminTeamCreateResult {
+    UserConflict,
+    NotFound,
+    Ok(i32),
+}
+
+pub async fn admin_create(
+    pool: &DbPool,
+    game_id: i32,
+    data: &AdminTeamCreateData,
+) -> Result<AdminTeamCreateResult, RbInternalError> {
+    let mut tx = pool.begin().await?;
+    let user_exists = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM rb_user WHERE id = $1) AS \"exists!\";",
+        data.captain_user_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !user_exists {
+        return Ok(AdminTeamCreateResult::NotFound);
+    }
+    let conflict = sqlx::query_scalar!(
+        "SELECT EXISTS (
+            SELECT 1 FROM rb_team_member WHERE game_id = $1 AND user_id = $2
+        ) AS \"exists!\";",
+        game_id,
+        data.captain_user_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if conflict {
+        return Ok(AdminTeamCreateResult::UserConflict);
+    }
+    let team_id = sqlx::query_scalar!(
+        "INSERT INTO rb_team (name, pass, bio, game_id)
+        SELECT $2, $3, $4, g.id FROM rb_game g WHERE g.id = $1
+        RETURNING id;",
+        game_id,
+        data.name,
+        data.pass,
+        data.bio
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(team_id) = team_id else {
+        return Ok(AdminTeamCreateResult::NotFound);
+    };
+    sqlx::query!(
+        "INSERT INTO rb_team_member (team_id, user_id, is_captain)
+        VALUES ($1, $2, TRUE);",
+        team_id,
+        data.captain_user_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    init_team_resources_tx(&mut tx, team_id, game_id).await?;
+    tx.commit().await?;
+    Ok(AdminTeamCreateResult::Ok(team_id))
+}
+
+pub async fn admin_update(
+    pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    data: &AdminTeamUpdateData,
+) -> Result<Option<AdminTeamDetail>, RbInternalError> {
+    if let Some(features) = &data.features
+        && (features.iter().any(|feature| !feature.valid())
+            || features.len()
+                != features
+                    .iter()
+                    .map(|feature| feature.feature.value())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len())
+    {
+        return Err("Invalid team feature update".into());
+    }
+
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query_scalar!(
+        "UPDATE rb_team
+        SET name = COALESCE($3, name),
+            pass = COALESCE($4, pass),
+            bio = COALESCE($5, bio),
+            is_banned = COALESCE($6, is_banned),
+            is_locked = COALESCE($7, is_locked)
+        WHERE game_id = $1 AND id = $2
+        RETURNING id;",
+        game_id,
+        team_id,
+        data.name.as_deref(),
+        data.pass.as_deref(),
+        data.bio.as_deref(),
+        data.is_banned,
+        data.is_locked
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if updated.is_none() {
+        return Ok(None);
+    }
+    if let Some(features) = &data.features {
+        for feature in features {
+            sqlx::query!(
+                "INSERT INTO rb_team_feature (team_id, feature_type, enabled, utime_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (team_id, feature_type)
+                DO UPDATE SET enabled = EXCLUDED.enabled, utime_at = EXCLUDED.utime_at;",
+                team_id,
+                feature.feature.value(),
+                feature.enabled
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    admin_get(pool, game_id, team_id).await
+}
+
+pub enum AdminMemberResult {
+    Conflict,
+    LastMember,
+    NotFound,
+    Ok,
+}
+
+pub async fn admin_add_member(
+    app: &AppState,
+    game_id: i32,
+    team_id: i32,
+    user_id: i32,
+) -> Result<AdminMemberResult, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+    let team_exists = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM rb_team WHERE id = $1 AND game_id = $2) AS \"exists!\";",
+        team_id,
+        game_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !team_exists {
+        return Ok(AdminMemberResult::NotFound);
+    }
+    let user_exists = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM rb_user WHERE id = $1) AS \"exists!\";",
+        user_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !user_exists {
+        return Ok(AdminMemberResult::NotFound);
+    }
+    let result = sqlx::query!(
+        "INSERT INTO rb_team_member (team_id, user_id, is_captain)
+        VALUES ($1, $2, FALSE)
+        ON CONFLICT (game_id, user_id) DO NOTHING;",
+        team_id,
+        user_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(AdminMemberResult::Conflict);
+    }
+    tx.commit().await?;
+    db::cache::invalidate_team_info(app, team_id).await?;
+    Ok(AdminMemberResult::Ok)
+}
+
+pub async fn admin_remove_member(
+    app: &AppState,
+    game_id: i32,
+    team_id: i32,
+    user_id: i32,
+) -> Result<AdminMemberResult, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+    let team_exists = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM rb_team WHERE id = $1 AND game_id = $2) AS \"exists!\";",
+        team_id,
+        game_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !team_exists {
+        return Ok(AdminMemberResult::NotFound);
+    }
+    let count = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM rb_team_member
+        WHERE team_id = $1 AND game_id = $2;",
+        team_id,
+        game_id
+    )
+    .fetch_one(&mut *tx)
+    .await?
+    .unwrap_or(0);
+    if count <= 1 {
+        return Ok(AdminMemberResult::LastMember);
+    }
+    let result = sqlx::query!(
+        "DELETE FROM rb_team_member
+        WHERE team_id = $1 AND user_id = $2 AND game_id = $3;",
+        team_id,
+        user_id,
+        game_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(AdminMemberResult::NotFound);
+    }
+    let has_captain = sqlx::query_scalar!(
+        "SELECT EXISTS (
+            SELECT 1 FROM rb_team_member WHERE team_id = $1 AND is_captain
+        ) AS \"exists!\";",
+        team_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !has_captain {
+        sqlx::query!(
+            "UPDATE rb_team_member
+            SET is_captain = TRUE
+            WHERE ctid = (
+                SELECT ctid FROM rb_team_member
+                WHERE team_id = $1
+                ORDER BY ctime_at ASC
+                LIMIT 1
+            );",
+            team_id
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    db::cache::invalidate_team_info(app, team_id).await?;
+    app.sync_hub.notify_team_self_kicked(user_id);
+    Ok(AdminMemberResult::Ok)
+}
+
+pub async fn admin_promote_member(
+    app: &AppState,
+    game_id: i32,
+    team_id: i32,
+    user_id: i32,
+) -> Result<AdminMemberResult, RbInternalError> {
+    let exists = sqlx::query_scalar!(
+        "SELECT EXISTS (
+            SELECT 1 FROM rb_team_member
+            WHERE game_id = $1 AND team_id = $2 AND user_id = $3
+        ) AS \"exists!\";",
+        game_id,
+        team_id,
+        user_id
+    )
+    .fetch_one(&app.db)
+    .await?;
+    if !exists {
+        return Ok(AdminMemberResult::NotFound);
+    }
+    promote_member(app, team_id, user_id).await?;
+    Ok(AdminMemberResult::Ok)
+}
+
+pub async fn admin_delete(
+    app: &AppState,
+    game_id: i32,
+    team_id: i32,
+) -> Result<Option<Vec<i32>>, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+    let members = sqlx::query_scalar!(
+        "SELECT tm.user_id
+        FROM rb_team_member tm
+        JOIN rb_team t ON t.id = tm.team_id
+        WHERE tm.team_id = $1 AND t.game_id = $2;",
+        team_id,
+        game_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    if members.is_empty() {
+        return Ok(None);
+    }
+    sqlx::query!(
+        "DELETE FROM rb_team WHERE id = $1 AND game_id = $2;",
+        team_id,
+        game_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    db::cache::remove_team_info(game_id, team_id).await?;
+    app.sync_hub.notify_team_disbanded(&members);
+    Ok(Some(members))
 }

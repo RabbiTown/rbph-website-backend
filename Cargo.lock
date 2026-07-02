@@ -3016,6 +3016,7 @@ dependencies = [
  "futures-util",
  "lettre",
  "log",
+ "md-5",
  "num_enum",
  "once_cell",
  "percent-encoding",

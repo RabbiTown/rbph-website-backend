@@ -139,8 +139,33 @@ pub struct RbUserDisplayData {
     pub urole: RbUserRole,
     pub nickname: String,
     pub bio: Option<String>,
+    pub avatar: String,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+}
+
+struct RbUserDisplayRow {
+    id: i32,
+    email: String,
+    urole: RbUserRole,
+    nickname: String,
+    bio: Option<String>,
+    ctime_at: OffsetDateTime,
+}
+
+impl From<RbUserDisplayRow> for RbUserDisplayData {
+    fn from(user: RbUserDisplayRow) -> Self {
+        let avatar = crate::model::user::avatar_url(&user.email);
+        Self {
+            id: user.id,
+            email: user.email,
+            urole: user.urole,
+            nickname: user.nickname,
+            bio: user.bio,
+            avatar,
+            ctime_at: user.ctime_at,
+        }
+    }
 }
 
 pub async fn get_display_by_id(
@@ -148,7 +173,7 @@ pub async fn get_display_by_id(
     user_id: i32,
 ) -> Result<RbUserDisplayData, RbInternalError> {
     let result = sqlx::query_as!(
-        RbUserDisplayData,
+        RbUserDisplayRow,
         "SELECT id, email, urole, nickname, bio, ctime_at
         FROM rb_user WHERE id = $1;",
         user_id
@@ -156,7 +181,7 @@ pub async fn get_display_by_id(
     .fetch_one(pool)
     .await?;
 
-    Ok(result)
+    Ok(result.into())
 }
 
 pub async fn update_profile(
@@ -166,7 +191,7 @@ pub async fn update_profile(
     bio: Option<&str>,
 ) -> Result<RbUserDisplayData, RbInternalError> {
     let result = sqlx::query_as!(
-        RbUserDisplayData,
+        RbUserDisplayRow,
         "UPDATE rb_user
         SET nickname = $2, bio = $3
         WHERE id = $1
@@ -178,7 +203,49 @@ pub async fn update_profile(
     .fetch_one(pool)
     .await?;
 
-    Ok(result)
+    Ok(result.into())
+}
+
+pub enum ChangePasswordResult {
+    WrongCurrent,
+    SamePassword,
+    Ok,
+}
+
+pub async fn change_password(
+    pool: &DbPool,
+    user_id: i32,
+    current_password: &str,
+    new_password: &str,
+) -> Result<ChangePasswordResult, RbInternalError> {
+    let mut tx = pool.begin().await?;
+    let current_hash = sqlx::query_scalar!(
+        "SELECT pass FROM rb_user WHERE id = $1 FOR UPDATE;",
+        user_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !bcrypt::verify(current_password, &current_hash)? {
+        tx.rollback().await?;
+        return Ok(ChangePasswordResult::WrongCurrent);
+    }
+    if bcrypt::verify(new_password, &current_hash)? {
+        tx.rollback().await?;
+        return Ok(ChangePasswordResult::SamePassword);
+    }
+
+    let new_hash = bcrypt::hash(new_password, bcrypt::DEFAULT_COST)?;
+    sqlx::query!(
+        "UPDATE rb_user SET pass = $2 WHERE id = $1;",
+        user_id,
+        new_hash
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(ChangePasswordResult::Ok)
 }
 
 // TODO : add redis cache

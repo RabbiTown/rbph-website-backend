@@ -118,10 +118,12 @@ pub async fn can_team_access_puzzle(
         "SELECT EXISTS (
             SELECT 1
             FROM rb_team_puzzle tp
+            JOIN rb_team t ON t.id = tp.team_id
             JOIN rb_puzzle p ON p.id = tp.puzzle_id
             JOIN rb_release_phase rp ON rp.id = p.release_phase_id
             WHERE tp.team_id = $1
                 AND tp.puzzle_id = $2
+                AND NOT t.is_banned
                 AND tp.state >= 0
                 AND rp.release_at <= NOW()
         );",
@@ -568,8 +570,8 @@ pub async fn solve_backend_puzzle(
 
     if matches!(submission.saction, RbJudgeAction::FinishGame) {
         sqlx::query!(
-            "UPDATE rb_team SET state = 2, finish_at = NOW()
-            WHERE id = $1 AND state = 1;",
+            "UPDATE rb_team SET finish_at = COALESCE(finish_at, NOW())
+            WHERE id = $1 AND is_locked;",
             team_id
         )
         .execute(&mut *tx)
@@ -817,8 +819,9 @@ pub async fn submit_answer(
     let team_id = user.req_team_id()?.ok_or("Require team_id")?;
 
     let access = sqlx::query_scalar!(
-        "SELECT tp.state >= 0 AND rp.release_at <= NOW() AS \"access!\"
+        "SELECT tp.state >= 0 AND rp.release_at <= NOW() AND NOT t.is_banned AS \"access!\"
         FROM rb_team_puzzle tp
+        JOIN rb_team t ON t.id = tp.team_id
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
         JOIN rb_release_phase rp ON rp.id = p.release_phase_id
         WHERE tp.team_id = $1 AND tp.puzzle_id = $2
@@ -1009,8 +1012,8 @@ pub async fn submit_answer(
 
             if matches!(result.action, RbJudgeAction::FinishGame) {
                 sqlx::query!(
-                    "UPDATE rb_team SET state = 2, finish_at = NOW()
-                    WHERE id = $1 AND state = 1;",
+                    "UPDATE rb_team SET finish_at = COALESCE(finish_at, NOW())
+                    WHERE id = $1 AND is_locked;",
                     team_id
                 )
                 .execute(&mut *tx)
@@ -1052,8 +1055,8 @@ pub async fn submit_answer(
         }
         RbJudgeAction::StartGame => {
             let result = sqlx::query!(
-                "UPDATE rb_team SET state = 1
-                WHERE id = $1 AND state = 0;",
+                "UPDATE rb_team SET is_locked = TRUE
+                WHERE id = $1 AND NOT is_locked;",
                 team_id
             )
             .execute(&mut *tx)
@@ -1328,7 +1331,7 @@ impl PuzzleStates for RbPuzzleStates {
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
     let info = sqlx::query!(
-        "SELECT t.game_id, t.state, tp.puzzle_id AS \"puzzle_id?\"
+        "SELECT t.game_id, t.is_locked, tp.puzzle_id AS \"puzzle_id?\"
         FROM rb_team t
         LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1
         WHERE t.id = $1;",
@@ -1393,7 +1396,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         puzzle_slugs,
         round_slugs,
         round_puzzles,
-        game_started: info[0].state > 0,
+        game_started: info[0].is_locked,
     };
 
     let conds = get_unlock_conds_by_game(&app.db, game_id).await?;
@@ -1508,7 +1511,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
     };
 
     let candidate_rows = sqlx::query!(
-        "SELECT t.id, t.state, solved.puzzle_id AS \"solved_puzzle_id?\"
+        "SELECT t.id, t.is_locked, solved.puzzle_id AS \"solved_puzzle_id?\"
         FROM rb_team t
         LEFT JOIN rb_team_puzzle current
             ON current.team_id = t.id AND current.puzzle_id = $1
@@ -1524,10 +1527,10 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
 
     let mut eligible_team_ids = Vec::new();
     let mut current_team_id: Option<i32> = None;
-    let mut current_team_state = 0_i16;
+    let mut current_team_locked = false;
     let mut solved = HashSet::new();
 
-    let mut flush_team = |team_id: Option<i32>, team_state: i16, solved: &HashSet<i32>| {
+    let mut flush_team = |team_id: Option<i32>, team_locked: bool, solved: &HashSet<i32>| {
         let Some(team_id) = team_id else {
             return;
         };
@@ -1536,7 +1539,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
             puzzle_slugs: puzzle_slugs.clone(),
             round_slugs: round_slugs.clone(),
             round_puzzles: round_puzzles.clone(),
-            game_started: team_state > 0,
+            game_started: team_locked,
         };
         let eligible = compiled_unlock_cond
             .as_ref()
@@ -1548,9 +1551,9 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
 
     for row in candidate_rows {
         if current_team_id != Some(row.id) {
-            flush_team(current_team_id, current_team_state, &solved);
+            flush_team(current_team_id, current_team_locked, &solved);
             current_team_id = Some(row.id);
-            current_team_state = row.state;
+            current_team_locked = row.is_locked;
             solved.clear();
         }
 
@@ -1558,7 +1561,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
             solved.insert(solved_puzzle_id);
         }
     }
-    flush_team(current_team_id, current_team_state, &solved);
+    flush_team(current_team_id, current_team_locked, &solved);
 
     if eligible_team_ids.is_empty() {
         return Ok(Vec::new());

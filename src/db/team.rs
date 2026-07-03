@@ -1358,6 +1358,8 @@ pub struct AdminTeamUpdateData {
     pub is_banned: Option<bool>,
     pub is_locked: Option<bool>,
     pub features: Option<Vec<AdminTeamFeatureDataInput>>,
+    #[validate(length(max = 500))]
+    pub reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1617,6 +1619,7 @@ pub async fn admin_update(
     pool: &DbPool,
     game_id: i32,
     team_id: i32,
+    actor_id: i32,
     data: &AdminTeamUpdateData,
 ) -> Result<Option<AdminTeamDetail>, RbInternalError> {
     if let Some(features) = &data.features
@@ -1632,6 +1635,62 @@ pub async fn admin_update(
     }
 
     let mut tx = pool.begin().await?;
+    let current = sqlx::query!(
+        "SELECT is_banned, is_locked
+        FROM rb_team
+        WHERE game_id = $1 AND id = $2
+        FOR UPDATE;",
+        game_id,
+        team_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    let current_features = sqlx::query!(
+        "SELECT feature_type, enabled
+        FROM rb_team_feature
+        WHERE team_id = $1;",
+        team_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut changes = Vec::new();
+    if let Some(is_banned) = data.is_banned
+        && is_banned != current.is_banned
+    {
+        changes.push(json!({
+            "target": "team",
+            "action": if is_banned { "banned" } else { "unbanned" }
+        }));
+    }
+    if let Some(is_locked) = data.is_locked
+        && is_locked != current.is_locked
+    {
+        changes.push(json!({
+            "target": "team",
+            "action": if is_locked { "locked" } else { "unlocked" }
+        }));
+    }
+    if let Some(features) = &data.features {
+        for feature in features {
+            let current_enabled = current_features
+                .iter()
+                .find(|row| row.feature_type == feature.feature.value())
+                .map(|row| row.enabled)
+                .unwrap_or(true);
+            if current_enabled != feature.enabled {
+                changes.push(json!({
+                    "target": "feature",
+                    "feature": feature.feature,
+                    "action": if feature.enabled { "unbanned" } else { "banned" }
+                }));
+            }
+        }
+    }
+
     let updated = sqlx::query_scalar!(
         "UPDATE rb_team
         SET name = COALESCE($3, name),
@@ -1651,9 +1710,7 @@ pub async fn admin_update(
     )
     .fetch_optional(&mut *tx)
     .await?;
-    if updated.is_none() {
-        return Ok(None);
-    }
+    debug_assert!(updated.is_some());
     if let Some(features) = &data.features {
         for feature in features {
             sqlx::query!(
@@ -1668,6 +1725,31 @@ pub async fn admin_update(
             .execute(&mut *tx)
             .await?;
         }
+    }
+    if !changes.is_empty() {
+        let reason = data
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty());
+        db::event_log::insert_tx(
+            &mut tx,
+            db::event_log::EventLogInput {
+                event_type: "team.access_changed",
+                event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+                severity: i16::from(db::event_log::EventSeverity::Warning),
+                game_id: Some(game_id),
+                team_id: Some(team_id),
+                user_id: Some(actor_id),
+                data: json!({
+                    "staff": true,
+                    "reason": reason,
+                    "changes": changes
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
     }
     tx.commit().await?;
     admin_get(pool, game_id, team_id).await

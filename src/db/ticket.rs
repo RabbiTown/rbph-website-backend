@@ -271,13 +271,44 @@ impl TicketPerm {
 }
 
 #[repr(i16)]
-#[derive(Clone, Serialize_repr)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize_repr)]
 pub enum TicketSendBlock {
     Ok = 0,
     NoAccess = -1,
     Closed = -2,
     Pending = -3,
     FeatureClosed = -4,
+    FeatureExistingOnly = -5,
+    TeamFeatureBanned = -6,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PlayerFeatureAccess {
+    Open,
+    ExistingOnly,
+    GameClosed,
+    TeamFeatureBanned,
+}
+
+impl PlayerFeatureAccess {
+    fn from_value(value: i16) -> Self {
+        match value {
+            2 => Self::Open,
+            1 => Self::ExistingOnly,
+            -2 => Self::TeamFeatureBanned,
+            _ => Self::GameClosed,
+        }
+    }
+
+    pub fn send_block(self, has_existing: bool) -> TicketSendBlock {
+        match self {
+            Self::Open => TicketSendBlock::Ok,
+            Self::ExistingOnly if has_existing => TicketSendBlock::Ok,
+            Self::ExistingOnly => TicketSendBlock::FeatureExistingOnly,
+            Self::GameClosed => TicketSendBlock::FeatureClosed,
+            Self::TeamFeatureBanned => TicketSendBlock::TeamFeatureBanned,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -415,21 +446,25 @@ pub enum TicketOpenBlock {
     Cooldown = -3,
     Disabled = -4,
     FeatureClosed = -5,
+    FeatureExistingOnly = -6,
+    TeamFeatureBanned = -7,
 }
 
-pub async fn player_can_send_ticket(
+pub async fn player_ticket_feature_access(
     db_pool: &DbPool,
     ticket_id: i32,
-) -> Result<bool, RbInternalError> {
-    Ok(sqlx::query_scalar!(
-        "SELECT COALESCE(gf.state <> 0, TRUE)
-            AND NOT t.is_banned
-            AND COALESCE(tf.enabled, TRUE)
-            AND (tk.puzzle_id IS NULL OR EXISTS (
+) -> Result<PlayerFeatureAccess, RbInternalError> {
+    let value = sqlx::query_scalar!(
+        "SELECT (CASE
+            WHEN NOT COALESCE(tf.enabled, TRUE) THEN -2
+            WHEN COALESCE(gf.state, 2) = 0 THEN 0
+            WHEN NOT (tk.puzzle_id IS NULL OR EXISTS (
                 SELECT 1 FROM rb_puzzle p
                 JOIN rb_release_phase rp ON rp.id = p.release_phase_id
                 WHERE p.id = tk.puzzle_id AND rp.release_at <= NOW()
-            )) AS \"allowed!\"
+            )) THEN 0
+            ELSE COALESCE(gf.state, 2)
+        END)::SMALLINT AS \"access!\"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id
         LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
@@ -441,14 +476,19 @@ pub async fn player_can_send_ticket(
     )
     .fetch_optional(db_pool)
     .await?
-    .unwrap_or(false))
+    .unwrap_or(0);
+    Ok(PlayerFeatureAccess::from_value(value))
 }
 
-pub async fn player_can_open_dm(db_pool: &DbPool, team_id: i32) -> Result<bool, RbInternalError> {
-    Ok(sqlx::query_scalar!(
-        "SELECT NOT t.is_banned
-            AND COALESCE(tf.enabled, TRUE)
-            AND COALESCE(gf.state = 2, TRUE) AS \"allowed!\"
+pub async fn player_dm_feature_access(
+    db_pool: &DbPool,
+    team_id: i32,
+) -> Result<PlayerFeatureAccess, RbInternalError> {
+    let value = sqlx::query_scalar!(
+        "SELECT (CASE
+            WHEN NOT COALESCE(tf.enabled, TRUE) THEN -2
+            ELSE COALESCE(gf.state, 2)
+        END)::SMALLINT AS \"access!\"
         FROM rb_team t
         LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id AND gf.feature_type = 1
         LEFT JOIN rb_team_feature tf ON tf.team_id = t.id AND tf.feature_type = 1
@@ -457,7 +497,8 @@ pub async fn player_can_open_dm(db_pool: &DbPool, team_id: i32) -> Result<bool, 
     )
     .fetch_optional(db_pool)
     .await?
-    .unwrap_or(false))
+    .unwrap_or(0);
+    Ok(PlayerFeatureAccess::from_value(value))
 }
 
 #[derive(Serialize)]
@@ -876,22 +917,7 @@ pub async fn get_dm_ticket_thread(
     .fetch_optional(db_pool)
     .await?;
 
-    let feature_state = sqlx::query_scalar!(
-        "SELECT CASE
-            WHEN t.is_banned OR NOT COALESCE(tf.enabled, TRUE) THEN 0
-            ELSE COALESCE(gf.state, 2)
-        END AS \"state!\"
-        FROM rb_team t
-        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
-            AND gf.feature_type = 1
-        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id
-            AND tf.feature_type = 1
-        WHERE t.id = $1;",
-        team_id
-    )
-    .fetch_optional(db_pool)
-    .await?
-    .unwrap_or(2);
+    let feature_access = player_dm_feature_access(db_pool, team_id).await?;
 
     let Some(ticket_id) = ticket_id else {
         return Ok(TicketThread {
@@ -903,11 +929,7 @@ pub async fn get_dm_ticket_thread(
                 can_view_locked,
                 can_use_trusted_content,
                 vec![],
-                if can_view_locked || feature_state == 2 {
-                    TicketSendBlock::Ok
-                } else {
-                    TicketSendBlock::FeatureClosed
-                },
+                feature_access.send_block(false),
             ),
         });
     };
@@ -921,8 +943,8 @@ pub async fn get_dm_ticket_thread(
         .as_ref()
         .map(|x| x.state)
         .unwrap_or(RbTicketState::Invalid);
-    let send_block = if !can_view_locked && feature_state == 0 {
-        TicketSendBlock::FeatureClosed
+    let send_block = if feature_access.send_block(true) != TicketSendBlock::Ok {
+        feature_access.send_block(true)
     } else {
         calc_send_block(db_pool, ticket_id, state, true, Some(3)).await?
     };
@@ -1043,9 +1065,10 @@ pub async fn get_ticket_thread(
         page,
     )
     .await?;
-    let player_can_send = player_can_send_ticket(db_pool, ticket_id).await?;
-    let send_block = if info.member_access && !info.mod_access && !player_can_send {
-        TicketSendBlock::FeatureClosed
+    let feature_access = player_ticket_feature_access(db_pool, ticket_id).await?;
+    let feature_block = feature_access.send_block(true);
+    let send_block = if info.member_access && feature_block != TicketSendBlock::Ok {
+        feature_block
     } else {
         calc_send_block(
             db_pool,
@@ -1741,6 +1764,8 @@ pub enum OpenPuzzleTicketResult {
     Cooldown,
     Disabled,
     FeatureClosed,
+    FeatureExistingOnly,
+    TeamFeatureBanned,
 }
 
 pub async fn open_puzzle_ticket(
@@ -1795,11 +1820,11 @@ pub async fn open_puzzle_ticket(
         return Ok(OpenPuzzleTicketResult::Disabled);
     };
     if matches!(message.sender_type, RbTicketSenderType::Team) {
-        let state = sqlx::query_scalar!(
-            "SELECT CASE
-                WHEN t.is_banned OR NOT COALESCE(tf.enabled, TRUE) THEN 0
+        let access = sqlx::query_scalar!(
+            "SELECT (CASE
+                WHEN NOT COALESCE(tf.enabled, TRUE) THEN -2
                 ELSE COALESCE(gf.state, 2)
-            END AS \"state!\"
+            END)::SMALLINT AS \"access!\"
             FROM rb_team t
             LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id
                 AND gf.feature_type = 2
@@ -1812,8 +1837,17 @@ pub async fn open_puzzle_ticket(
         .fetch_optional(&mut *tx)
         .await?
         .unwrap_or(0);
-        if state != 2 {
-            return Ok(OpenPuzzleTicketResult::FeatureClosed);
+        match PlayerFeatureAccess::from_value(access) {
+            PlayerFeatureAccess::Open => {}
+            PlayerFeatureAccess::ExistingOnly => {
+                return Ok(OpenPuzzleTicketResult::FeatureExistingOnly);
+            }
+            PlayerFeatureAccess::GameClosed => {
+                return Ok(OpenPuzzleTicketResult::FeatureClosed);
+            }
+            PlayerFeatureAccess::TeamFeatureBanned => {
+                return Ok(OpenPuzzleTicketResult::TeamFeatureBanned);
+            }
         }
     }
     if !ticket_availability.ticket_enabled {
@@ -1968,10 +2002,11 @@ pub async fn get_team_puzzle_tickets(
     .fetch_one(db_pool)
     .await?;
 
-    let feature_open = sqlx::query_scalar!(
-        "SELECT COALESCE(gf.state = 2, TRUE)
-            AND NOT t.is_banned
-            AND COALESCE(tf.enabled, TRUE) AS \"open!\"
+    let feature_access = sqlx::query_scalar!(
+        "SELECT (CASE
+            WHEN NOT COALESCE(tf.enabled, TRUE) THEN -2
+            ELSE COALESCE(gf.state, 2)
+        END)::SMALLINT AS \"access!\"
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         JOIN rb_team t ON t.id = $2 AND t.game_id = r.game_id
@@ -1983,10 +2018,16 @@ pub async fn get_team_puzzle_tickets(
     )
     .fetch_optional(db_pool)
     .await?
-    .unwrap_or(false);
+    .map(PlayerFeatureAccess::from_value)
+    .unwrap_or(PlayerFeatureAccess::GameClosed);
 
-    let open_block = if !feature_exempt && !feature_open {
+    let open_block = if !feature_exempt && feature_access == PlayerFeatureAccess::TeamFeatureBanned
+    {
+        TicketOpenBlock::TeamFeatureBanned
+    } else if !feature_exempt && feature_access == PlayerFeatureAccess::GameClosed {
         TicketOpenBlock::FeatureClosed
+    } else if !feature_exempt && feature_access == PlayerFeatureAccess::ExistingOnly {
+        TicketOpenBlock::FeatureExistingOnly
     } else if has_current_puzzle_open {
         TicketOpenBlock::CurrentPuzzlePending
     } else if !cooldown.ticket_enabled.unwrap_or(false) {
@@ -2028,4 +2069,33 @@ pub async fn get_team_puzzle_tickets(
         },
         tickets,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PlayerFeatureAccess, TicketSendBlock};
+
+    #[test]
+    fn feature_access_distinguishes_new_and_existing_conversations() {
+        assert_eq!(
+            PlayerFeatureAccess::Open.send_block(false),
+            TicketSendBlock::Ok
+        );
+        assert_eq!(
+            PlayerFeatureAccess::ExistingOnly.send_block(false),
+            TicketSendBlock::FeatureExistingOnly
+        );
+        assert_eq!(
+            PlayerFeatureAccess::ExistingOnly.send_block(true),
+            TicketSendBlock::Ok
+        );
+        assert_eq!(
+            PlayerFeatureAccess::GameClosed.send_block(true),
+            TicketSendBlock::FeatureClosed
+        );
+        assert_eq!(
+            PlayerFeatureAccess::TeamFeatureBanned.send_block(true),
+            TicketSendBlock::TeamFeatureBanned
+        );
+    }
 }

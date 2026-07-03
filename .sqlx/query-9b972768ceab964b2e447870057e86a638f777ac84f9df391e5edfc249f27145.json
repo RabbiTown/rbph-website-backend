@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (CASE\n            WHEN NOT COALESCE(tf.enabled, TRUE) THEN -2\n            ELSE COALESCE(gf.state, 2)\n        END)::SMALLINT AS \"access!\"\n        FROM rb_team t\n        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id AND gf.feature_type = 1\n        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id AND tf.feature_type = 1\n        WHERE t.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access!",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9b972768ceab964b2e447870057e86a638f777ac84f9df391e5edfc249f27145"
+}

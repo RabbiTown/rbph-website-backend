@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 use validator::Validate;
 
-use crate::{AppState, db, error::RbError, model::game::RbTeam};
+use crate::{AppState, db, error::RbError, extractor::auth::AuthUser, model::game::RbTeam};
 
 #[derive(Deserialize)]
 struct PathInfo {
@@ -172,6 +172,7 @@ async fn create(
 async fn update(
     path: web::Path<TeamPathInfo>,
     req: web::Json<db::team::AdminTeamUpdateData>,
+    actor: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     if let Err(error) = req.validate() {
@@ -196,7 +197,7 @@ async fn update(
     {
         return RbError::bad_req(TeamAdminResult::Invalid.into()).http_err();
     }
-    let team = db::team::admin_update(&app.db, path.game_id, path.team_id, &req).await?;
+    let team = db::team::admin_update(&app.db, path.game_id, path.team_id, actor.uid, &req).await?;
     let Some(team) = team else {
         return RbError::not_found()
             .code(TeamAdminResult::NotFound.into())

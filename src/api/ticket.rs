@@ -168,6 +168,8 @@ struct TicketSendRequest {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TicketSendResult {
+    FeatureExistingOnly = -10,
+    TeamFeatureBanned = -9,
     FeatureClosed = -8,
     AssignedToOther = -7,
     Invalid = -6,
@@ -177,6 +179,20 @@ pub enum TicketSendResult {
     PendingExists = -2,
     Closed = -1,
     Ok = 0,
+}
+
+fn feature_access_error(
+    access: db::ticket::PlayerFeatureAccess,
+    has_existing: bool,
+) -> Option<TicketSendResult> {
+    match access.send_block(has_existing) {
+        db::ticket::TicketSendBlock::FeatureClosed => Some(TicketSendResult::FeatureClosed),
+        db::ticket::TicketSendBlock::FeatureExistingOnly => {
+            Some(TicketSendResult::FeatureExistingOnly)
+        }
+        db::ticket::TicketSendBlock::TeamFeatureBanned => Some(TicketSendResult::TeamFeatureBanned),
+        _ => None,
+    }
 }
 
 #[derive(Serialize)]
@@ -212,9 +228,12 @@ async fn do_send_ticket_message(
     }
 
     if matches!(req.sender_type, RbTicketSenderType::Team)
-        && !db::ticket::player_can_send_ticket(&app.db, info.ticket_id).await?
+        && let Some(result) = feature_access_error(
+            db::ticket::player_ticket_feature_access(&app.db, info.ticket_id).await?,
+            true,
+        )
     {
-        return RbError::conflict(TicketSendResult::FeatureClosed.into()).http_err();
+        return RbError::conflict(result.into()).http_err();
     }
 
     req.validate()
@@ -287,10 +306,11 @@ async fn do_send_ticket_message(
     {
         ticket.hide_assignee();
     }
-    let send_block = if info.member_access
-        && !db::ticket::player_can_send_ticket(&app.db, info.ticket_id).await?
-    {
-        db::ticket::TicketSendBlock::FeatureClosed
+    let feature_block = db::ticket::player_ticket_feature_access(&app.db, info.ticket_id)
+        .await?
+        .send_block(true);
+    let send_block = if info.member_access && feature_block != db::ticket::TicketSendBlock::Ok {
+        feature_block
     } else {
         db::ticket::calc_send_block(
             &app.db,
@@ -342,12 +362,14 @@ async fn send_dm_ticket_message(
 ) -> Result<HttpResponse> {
     crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
-    if db::ticket::get_dm_ticket_id(&app.db, team_id)
+    let has_existing = db::ticket::get_dm_ticket_id(&app.db, team_id)
         .await?
-        .is_none()
-        && !db::ticket::player_can_open_dm(&app.db, team_id).await?
-    {
-        return RbError::conflict(TicketSendResult::FeatureClosed.into()).http_err();
+        .is_some();
+    if let Some(result) = feature_access_error(
+        db::ticket::player_dm_feature_access(&app.db, team_id).await?,
+        has_existing,
+    ) {
+        return RbError::conflict(result.into()).http_err();
     }
     let ticket_id = db::ticket::get_or_create_dm_ticket_id(
         &app.db,
@@ -581,6 +603,8 @@ async fn purchase_ticket_message(
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum TicketOpenResult {
+    TeamFeatureBanned = -8,
+    FeatureExistingOnly = -7,
     FeatureClosed = -6,
     ContentTooLong = -5,
     BadContentType = -4,
@@ -663,6 +687,12 @@ async fn open_ticket_for_team(
         }
         db::ticket::OpenPuzzleTicketResult::FeatureClosed => {
             RbError::conflict(TicketOpenResult::FeatureClosed.into()).http_err()
+        }
+        db::ticket::OpenPuzzleTicketResult::FeatureExistingOnly => {
+            RbError::conflict(TicketOpenResult::FeatureExistingOnly.into()).http_err()
+        }
+        db::ticket::OpenPuzzleTicketResult::TeamFeatureBanned => {
+            RbError::conflict(TicketOpenResult::TeamFeatureBanned.into()).http_err()
         }
         db::ticket::OpenPuzzleTicketResult::Ok(thread) => {
             let thread = *thread;

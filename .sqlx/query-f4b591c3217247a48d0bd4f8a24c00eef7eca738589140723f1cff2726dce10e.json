@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.id, a.title, a.content, a.content_type,\n                a.is_pinned, COALESCE(a.game_id, r.game_id) AS game_id, a.puzzle_id,\n                p.slug AS puzzle_slug, a.utime_at\n        FROM rb_announcement a\n        LEFT JOIN rb_puzzle p ON p.id = a.puzzle_id\n        LEFT JOIN rb_round r ON r.id = p.round_id\n        WHERE a.is_shown\n            AND (a.game_id IS NULL OR a.game_id = $1)\n            AND a.puzzle_id IS NULL\n        ORDER BY a.is_pinned DESC, utime_at DESC",
+  "query": "SELECT a.id, a.title, a.content, a.content_type, a.is_pinned, a.is_shown,\n            a.game_id, a.ctime_at, a.utime_at\n        FROM rb_announcement a\n        WHERE ($1::INT IS NULL AND a.game_id IS NULL)\n            OR ($1::INT IS NOT NULL AND a.game_id = $1)\n        ORDER BY a.is_pinned DESC, a.utime_at DESC, a.id DESC;",
   "describe": {
     "columns": [
       {
@@ -30,18 +30,18 @@
       },
       {
         "ordinal": 5,
+        "name": "is_shown",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "game_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
-        "name": "puzzle_id",
-        "type_info": "Int4"
-      },
-      {
         "ordinal": 7,
-        "name": "puzzle_slug",
-        "type_info": "Varchar"
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
       },
       {
         "ordinal": 8,
@@ -60,11 +60,11 @@
       false,
       false,
       false,
-      null,
+      false,
       true,
-      true,
+      false,
       false
     ]
   },
-  "hash": "1bff0cbabc84ca4c3ab68db797c9c34883b28ebcc023026473e9ee84c8f14384"
+  "hash": "f4b591c3217247a48d0bd4f8a24c00eef7eca738589140723f1cff2726dce10e"
 }

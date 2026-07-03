@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_announcement\n        SET title = $2, content = $3, content_type = $4,\n            is_pinned = $5, is_shown = $6, game_id = $7, utime_at = NOW()\n        WHERE id = $1\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Text",
+        "Int2",
+        "Bool",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "00e70615d2cf8414bb6841ede53f4410a6d74c1bbdafdc6233c1be897ea97e4d"
+}

@@ -189,19 +189,6 @@ pub struct RbPuzzleShowRoundData {
 }
 
 #[derive(FromRow, Serialize)]
-pub struct RbPuzzleShowAnnouncementData {
-    pub id: i32,
-    pub title: String,
-    pub content: String,
-    pub content_type: RbContentType,
-    pub game_id: Option<i32>,
-    pub puzzle_id: Option<i32>,
-    pub puzzle_slug: Option<String>,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub utime_at: OffsetDateTime,
-}
-
-#[derive(FromRow, Serialize)]
 pub struct RbPuzzleShowData {
     pub id: i32,
     pub slug: Option<String>,
@@ -211,7 +198,7 @@ pub struct RbPuzzleShowData {
     pub content_type: RbContentType,
     pub round: RbPuzzleShowRoundData,
     pub game_id: i32,
-    pub announcements: Vec<RbPuzzleShowAnnouncementData>,
+    pub announcements: Vec<db::anmt::RbAnnouncementShowData>,
 }
 
 pub async fn get_puzzle_show(
@@ -229,19 +216,6 @@ pub async fn get_puzzle_show(
     .fetch_optional(db_pool)
     .await?;
 
-    let anmts = sqlx::query_as!(
-        RbPuzzleShowAnnouncementData,
-        "SELECT a.id, a.title, a.content, a.content_type,
-            r.game_id AS game_id, a.puzzle_id, p.slug AS puzzle_slug, a.utime_at
-        FROM rb_announcement a
-        JOIN rb_puzzle p ON p.id = a.puzzle_id
-        JOIN rb_round r ON r.id = p.round_id
-        WHERE a.puzzle_id = $1;",
-        puzzle_id
-    )
-    .fetch_all(db_pool)
-    .await?;
-
     Ok(result.map(|x| RbPuzzleShowData {
         id: x.id,
         slug: x.slug,
@@ -255,7 +229,7 @@ pub async fn get_puzzle_show(
             title: x.round_title,
         },
         game_id: x.game_id,
-        announcements: anmts,
+        announcements: Vec::new(),
     }))
 }
 
@@ -408,6 +382,15 @@ pub async fn get_puzzle_show_str_for_team(
     }
 
     if let Some(show_str) = get_puzzle_show_str(db_pool, kv_pool, puzzle_id).await? {
+        let mut show: Value = serde_json::from_str(&show_str)?;
+        let announcements = db::anmt::list_for_team_puzzle(db_pool, team_id, puzzle_id).await?;
+        if let Some(show) = show.as_object_mut() {
+            show.insert(
+                "announcements".to_owned(),
+                serde_json::to_value(announcements)?,
+            );
+        }
+        let show_str = serde_json::to_string(&show)?;
         let json = match get_puzzle_team_state_str(db_pool, kv_pool, team_id, puzzle_id).await? {
             Some(state_str) => format!("{{\"data\":{show_str},\"state\":{state_str}}}"),
             None => format!("{{\"data\":{show_str}}}"),

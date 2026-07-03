@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ap.announcement_id, p.id, p.slug, p.title, p.round_id,\n                r.slug AS round_slug, (r.puzzle = p.id) AS \"is_round_puzzle!\"\n            FROM rb_announcement_puzzle ap\n            JOIN rb_puzzle p ON p.id = ap.puzzle_id\n            JOIN rb_round r ON r.id = p.round_id\n            WHERE ap.announcement_id = ANY($1)\n            ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "announcement_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "round_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "is_round_puzzle!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "c88e285b7cb21c83a4bd947539c6dcbcc82721d63232d9754661fc120abf1d90"
+}

@@ -117,11 +117,18 @@ VALUES (2, 1, 0), (2, 2, 1), (2, 3, 1);
 
 -- annoucement
 
-INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
-VALUES ('全站测试公告', '这是一条全站测试公告。', 0, TRUE, TRUE, NULL, NULL);
+INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id)
+VALUES ('全站测试公告', '这是一条全站测试公告。', 0, TRUE, TRUE, NULL);
 
-INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
-VALUES ('比赛公告', '这是一条比赛公告。', 0, TRUE, TRUE, 1, NULL);
+INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id)
+VALUES ('比赛公告', '这是一条比赛公告。', 0, TRUE, TRUE, 1);
 
-INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id, puzzle_id)
-VALUES ('「只说明书」题目更正', '请将 XXX 改为 XXX。', 0, FALSE, TRUE, 1, 3);
+WITH announcement AS (
+    INSERT INTO rb_announcement (title, content, content_type, is_pinned, is_shown, game_id)
+    VALUES ('「只说明书」题目更正', '请将 XXX 改为 XXX。', 0, FALSE, TRUE, 1)
+    RETURNING id
+)
+INSERT INTO rb_announcement_puzzle (announcement_id, puzzle_id)
+SELECT id, puzzle_id
+FROM announcement
+CROSS JOIN (VALUES (2), (3)) AS puzzles(puzzle_id);

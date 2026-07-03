@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_announcement (\n            title, content, content_type, is_pinned, is_shown, game_id\n        ) VALUES ($1, $2, $3, $4, $5, $6)\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Int2",
+        "Bool",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "458ca2fcf26c47b580b3daea2bd61c6b7e67eaef954fe8d7828300e1fe98b4c9"
+}

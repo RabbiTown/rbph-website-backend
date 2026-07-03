@@ -417,10 +417,18 @@ CREATE TABLE rb_announcement (
     is_pinned       BOOLEAN NOT NULL DEFAULT FALSE,
     is_shown        BOOLEAN NOT NULL DEFAULT FALSE,
     game_id         INT REFERENCES rb_game(id) ON DELETE CASCADE,
-    puzzle_id       INT REFERENCES rb_puzzle(id) ON DELETE CASCADE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE rb_announcement_puzzle (
+    announcement_id INT NOT NULL REFERENCES rb_announcement(id) ON DELETE CASCADE,
+    puzzle_id       INT NOT NULL REFERENCES rb_puzzle(id) ON DELETE CASCADE,
+    PRIMARY KEY (announcement_id, puzzle_id)
+);
+
+CREATE INDEX rb_idx_announcement_puzzle_puzzle
+ON rb_announcement_puzzle(puzzle_id, announcement_id);
 
 -- ticket
 

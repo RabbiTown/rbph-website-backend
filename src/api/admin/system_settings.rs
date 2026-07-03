@@ -168,9 +168,11 @@ mod tests {
         assert!(!valid_request(&body, false, false));
         body.max_websocket_connections = 20;
         body.maintenance_enabled = true;
-        assert!(!valid_request(&body, false, false));
-        body.maintenance_message = "maintenance".to_string();
         assert!(valid_request(&body, false, false));
+        body.maintenance_message = "x".repeat(500);
+        assert!(valid_request(&body, false, false));
+        body.maintenance_message.push('x');
+        assert!(!valid_request(&body, false, false));
     }
 
     #[test]

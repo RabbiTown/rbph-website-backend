@@ -114,6 +114,19 @@ impl SyncHub {
         );
     }
 
+    pub fn notify_game_announcement_updated(&self, game_id: Option<i32>) {
+        let users = self
+            .users
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        self.push_users(
+            &users,
+            SyncMessageType::GameNewAnnouncement,
+            json!({ "game_id": game_id }),
+        );
+    }
+
     pub async fn notify_puzzle_submitted(
         &self,
         db_pool: &DbPool,

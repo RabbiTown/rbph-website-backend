@@ -1,3 +1,4 @@
+mod announcement;
 mod asset;
 mod feature;
 mod game;
@@ -30,6 +31,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     .configure(puzzle_backend::config)
     .configure(puzzle::config)
     .configure(round::config);
-    cfg.configure(user::config)
+    cfg.configure(announcement::config)
+        .configure(user::config)
         .configure(system_settings::config);
 }

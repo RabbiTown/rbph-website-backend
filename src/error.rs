@@ -11,6 +11,8 @@ use serde::Serialize;
 #[repr(i32)]
 #[derive(IntoPrimitive)]
 enum RbErrorCode {
+    CaptchaUnavailable = -109,
+    CaptchaInvalid = -108,
     Maintenance = -107,
     PasswordChangeRequired = -106,
     NotFound = -104,
@@ -108,6 +110,22 @@ impl RbError {
         Self {
             code: RbErrorCode::Maintenance.into(),
             message: Some(message.into()),
+            status_code: StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+
+    pub fn captcha_invalid() -> Self {
+        Self {
+            code: RbErrorCode::CaptchaInvalid.into(),
+            message: Some("Captcha verification failed".to_string()),
+            status_code: StatusCode::BAD_REQUEST,
+        }
+    }
+
+    pub fn captcha_unavailable() -> Self {
+        Self {
+            code: RbErrorCode::CaptchaUnavailable.into(),
+            message: Some("Captcha service unavailable".to_string()),
             status_code: StatusCode::SERVICE_UNAVAILABLE,
         }
     }

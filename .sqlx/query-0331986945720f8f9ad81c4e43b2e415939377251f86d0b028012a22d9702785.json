@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT registration_open, require_email_verification, max_sessions,\n            maintenance_enabled, maintenance_message, updated_by, updated_at\n        FROM rb_system_settings WHERE singleton = TRUE",
+  "query": "SELECT registration_open, require_email_verification,\n            captcha_login_required, captcha_registration_required, max_sessions,\n            maintenance_enabled, maintenance_message, updated_by, updated_at\n        FROM rb_system_settings WHERE singleton = TRUE",
   "describe": {
     "columns": [
       {
@@ -15,26 +15,36 @@
       },
       {
         "ordinal": 2,
-        "name": "max_sessions",
-        "type_info": "Int2"
+        "name": "captcha_login_required",
+        "type_info": "Bool"
       },
       {
         "ordinal": 3,
-        "name": "maintenance_enabled",
+        "name": "captcha_registration_required",
         "type_info": "Bool"
       },
       {
         "ordinal": 4,
+        "name": "max_sessions",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "maintenance_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "maintenance_message",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "updated_by",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -48,9 +58,11 @@
       false,
       false,
       false,
+      false,
+      false,
       true,
       false
     ]
   },
-  "hash": "d4e1940ae80548bdb0596997809c8d691fbed673472399335d6340093f389123"
+  "hash": "0331986945720f8f9ad81c4e43b2e415939377251f86d0b028012a22d9702785"
 }

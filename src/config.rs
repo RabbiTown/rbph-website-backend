@@ -59,7 +59,17 @@ pub struct AuthConfig {
 }
 
 #[derive(Deserialize, Clone)]
-pub struct CaptchaConfig {}
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum CaptchaConfig {
+    Disabled,
+    Cloudflare {
+        site_key: String,
+        secret_key: String,
+        allowed_hostnames: Vec<String>,
+        #[serde(default)]
+        test_mode: bool,
+    },
+}
 
 #[derive(Deserialize, Clone)]
 pub struct Settings {

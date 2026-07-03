@@ -26,7 +26,7 @@ use tokio::{
 use crate::{
     config::Settings,
     middleware::maintenance::MaintenanceMiddleware,
-    module::{email::EmailService, sync::SyncHub},
+    module::{captcha::CaptchaService, email::EmailService, sync::SyncHub},
 };
 
 pub type DbPool = PgPool;
@@ -40,6 +40,7 @@ pub struct AppState {
     pub system_settings: Arc<RwLock<db::system_settings::SystemSettings>>,
     pub sync_hub: Arc<SyncHub>,
     pub release_schedule_changed: Arc<Notify>,
+    pub captcha: Option<Arc<CaptchaService>>,
     pub email: Option<Arc<EmailService>>,
     pub storage: module::storage::LocalStorage,
 }
@@ -74,9 +75,13 @@ async fn main() -> std::io::Result<()> {
 
     let sync_hub = Arc::new(SyncHub::default());
     let release_schedule_changed = Arc::new(Notify::new());
-    let system_settings = Arc::new(RwLock::new(
-        db::system_settings::get(&db_pool).await.unwrap(),
-    ));
+    let captcha = match CaptchaService::from_config(&settings.auth.captcha) {
+        Ok(service) => service.map(Arc::new),
+        Err(error) => {
+            log::error!("Invalid captcha configuration: {error}");
+            std::process::exit(1);
+        }
+    };
 
     let email_service = if settings.auth.email.enabled {
         Some(Arc::new(
@@ -91,6 +96,27 @@ async fn main() -> std::io::Result<()> {
     } else {
         None
     };
+    let previous_system_settings = db::system_settings::get(&db_pool).await.unwrap();
+    let current_system_settings = db::system_settings::disable_unavailable_auth_features(
+        &db_pool,
+        captcha.is_some(),
+        email_service.is_some(),
+    )
+    .await
+    .unwrap();
+    if previous_system_settings.require_email_verification
+        && !current_system_settings.require_email_verification
+    {
+        log::warn!("Email verification was disabled because email delivery is not configured");
+    }
+    if (previous_system_settings.captcha_login_required
+        || previous_system_settings.captcha_registration_required)
+        && !current_system_settings.captcha_login_required
+        && !current_system_settings.captcha_registration_required
+    {
+        log::warn!("Captcha requirements were disabled because captcha is not configured");
+    }
+    let system_settings = Arc::new(RwLock::new(current_system_settings));
 
     let storage = module::storage::LocalStorage::new(storage_config.asset_root.clone());
 
@@ -101,6 +127,7 @@ async fn main() -> std::io::Result<()> {
         system_settings,
         sync_hub: sync_hub.clone(),
         release_schedule_changed: release_schedule_changed.clone(),
+        captcha,
         email: email_service.clone(),
         storage,
     };

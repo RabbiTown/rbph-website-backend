@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_system_settings SET\n            require_email_verification = require_email_verification AND $1,\n            captcha_login_required = captcha_login_required AND $2,\n            captcha_registration_required = captcha_registration_required AND $2,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE singleton = TRUE AND (\n            (NOT $1 AND require_email_verification)\n            OR (NOT $2 AND (captcha_login_required OR captcha_registration_required))\n        )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dd018042cbe1c814b0edd59eb9383eb967cdfbd2c7abc269714942adaa4b70b8"
+}

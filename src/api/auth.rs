@@ -1,4 +1,11 @@
-use crate::{AppState, db, error::RbError, module::session};
+use crate::{
+    AppState, db,
+    error::RbError,
+    module::{
+        captcha::{CaptchaAction, CaptchaPublicConfig, CaptchaVerifyError},
+        session,
+    },
+};
 use actix_session::Session;
 use actix_web::{HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
@@ -22,10 +29,46 @@ fn validate_printable(s: &str) -> Result<(), ValidationError> {
 // -- pre-login --
 
 #[derive(Serialize)]
-struct UserPreLoginResponse {}
+struct CaptchaPreAuthResponse {
+    #[serde(flatten)]
+    config: CaptchaPublicConfig,
+    login_required: bool,
+    registration_required: bool,
+}
 
-async fn pre_auth(_app: web::Data<AppState>) -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().json(UserPreLoginResponse {}))
+#[derive(Serialize)]
+struct UserPreLoginResponse {
+    code: i32,
+    captcha: Option<CaptchaPreAuthResponse>,
+}
+
+async fn pre_auth(app: web::Data<AppState>) -> Result<HttpResponse> {
+    let settings = app.system_settings.read().await;
+    let captcha = app.captcha.as_ref().map(|service| CaptchaPreAuthResponse {
+        config: service.public_config(),
+        login_required: settings.captcha_login_required,
+        registration_required: settings.captcha_registration_required,
+    });
+    Ok(HttpResponse::Ok().json(UserPreLoginResponse { code: 0, captcha }))
+}
+
+async fn verify_captcha(
+    app: &AppState,
+    required: bool,
+    token: Option<&str>,
+    action: CaptchaAction,
+) -> Result<(), actix_web::Error> {
+    if !required {
+        return Ok(());
+    }
+    let Some(captcha) = &app.captcha else {
+        return Err(RbError::captcha_unavailable().into());
+    };
+    match captcha.verify(token, action).await {
+        Ok(()) => Ok(()),
+        Err(CaptchaVerifyError::Invalid) => Err(RbError::captcha_invalid().into()),
+        Err(CaptchaVerifyError::Unavailable) => Err(RbError::captcha_unavailable().into()),
+    }
 }
 
 // -- login --
@@ -36,6 +79,7 @@ struct UserLoginRequest {
     email: String,
     #[validate(custom(function = validate_printable), length(min = 8, max = 64))]
     password: String,
+    captcha_token: Option<String>,
 }
 
 impl UserLoginRequest {
@@ -43,6 +87,7 @@ impl UserLoginRequest {
         Self {
             email: self.email.trim().to_lowercase(),
             password: self.password.trim().to_string(),
+            captcha_token: self.captcha_token.clone(),
         }
     }
 }
@@ -74,6 +119,14 @@ async fn login(
             .msg(e.to_string())
             .err()?;
     }
+    let captcha_required = app.system_settings.read().await.captcha_login_required;
+    verify_captcha(
+        app.get_ref(),
+        captcha_required,
+        req.captcha_token.as_deref(),
+        CaptchaAction::Login,
+    )
+    .await?;
 
     let user = db::user::get_verify_by_email(&app.db, &req.email).await?;
     if user.is_none() {
@@ -123,6 +176,7 @@ struct UserRegisterRequest {
     email: String,
     #[validate(custom(function = validate_printable), length(min = 8, max = 64))]
     password: String,
+    captcha_token: Option<String>,
 }
 
 impl UserRegisterRequest {
@@ -130,6 +184,7 @@ impl UserRegisterRequest {
         Self {
             email: self.email.trim().to_lowercase(),
             password: self.password.trim().to_string(),
+            captcha_token: self.captcha_token.clone(),
         }
     }
 }
@@ -169,6 +224,13 @@ async fn register(
             .msg(e.to_string())
             .err()?;
     }
+    verify_captcha(
+        app.get_ref(),
+        settings.captcha_registration_required,
+        req.captcha_token.as_deref(),
+        CaptchaAction::Register,
+    )
+    .await?;
 
     if db::user::exists(&app.db, &req.email).await? {
         RbError::conflict(UserRegisterResult::UserExists.into()).err()?

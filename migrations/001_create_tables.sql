@@ -34,6 +34,8 @@ CREATE TABLE rb_system_settings (
     singleton                   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     registration_open           BOOLEAN NOT NULL DEFAULT TRUE,
     require_email_verification  BOOLEAN NOT NULL DEFAULT FALSE,
+    captcha_login_required      BOOLEAN NOT NULL DEFAULT FALSE,
+    captcha_registration_required BOOLEAN NOT NULL DEFAULT FALSE,
     max_sessions                SMALLINT NOT NULL DEFAULT 3 CHECK (max_sessions BETWEEN 1 AND 20),
     maintenance_enabled         BOOLEAN NOT NULL DEFAULT FALSE,
     maintenance_message         VARCHAR(500) NOT NULL DEFAULT '系统正在维护，请稍后再试。',

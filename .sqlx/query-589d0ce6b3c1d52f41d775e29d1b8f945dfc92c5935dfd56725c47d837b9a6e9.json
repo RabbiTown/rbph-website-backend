@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_system_settings SET\n            registration_open = $1,\n            require_email_verification = $2,\n            captcha_login_required = $3,\n            captcha_registration_required = $4,\n            max_sessions = $5,\n            maintenance_enabled = $6,\n            maintenance_message = $7,\n            updated_by = $8,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE singleton = TRUE\n        RETURNING registration_open, require_email_verification,\n            captcha_login_required, captcha_registration_required, max_sessions,\n            maintenance_enabled, maintenance_message, updated_by, updated_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "registration_open",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "require_email_verification",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "captcha_login_required",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "captcha_registration_required",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_sessions",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
+        "name": "maintenance_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "maintenance_message",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_by",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Int2",
+        "Bool",
+        "Varchar",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "589d0ce6b3c1d52f41d775e29d1b8f945dfc92c5935dfd56725c47d837b9a6e9"
+}

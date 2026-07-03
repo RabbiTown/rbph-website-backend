@@ -15,6 +15,7 @@ asset_root = "./assets"
 [auth]
 
 [auth.captcha]
+provider = "disabled"
 
 [auth.email]
 enabled = false

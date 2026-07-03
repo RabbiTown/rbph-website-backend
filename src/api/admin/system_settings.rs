@@ -13,6 +13,8 @@ use crate::{
 struct SystemSettingsRequest {
     registration_open: bool,
     require_email_verification: bool,
+    captcha_login_required: bool,
+    captcha_registration_required: bool,
     max_sessions: i16,
     maintenance_enabled: bool,
     maintenance_message: String,
@@ -30,13 +32,26 @@ struct SystemSettingsResponse {
     code: SystemSettingsResult,
     settings: db::system_settings::SystemSettings,
     email_delivery_enabled: bool,
+    captcha_provider: Option<&'static str>,
 }
 
-fn valid_request(body: &SystemSettingsRequest, email_delivery_enabled: bool) -> bool {
+fn valid_request(
+    body: &SystemSettingsRequest,
+    email_delivery_enabled: bool,
+    captcha_available: bool,
+) -> bool {
     (1..=20).contains(&body.max_sessions)
         && body.maintenance_message.chars().count() <= 500
         && (!body.maintenance_enabled || !body.maintenance_message.is_empty())
         && (!body.require_email_verification || email_delivery_enabled)
+        && (!(body.captcha_login_required || body.captcha_registration_required)
+            || captcha_available)
+}
+
+fn captcha_provider(app: &AppState) -> Option<&'static str> {
+    app.captcha
+        .as_ref()
+        .map(|service| service.public_config().provider)
 }
 
 async fn get(app: web::Data<AppState>) -> Result<HttpResponse> {
@@ -44,6 +59,7 @@ async fn get(app: web::Data<AppState>) -> Result<HttpResponse> {
         code: SystemSettingsResult::Ok,
         settings: app.system_settings.read().await.clone(),
         email_delivery_enabled: app.email.is_some(),
+        captcha_provider: captcha_provider(&app),
     }))
 }
 
@@ -54,7 +70,7 @@ async fn update(
 ) -> Result<HttpResponse> {
     let mut body = body.into_inner();
     body.maintenance_message = body.maintenance_message.trim().to_string();
-    if !valid_request(&body, app.email.is_some()) {
+    if !valid_request(&body, app.email.is_some(), app.captcha.is_some()) {
         return RbError::bad_req(SystemSettingsResult::Invalid.into()).http_err();
     }
 
@@ -64,6 +80,8 @@ async fn update(
         db::system_settings::SystemSettingsUpdate {
             registration_open: body.registration_open,
             require_email_verification: body.require_email_verification,
+            captcha_login_required: body.captcha_login_required,
+            captcha_registration_required: body.captcha_registration_required,
             max_sessions: body.max_sessions,
             maintenance_enabled: body.maintenance_enabled,
             maintenance_message: &body.maintenance_message,
@@ -84,6 +102,8 @@ async fn update(
                 "fields": {
                     "registration_open": previous.registration_open != settings.registration_open,
                     "require_email_verification": previous.require_email_verification != settings.require_email_verification,
+                    "captcha_login_required": previous.captcha_login_required != settings.captcha_login_required,
+                    "captcha_registration_required": previous.captcha_registration_required != settings.captcha_registration_required,
                     "max_sessions": previous.max_sessions != settings.max_sessions,
                     "maintenance_enabled": previous.maintenance_enabled != settings.maintenance_enabled,
                     "maintenance_message": previous.maintenance_message != settings.maintenance_message,
@@ -98,6 +118,7 @@ async fn update(
         code: SystemSettingsResult::Ok,
         settings,
         email_delivery_enabled: app.email.is_some(),
+        captcha_provider: captcha_provider(&app),
     }))
 }
 
@@ -109,6 +130,8 @@ mod tests {
         SystemSettingsRequest {
             registration_open: true,
             require_email_verification: false,
+            captcha_login_required: false,
+            captcha_registration_required: false,
             max_sessions: 3,
             maintenance_enabled: false,
             maintenance_message: String::new(),
@@ -118,24 +141,32 @@ mod tests {
     #[test]
     fn validates_system_settings_boundaries() {
         let mut body = request();
-        assert!(valid_request(&body, false));
+        assert!(valid_request(&body, false, false));
         body.max_sessions = 0;
-        assert!(!valid_request(&body, false));
+        assert!(!valid_request(&body, false, false));
         body.max_sessions = 21;
-        assert!(!valid_request(&body, false));
+        assert!(!valid_request(&body, false, false));
         body.max_sessions = 20;
         body.maintenance_enabled = true;
-        assert!(!valid_request(&body, false));
+        assert!(!valid_request(&body, false, false));
         body.maintenance_message = "maintenance".to_string();
-        assert!(valid_request(&body, false));
+        assert!(valid_request(&body, false, false));
     }
 
     #[test]
     fn email_verification_requires_delivery_service() {
         let mut body = request();
         body.require_email_verification = true;
-        assert!(!valid_request(&body, false));
-        assert!(valid_request(&body, true));
+        assert!(!valid_request(&body, false, false));
+        assert!(valid_request(&body, true, false));
+    }
+
+    #[test]
+    fn captcha_policy_requires_provider() {
+        let mut body = request();
+        body.captcha_login_required = true;
+        assert!(!valid_request(&body, false, false));
+        assert!(valid_request(&body, false, true));
     }
 }
 

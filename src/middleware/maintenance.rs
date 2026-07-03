@@ -82,7 +82,11 @@ where
 fn is_exempt(path: &str) -> bool {
     matches!(
         path,
-        "/api/system/status" | "/api/auth/login" | "/api/auth/logout" | "/api/user/info"
+        "/api/system/status"
+            | "/api/auth/pre-auth"
+            | "/api/auth/login"
+            | "/api/auth/logout"
+            | "/api/user/info"
     )
 }
 
@@ -93,6 +97,7 @@ mod tests {
     #[test]
     fn only_required_routes_bypass_maintenance() {
         assert!(is_exempt("/api/system/status"));
+        assert!(is_exempt("/api/auth/pre-auth"));
         assert!(is_exempt("/api/auth/login"));
         assert!(is_exempt("/api/auth/logout"));
         assert!(is_exempt("/api/user/info"));

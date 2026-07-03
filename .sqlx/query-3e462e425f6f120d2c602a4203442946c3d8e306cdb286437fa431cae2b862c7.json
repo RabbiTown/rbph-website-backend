@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\"\n        FROM rb_ticket tk\n        LEFT JOIN rb_user u ON u.id = tk.assignee\n        WHERE tk.id = $1\n        FOR UPDATE OF tk",
+  "query": "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\",\n            u.avatar_provider AS \"avatar_provider?\"\n        FROM rb_ticket tk\n        LEFT JOIN rb_user u ON u.id = tk.assignee\n        WHERE tk.id = $1\n        FOR UPDATE OF tk",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "ordinal": 2,
         "name": "email?",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "avatar_provider?",
+        "type_info": "Int2"
       }
     ],
     "parameters": {
@@ -27,8 +32,9 @@
     "nullable": [
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "366ec345f12845fd3610f3bbf5a487266792e747a28087ff46b572f9e2abef70"
+  "hash": "3e462e425f6f120d2c602a4203442946c3d8e306cdb286437fa431cae2b862c7"
 }

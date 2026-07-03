@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, m.is_captain, u.nickname, u.email, m.ctime_at\n        FROM rb_team_member m\n        JOIN rb_user u ON u.id = m.user_id\n        WHERE m.team_id = $1",
+  "query": "SELECT u.id, m.is_captain, u.nickname, u.email, u.avatar_provider, m.ctime_at\n        FROM rb_team_member m\n        JOIN rb_user u ON u.id = m.user_id\n        WHERE m.team_id = $1",
   "describe": {
     "columns": [
       {
@@ -25,6 +25,11 @@
       },
       {
         "ordinal": 4,
+        "name": "avatar_provider",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 5,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -39,8 +44,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "e3d7fbe7a75e8a30b2852d626825cc377acb9b5d4a20ba35c7d473cd1eb29a81"
+  "hash": "7a53e2ccf8469970178f23032d46ee876d18893bf71fd074da63b34093973fbf"
 }

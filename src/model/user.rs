@@ -1,11 +1,38 @@
 use md5::{Digest, Md5};
-use num_enum::{FromPrimitive, IntoPrimitive};
+use num_enum::{FromPrimitive, IntoPrimitive, TryFromPrimitive};
 use serde::{Deserialize, Serialize};
 
-pub fn avatar_url(email: &str) -> String {
+#[derive(
+    Serialize,
+    Deserialize,
+    TryFromPrimitive,
+    IntoPrimitive,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+)]
+#[repr(i16)]
+#[serde(rename_all = "snake_case")]
+pub enum AvatarProvider {
+    #[default]
+    Cravatar = 0,
+    Catavatar = 1,
+}
+
+pub fn avatar_url(email: &str, provider: AvatarProvider) -> String {
     let normalized = email.trim().to_lowercase();
     let hash = Md5::digest(normalized.as_bytes());
-    format!("https://cn.cravatar.com/avatar/{hash:x}.png?d=identicon")
+    match provider {
+        AvatarProvider::Cravatar => {
+            format!("https://cn.cravatar.com/avatar/{hash:x}.png?d=identicon")
+        }
+        AvatarProvider::Catavatar => {
+            format!("https://puzzle.cat/api/users/avatar/public/{hash:x}")
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, FromPrimitive, IntoPrimitive, Clone, Copy, Eq, PartialEq)]
@@ -68,7 +95,19 @@ impl PartialOrd for RbUserRole {
 
 #[cfg(test)]
 mod tests {
-    use super::RbUserRole;
+    use super::{AvatarProvider, RbUserRole, avatar_url};
+
+    #[test]
+    fn builds_avatar_urls_from_normalized_email() {
+        assert_eq!(
+            avatar_url(" Test@Example.com ", AvatarProvider::Cravatar),
+            "https://cn.cravatar.com/avatar/55502f40dc8b7c769880b10874abc9d0.png?d=identicon"
+        );
+        assert_eq!(
+            avatar_url(" Test@Example.com ", AvatarProvider::Catavatar),
+            "https://puzzle.cat/api/users/avatar/public/55502f40dc8b7c769880b10874abc9d0"
+        );
+    }
 
     #[test]
     fn administrators_only_manage_non_admin_roles() {

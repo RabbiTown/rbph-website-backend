@@ -78,7 +78,19 @@ pub struct TicketAggreInfoUser {
     pub id: i32,
     pub nickname: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+}
+
+fn user_avatar(email: Option<&str>, provider: Option<i16>) -> Option<String> {
+    email.map(|email| {
+        crate::model::user::avatar_url(
+            email,
+            crate::model::user::AvatarProvider::try_from(provider.unwrap_or_default())
+                .unwrap_or_default(),
+        )
+    })
 }
 
 #[derive(Serialize)]
@@ -528,6 +540,7 @@ fn make_message(
         sender: TicketAggreInfoUser {
             id: sender_id?,
             nickname: sender_nickname?,
+            avatar: None,
             email: None,
         },
         sender_type: RbTicketSenderType::from_primitive(sender_type?),
@@ -613,6 +626,7 @@ async fn get_ticket_messages_page(
             sender: TicketAggreInfoUser {
                 id: x.u_id,
                 nickname: x.u_nickname,
+                avatar: None,
                 email: None,
             },
             sender_type: RbTicketSenderType::from_primitive(x.sender_type),
@@ -683,6 +697,7 @@ async fn get_ticket_messages_page(
             actor: TicketAggreInfoUser {
                 id: x.u_id,
                 nickname: x.u_nickname,
+                avatar: None,
                 email: None,
             },
             actor_type: RbTicketSenderType::from_primitive(x.actor_type),
@@ -839,6 +854,7 @@ pub async fn get_ticket_message(
         sender: TicketAggreInfoUser {
             id: x.u_id,
             nickname: x.u_nickname,
+            avatar: None,
             email: None,
         },
         sender_type: RbTicketSenderType::from_primitive(x.sender_type),
@@ -994,7 +1010,8 @@ pub async fn get_ticket_summary(
                 r.id AS "r_id?", r.slug AS "r_slug?", r.title AS "r_title?",
                 stats.msg_count, stats.last_at,
                 last_msg.sender_type AS "last_by?",
-                au.id AS "a_id?", au.nickname AS "a_nickname?", au.email AS "a_email?"
+                au.id AS "a_id?", au.nickname AS "a_nickname?", au.email AS "a_email?",
+                au.avatar_provider AS "a_avatar_provider?"
         FROM rb_ticket tk
         JOIN rb_team t ON t.id = tk.team_id
         LEFT JOIN rb_user au ON au.id = tk.assignee
@@ -1040,6 +1057,7 @@ pub async fn get_ticket_summary(
             .map(|(id, nickname)| TicketAggreInfoUser {
                 id,
                 nickname,
+                avatar: user_avatar(x.a_email.as_deref(), x.a_avatar_provider),
                 email: x.a_email,
             }),
     }))
@@ -1154,6 +1172,7 @@ pub async fn list_staff_tickets(
                 COALESCE(tp.state, -1)::SMALLINT AS "p_state?",
                 r.id AS "r_id?", r.slug AS "r_slug?", r.title AS "r_title?",
                 au.id AS "a_id?", au.nickname AS "a_nickname?", au.email AS "a_email?",
+                au.avatar_provider AS "a_avatar_provider?",
                 (SELECT COUNT(*) FROM rb_message mc WHERE mc.ticket_id = tk.id) AS msg_count,
                 lm.ctime_at AS "last_at?", lm.sender_type AS "last_by?"
         FROM rb_ticket tk
@@ -1216,6 +1235,7 @@ pub async fn list_staff_tickets(
                 .map(|(id, nickname)| TicketAggreInfoUser {
                     id,
                     nickname,
+                    avatar: user_avatar(x.a_email.as_deref(), x.a_avatar_provider),
                     email: x.a_email,
                 }),
         })
@@ -1236,7 +1256,8 @@ pub async fn assign_ticket_self(
 ) -> Result<AssignTicketResult, RbInternalError> {
     let mut tx = db_pool.begin().await?;
     let current = sqlx::query!(
-        "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\"
+        "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\",
+            u.avatar_provider AS \"avatar_provider?\"
         FROM rb_ticket tk
         LEFT JOIN rb_user u ON u.id = tk.assignee
         WHERE tk.id = $1
@@ -1256,6 +1277,7 @@ pub async fn assign_ticket_self(
         return Ok(AssignTicketResult::Assigned(TicketAggreInfoUser {
             id: assignee,
             nickname: current.nickname.unwrap_or_default(),
+            avatar: user_avatar(current.email.as_deref(), current.avatar_provider),
             email: current.email,
         }));
     }
@@ -1264,7 +1286,8 @@ pub async fn assign_ticket_self(
         "UPDATE rb_ticket SET assignee = $2 WHERE id = $1
         RETURNING
             (SELECT nickname FROM rb_user WHERE id = $2) AS \"nickname!\",
-            (SELECT email FROM rb_user WHERE id = $2) AS \"email!\"",
+            (SELECT email FROM rb_user WHERE id = $2) AS \"email!\",
+            (SELECT avatar_provider FROM rb_user WHERE id = $2) AS \"avatar_provider!\"",
         ticket_id,
         user_id,
     )
@@ -1274,6 +1297,7 @@ pub async fn assign_ticket_self(
     Ok(AssignTicketResult::Ok(TicketAggreInfoUser {
         id: user_id,
         nickname: user.nickname,
+        avatar: user_avatar(Some(&user.email), Some(user.avatar_provider)),
         email: Some(user.email),
     }))
 }
@@ -1388,7 +1412,8 @@ pub async fn send_ticket_message(
     let mut tx = db_pool.begin().await?;
 
     let ticket = sqlx::query!(
-        "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\"
+        "SELECT tk.assignee, u.nickname AS \"nickname?\", u.email AS \"email?\",
+            u.avatar_provider AS \"avatar_provider?\"
         FROM rb_ticket tk
         LEFT JOIN rb_user u ON u.id = tk.assignee
         WHERE tk.id = $1
@@ -1406,6 +1431,7 @@ pub async fn send_ticket_message(
         return Ok(SendTicketMessageResult::Assigned(TicketAggreInfoUser {
             id: assignee,
             nickname: ticket.nickname.unwrap_or_default(),
+            avatar: user_avatar(ticket.email.as_deref(), ticket.avatar_provider),
             email: ticket.email,
         }));
     }
@@ -1466,7 +1492,8 @@ pub async fn close_ticket(
 
     let info = sqlx::query!(
         r#"SELECT t.team_id, t.puzzle_id, t.state, t.assignee,
-            au.nickname AS "assignee_nickname?", au.email AS "assignee_email?", tm.game_id,
+            au.nickname AS "assignee_nickname?", au.email AS "assignee_email?",
+            au.avatar_provider AS "assignee_avatar_provider?", tm.game_id,
             p.round_id AS "round_id?", p.title AS "puzzle_title?"
         FROM rb_ticket t
         JOIN rb_team tm ON tm.id = t.team_id
@@ -1495,6 +1522,10 @@ pub async fn close_ticket(
         return Ok(CloseTicketResult::Assigned(TicketAggreInfoUser {
             id: assignee,
             nickname: info.assignee_nickname.unwrap_or_default(),
+            avatar: user_avatar(
+                info.assignee_email.as_deref(),
+                info.assignee_avatar_provider,
+            ),
             email: info.assignee_email,
         }));
     }

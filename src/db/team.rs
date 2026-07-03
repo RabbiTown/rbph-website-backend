@@ -103,6 +103,7 @@ struct RbTeamMemberRow {
     is_captain: bool,
     nickname: String,
     email: String,
+    avatar_provider: i16,
     ctime_at: OffsetDateTime,
 }
 
@@ -112,7 +113,11 @@ impl From<RbTeamMemberRow> for RbTeamMemberData {
             id: member.id,
             is_captain: member.is_captain,
             nickname: member.nickname,
-            avatar: crate::model::user::avatar_url(&member.email),
+            avatar: crate::model::user::avatar_url(
+                &member.email,
+                crate::model::user::AvatarProvider::try_from(member.avatar_provider)
+                    .unwrap_or_default(),
+            ),
             ctime_at: member.ctime_at,
         }
     }
@@ -142,7 +147,7 @@ pub async fn get_by_user_game(
 
     let members = sqlx::query_as!(
         RbTeamMemberRow,
-        "SELECT u.id, m.is_captain, u.nickname, u.email, m.ctime_at
+        "SELECT u.id, m.is_captain, u.nickname, u.email, u.avatar_provider, m.ctime_at
         FROM rb_team_member m
         JOIN rb_user u ON u.id = m.user_id
         WHERE m.team_id = $1",
@@ -1523,7 +1528,7 @@ pub async fn admin_get(
     };
     let members = sqlx::query_as!(
         RbTeamMemberRow,
-        "SELECT u.id, m.is_captain, u.nickname, u.email, m.ctime_at
+        "SELECT u.id, m.is_captain, u.nickname, u.email, u.avatar_provider, m.ctime_at
         FROM rb_team_member m
         JOIN rb_user u ON u.id = m.user_id
         WHERE m.team_id = $1

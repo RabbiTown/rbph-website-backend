@@ -7,6 +7,7 @@ CREATE TABLE rb_user (
     urole           SMALLINT NOT NULL DEFAULT 1 CHECK (urole BETWEEN 0 AND 4),
     nickname        VARCHAR(60) NOT NULL DEFAULT '',
     bio             TEXT,
+    avatar_provider SMALLINT NOT NULL DEFAULT 0 CHECK (avatar_provider BETWEEN 0 AND 1),
     must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -39,7 +40,7 @@ CREATE TABLE rb_system_settings (
     max_sessions                SMALLINT NOT NULL DEFAULT 3 CHECK (max_sessions BETWEEN 1 AND 20),
     max_websocket_connections   SMALLINT NOT NULL DEFAULT 5 CHECK (max_websocket_connections BETWEEN 1 AND 20),
     maintenance_enabled         BOOLEAN NOT NULL DEFAULT FALSE,
-    maintenance_message         VARCHAR(500) NOT NULL DEFAULT '系统正在维护，请稍后再试。',
+    maintenance_message         VARCHAR(500) NOT NULL DEFAULT '',
     updated_by                  INT REFERENCES rb_user(id) ON DELETE SET NULL,
     updated_at                  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

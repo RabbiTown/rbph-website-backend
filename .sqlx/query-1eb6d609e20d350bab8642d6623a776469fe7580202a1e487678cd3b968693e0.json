@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, email, nickname, bio, urole, must_change_password, ctime_at\n        FROM rb_user WHERE id = $1",
+  "query": "SELECT id, email, nickname, bio, avatar_provider, urole, must_change_password, ctime_at\n        FROM rb_user WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -25,16 +25,21 @@
       },
       {
         "ordinal": 4,
-        "name": "urole",
+        "name": "avatar_provider",
         "type_info": "Int2"
       },
       {
         "ordinal": 5,
+        "name": "urole",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
         "name": "must_change_password",
         "type_info": "Bool"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -51,8 +56,9 @@
       true,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "9d4a60bc22090ab9c62ac0098759517d927641b037c45c4787af959c5b4a03e0"
+  "hash": "1eb6d609e20d350bab8642d6623a776469fe7580202a1e487678cd3b968693e0"
 }

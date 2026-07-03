@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_repr::Serialize_repr;
 
-use crate::{AppState, db, error::RbError, extractor::auth::AuthUser};
+use crate::{AppState, db, error::RbError, extractor::auth::AuthUser, model::user::AvatarProvider};
 
 pub async fn hello() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().body("wowwo so privleged"))
@@ -20,6 +20,7 @@ pub async fn info(user: AuthUser, app: web::Data<AppState>) -> Result<HttpRespon
 pub struct UserProfileUpdateRequest {
     nickname: String,
     bio: Option<String>,
+    avatar_provider: AvatarProvider,
 }
 
 pub async fn update_info(
@@ -41,7 +42,11 @@ pub async fn update_info(
         return RbError::bad_req(-2).http_err();
     }
 
-    let result = db::user::update_profile(&app.db, user.uid, nickname, bio).await?;
+    let result =
+        db::user::update_profile(&app.db, user.uid, nickname, bio, req.avatar_provider).await?;
+    for team_id in db::user::team_ids(&app.db, user.uid).await? {
+        db::cache::invalidate_team_info(&app, team_id).await?;
+    }
     db::event_log::insert_pool(
         &app.db,
         db::event_log::EventLogInput {
@@ -52,7 +57,8 @@ pub async fn update_info(
             data: json!({
                 "fields": {
                     "nickname": true,
-                    "bio": req.bio.is_some()
+                    "bio": req.bio.is_some(),
+                    "avatar_provider": true
                 }
             }),
             ..Default::default()

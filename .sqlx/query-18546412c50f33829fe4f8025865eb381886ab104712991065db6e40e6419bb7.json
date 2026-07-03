@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE rb_user\n        SET nickname = $2, bio = $3\n        WHERE id = $1\n        RETURNING id, email, urole, nickname, bio, must_change_password, ctime_at;",
+  "query": "SELECT id, email, urole, nickname, bio, must_change_password, avatar_provider, ctime_at\n        FROM rb_user WHERE id = $1;",
   "describe": {
     "columns": [
       {
@@ -35,15 +35,18 @@
       },
       {
         "ordinal": 6,
+        "name": "avatar_provider",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4",
-        "Varchar",
-        "Text"
+        "Int4"
       ]
     },
     "nullable": [
@@ -53,8 +56,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "d89a75a2fb4efc580dbd21402efef7bad09c72f0beb84685a7236d587a35147c"
+  "hash": "18546412c50f33829fe4f8025865eb381886ab104712991065db6e40e6419bb7"
 }

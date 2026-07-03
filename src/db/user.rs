@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::{DbPool, KvPool, error::RbInternalError, model::user::RbUserRole};
+use crate::{
+    DbPool, KvPool,
+    error::RbInternalError,
+    model::user::{AvatarProvider, RbUserRole},
+};
 
 pub async fn register(pool: &DbPool, email: &str, pass: &str) -> Result<i32, RbInternalError> {
     let result = sqlx::query_scalar!(
@@ -142,6 +146,7 @@ pub struct RbUserDisplayData {
     pub bio: Option<String>,
     pub must_change_password: bool,
     pub avatar: String,
+    pub avatar_provider: AvatarProvider,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
 }
@@ -153,12 +158,14 @@ struct RbUserDisplayRow {
     nickname: String,
     bio: Option<String>,
     must_change_password: bool,
+    avatar_provider: i16,
     ctime_at: OffsetDateTime,
 }
 
 impl From<RbUserDisplayRow> for RbUserDisplayData {
     fn from(user: RbUserDisplayRow) -> Self {
-        let avatar = crate::model::user::avatar_url(&user.email);
+        let avatar_provider = AvatarProvider::try_from(user.avatar_provider).unwrap_or_default();
+        let avatar = crate::model::user::avatar_url(&user.email, avatar_provider);
         Self {
             id: user.id,
             email: user.email,
@@ -167,6 +174,7 @@ impl From<RbUserDisplayRow> for RbUserDisplayData {
             bio: user.bio,
             must_change_password: user.must_change_password,
             avatar,
+            avatar_provider,
             ctime_at: user.ctime_at,
         }
     }
@@ -178,7 +186,7 @@ pub async fn get_display_by_id(
 ) -> Result<RbUserDisplayData, RbInternalError> {
     let result = sqlx::query_as!(
         RbUserDisplayRow,
-        "SELECT id, email, urole, nickname, bio, must_change_password, ctime_at
+        "SELECT id, email, urole, nickname, bio, must_change_password, avatar_provider, ctime_at
         FROM rb_user WHERE id = $1;",
         user_id
     )
@@ -193,21 +201,32 @@ pub async fn update_profile(
     user_id: i32,
     nickname: &str,
     bio: Option<&str>,
+    avatar_provider: AvatarProvider,
 ) -> Result<RbUserDisplayData, RbInternalError> {
     let result = sqlx::query_as!(
         RbUserDisplayRow,
         "UPDATE rb_user
-        SET nickname = $2, bio = $3
+        SET nickname = $2, bio = $3, avatar_provider = $4
         WHERE id = $1
-        RETURNING id, email, urole, nickname, bio, must_change_password, ctime_at;",
+        RETURNING id, email, urole, nickname, bio, must_change_password, avatar_provider, ctime_at;",
         user_id,
         nickname,
-        bio
+        bio,
+        i16::from(avatar_provider)
     )
     .fetch_one(pool)
     .await?;
 
     Ok(result.into())
+}
+
+pub async fn team_ids(pool: &DbPool, user_id: i32) -> Result<Vec<i32>, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT team_id FROM rb_team_member WHERE user_id = $1;",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?)
 }
 
 pub enum ChangePasswordResult {
@@ -288,6 +307,7 @@ pub struct AdminUserListItem {
     pub id: i32,
     pub email: String,
     pub nickname: String,
+    pub avatar: String,
     pub urole: RbUserRole,
     pub must_change_password: bool,
     pub team_count: i64,
@@ -299,6 +319,7 @@ struct AdminUserListRow {
     id: i32,
     email: String,
     nickname: String,
+    avatar_provider: i16,
     urole: i16,
     must_change_password: bool,
     team_count: i64,
@@ -320,6 +341,8 @@ pub struct AdminUserDetail {
     pub email: String,
     pub nickname: String,
     pub bio: Option<String>,
+    pub avatar: String,
+    pub avatar_provider: AvatarProvider,
     pub urole: RbUserRole,
     pub must_change_password: bool,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
@@ -341,7 +364,7 @@ pub async fn admin_list(
 ) -> Result<Vec<AdminUserListItem>, RbInternalError> {
     Ok(sqlx::query_as!(
         AdminUserListRow,
-        r#"SELECT u.id, u.email, u.nickname, u.urole,
+        r#"SELECT u.id, u.email, u.nickname, u.avatar_provider, u.urole,
             u.must_change_password, u.ctime_at, COUNT(tm.team_id) AS "team_count!"
         FROM rb_user u
         LEFT JOIN rb_team_member tm ON tm.user_id = u.id
@@ -362,6 +385,10 @@ pub async fn admin_list(
     .into_iter()
     .map(|row| AdminUserListItem {
         id: row.id,
+        avatar: crate::model::user::avatar_url(
+            &row.email,
+            AvatarProvider::try_from(row.avatar_provider).unwrap_or_default(),
+        ),
         email: row.email,
         nickname: row.nickname,
         urole: RbUserRole::from(row.urole),
@@ -394,7 +421,7 @@ pub async fn admin_get(
     user_id: i32,
 ) -> Result<Option<AdminUserDetail>, RbInternalError> {
     let user = sqlx::query!(
-        "SELECT id, email, nickname, bio, urole, must_change_password, ctime_at
+        "SELECT id, email, nickname, bio, avatar_provider, urole, must_change_password, ctime_at
         FROM rb_user WHERE id = $1",
         user_id
     )
@@ -414,8 +441,11 @@ pub async fn admin_get(
     )
     .fetch_all(pool)
     .await?;
+    let avatar_provider = AvatarProvider::try_from(user.avatar_provider).unwrap_or_default();
     Ok(Some(AdminUserDetail {
         id: user.id,
+        avatar: crate::model::user::avatar_url(&user.email, avatar_provider),
+        avatar_provider,
         email: user.email,
         nickname: user.nickname,
         bio: user.bio,

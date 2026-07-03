@@ -127,6 +127,15 @@ async fn update(
     }))
 }
 
+pub fn config(cfg: &mut web::ServiceConfig) {
+    cfg.service(
+        web::scope("/system-settings")
+            .wrap(PrivilegeMiddleware::new(RbUserRole::Root))
+            .route("", web::get().to(get))
+            .route("", web::patch().to(update)),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SystemSettingsRequest, valid_request};
@@ -179,13 +188,4 @@ mod tests {
         assert!(!valid_request(&body, false, false));
         assert!(valid_request(&body, false, true));
     }
-}
-
-pub fn config(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/system-settings")
-            .wrap(PrivilegeMiddleware::new(RbUserRole::Root))
-            .route("", web::get().to(get))
-            .route("", web::patch().to(update)),
-    );
 }

@@ -37,6 +37,7 @@ CREATE TABLE rb_system_settings (
     captcha_login_required      BOOLEAN NOT NULL DEFAULT FALSE,
     captcha_registration_required BOOLEAN NOT NULL DEFAULT FALSE,
     max_sessions                SMALLINT NOT NULL DEFAULT 3 CHECK (max_sessions BETWEEN 1 AND 20),
+    max_websocket_connections   SMALLINT NOT NULL DEFAULT 5 CHECK (max_websocket_connections BETWEEN 1 AND 20),
     maintenance_enabled         BOOLEAN NOT NULL DEFAULT FALSE,
     maintenance_message         VARCHAR(500) NOT NULL DEFAULT '系统正在维护，请稍后再试。',
     updated_by                  INT REFERENCES rb_user(id) ON DELETE SET NULL,

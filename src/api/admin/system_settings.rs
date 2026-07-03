@@ -16,6 +16,7 @@ struct SystemSettingsRequest {
     captcha_login_required: bool,
     captcha_registration_required: bool,
     max_sessions: i16,
+    max_websocket_connections: i16,
     maintenance_enabled: bool,
     maintenance_message: String,
 }
@@ -41,6 +42,7 @@ fn valid_request(
     captcha_available: bool,
 ) -> bool {
     (1..=20).contains(&body.max_sessions)
+        && (1..=20).contains(&body.max_websocket_connections)
         && body.maintenance_message.chars().count() <= 500
         && (!body.maintenance_enabled || !body.maintenance_message.is_empty())
         && (!body.require_email_verification || email_delivery_enabled)
@@ -83,6 +85,7 @@ async fn update(
             captcha_login_required: body.captcha_login_required,
             captcha_registration_required: body.captcha_registration_required,
             max_sessions: body.max_sessions,
+            max_websocket_connections: body.max_websocket_connections,
             maintenance_enabled: body.maintenance_enabled,
             maintenance_message: &body.maintenance_message,
             updated_by: actor.uid,
@@ -90,6 +93,8 @@ async fn update(
     )
     .await?;
     *app.system_settings.write().await = settings.clone();
+    app.sync_hub
+        .enforce_connection_limit(settings.max_websocket_connections as usize);
 
     db::event_log::insert_pool(
         &app.db,
@@ -105,6 +110,7 @@ async fn update(
                     "captcha_login_required": previous.captcha_login_required != settings.captcha_login_required,
                     "captcha_registration_required": previous.captcha_registration_required != settings.captcha_registration_required,
                     "max_sessions": previous.max_sessions != settings.max_sessions,
+                    "max_websocket_connections": previous.max_websocket_connections != settings.max_websocket_connections,
                     "maintenance_enabled": previous.maintenance_enabled != settings.maintenance_enabled,
                     "maintenance_message": previous.maintenance_message != settings.maintenance_message,
                 }
@@ -133,6 +139,7 @@ mod tests {
             captcha_login_required: false,
             captcha_registration_required: false,
             max_sessions: 3,
+            max_websocket_connections: 5,
             maintenance_enabled: false,
             maintenance_message: String::new(),
         }
@@ -147,6 +154,11 @@ mod tests {
         body.max_sessions = 21;
         assert!(!valid_request(&body, false, false));
         body.max_sessions = 20;
+        body.max_websocket_connections = 0;
+        assert!(!valid_request(&body, false, false));
+        body.max_websocket_connections = 21;
+        assert!(!valid_request(&body, false, false));
+        body.max_websocket_connections = 20;
         body.maintenance_enabled = true;
         assert!(!valid_request(&body, false, false));
         body.maintenance_message = "maintenance".to_string();

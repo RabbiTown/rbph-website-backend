@@ -4,7 +4,7 @@ use std::{
 };
 
 use actix_web::{HttpRequest, HttpResponse, web::Payload};
-use actix_ws::{CloseCode, Message, MessageStream, Session};
+use actix_ws::{CloseCode, CloseReason, Message, MessageStream, Session};
 use dashmap::DashMap;
 use num_enum::IntoPrimitive;
 use serde::Serialize;
@@ -24,6 +24,8 @@ use crate::{
     serde_helpers::serialize_option_offset_datetime,
 };
 
+pub const CONNECTION_LIMIT_CLOSE_CODE: u16 = 4008;
+
 #[derive(Default)]
 pub struct SyncHub {
     users: DashMap<i32, Vec<WsSessionHandle>>,
@@ -35,12 +37,30 @@ impl SyncHub {
         req: HttpRequest,
         stream: Payload,
         user_id: i32,
+        max_connections: usize,
     ) -> actix_web::Result<HttpResponse> {
         let (resp, session, stream) = actix_ws::handle(&req, stream)?;
         let (handle, rx) = WsSessionHandle::new();
-        self.users.entry(user_id).or_default().push(handle);
+        let mut sessions = self.users.entry(user_id).or_default();
+        Self::trim_sessions(&mut sessions, max_connections.saturating_sub(1));
+        sessions.push(handle);
         actix_web::rt::spawn(WsSession::new(session, stream, rx).run());
         Ok(resp)
+    }
+
+    fn trim_sessions(sessions: &mut Vec<WsSessionHandle>, max_connections: usize) {
+        sessions.retain(|session| !session.is_closed());
+        let excess = sessions.len().saturating_sub(max_connections);
+        for session in sessions.drain(..excess) {
+            let _ = session.close_for_connection_limit();
+        }
+    }
+
+    pub fn enforce_connection_limit(&self, max_connections: usize) {
+        self.users.retain(|_, sessions| {
+            Self::trim_sessions(sessions, max_connections);
+            !sessions.is_empty()
+        });
     }
 
     fn push_user<T: Serialize>(&self, user_id: i32, msg_type: SyncMessageType, data: T) {
@@ -392,14 +412,28 @@ impl WsSessionHandle {
     }
 
     fn close(&self) -> Result<(), WsCommand> {
-        self.tx.send(WsCommand::Close).map_err(|e| e.0)
+        self.tx
+            .send(WsCommand::Close(Some(CloseCode::Normal.into())))
+            .map_err(|e| e.0)
+    }
+
+    fn close_for_connection_limit(&self) -> Result<(), WsCommand> {
+        self.tx
+            .send(WsCommand::Close(Some(
+                (
+                    CloseCode::Other(CONNECTION_LIMIT_CLOSE_CODE),
+                    "Connection replaced due to per-user limit",
+                )
+                    .into(),
+            )))
+            .map_err(|e| e.0)
     }
 }
 
 enum WsCommand {
     Push(Arc<String>),
     CheckAlive,
-    Close,
+    Close(Option<CloseReason>),
 }
 
 pub struct WsSession {
@@ -491,15 +525,36 @@ impl WsSession {
                     false
                 }
             }
-            WsCommand::Close => {
-                let _ = self
-                    .session
-                    .clone()
-                    .close(Some(CloseCode::Normal.into()))
-                    .await;
+            WsCommand::Close(reason) => {
+                let _ = self.session.clone().close(reason).await;
                 true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc::error::TryRecvError;
+
+    use super::{CONNECTION_LIMIT_CLOSE_CODE, SyncHub, WsCommand, WsSessionHandle};
+
+    #[test]
+    fn trims_oldest_connections_with_limit_close_code() {
+        let (oldest, mut oldest_rx) = WsSessionHandle::new();
+        let (newest, mut newest_rx) = WsSessionHandle::new();
+        let mut sessions = vec![oldest, newest];
+
+        SyncHub::trim_sessions(&mut sessions, 1);
+
+        assert_eq!(sessions.len(), 1);
+        match oldest_rx.try_recv() {
+            Ok(WsCommand::Close(Some(reason))) => {
+                assert_eq!(u16::from(reason.code), CONNECTION_LIMIT_CLOSE_CODE);
+            }
+            _ => panic!("oldest connection was not closed with the limit code"),
+        }
+        assert!(matches!(newest_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 }
 

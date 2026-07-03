@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE rb_system_settings SET\n            registration_open = $1,\n            require_email_verification = $2,\n            captcha_login_required = $3,\n            captcha_registration_required = $4,\n            max_sessions = $5,\n            maintenance_enabled = $6,\n            maintenance_message = $7,\n            updated_by = $8,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE singleton = TRUE\n        RETURNING registration_open, require_email_verification,\n            captcha_login_required, captcha_registration_required, max_sessions,\n            maintenance_enabled, maintenance_message, updated_by, updated_at",
+  "query": "UPDATE rb_system_settings SET\n            registration_open = $1,\n            require_email_verification = $2,\n            captcha_login_required = $3,\n            captcha_registration_required = $4,\n            max_sessions = $5,\n            max_websocket_connections = $6,\n            maintenance_enabled = $7,\n            maintenance_message = $8,\n            updated_by = $9,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE singleton = TRUE\n        RETURNING registration_open, require_email_verification,\n            captcha_login_required, captcha_registration_required, max_sessions,\n            max_websocket_connections,\n            maintenance_enabled, maintenance_message, updated_by, updated_at",
   "describe": {
     "columns": [
       {
@@ -30,21 +30,26 @@
       },
       {
         "ordinal": 5,
+        "name": "max_websocket_connections",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
         "name": "maintenance_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "maintenance_message",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "updated_by",
         "type_info": "Int4"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
@@ -55,6 +60,7 @@
         "Bool",
         "Bool",
         "Bool",
+        "Int2",
         "Int2",
         "Bool",
         "Varchar",
@@ -69,9 +75,10 @@
       false,
       false,
       false,
+      false,
       true,
       false
     ]
   },
-  "hash": "589d0ce6b3c1d52f41d775e29d1b8f945dfc92c5935dfd56725c47d837b9a6e9"
+  "hash": "d92ee5de5a94f940a61a09b6396cb4e9765d866971a2dd2fb09970c2bdc0ae22"
 }

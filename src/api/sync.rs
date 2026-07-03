@@ -11,7 +11,9 @@ async fn sync_ws(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    app.sync_hub.create_ws(req, stream, user.uid)
+    let max_connections = app.system_settings.read().await.max_websocket_connections as usize;
+    app.sync_hub
+        .create_ws(req, stream, user.uid, max_connections)
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {

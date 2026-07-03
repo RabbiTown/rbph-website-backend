@@ -44,7 +44,6 @@ fn valid_request(
     (1..=20).contains(&body.max_sessions)
         && (1..=20).contains(&body.max_websocket_connections)
         && body.maintenance_message.chars().count() <= 500
-        && (!body.maintenance_enabled || !body.maintenance_message.is_empty())
         && (!body.require_email_verification || email_delivery_enabled)
         && (!(body.captcha_login_required || body.captcha_registration_required)
             || captcha_available)

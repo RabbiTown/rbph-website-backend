@@ -17,8 +17,7 @@ pub async fn ensure_root(pool: &DbPool) -> Result<bool, RbInternalError> {
         .execute(&mut *tx)
         .await?;
 
-    let existing_role = sqlx::query_scalar::<_, i16>("SELECT urole FROM rb_user WHERE id = $1")
-        .bind(ROOT_ID)
+    let existing_role = sqlx::query_scalar!("SELECT urole FROM rb_user WHERE id = $1", ROOT_ID)
         .fetch_optional(&mut *tx)
         .await?;
     if let Some(role) = existing_role {
@@ -33,8 +32,7 @@ pub async fn ensure_root(pool: &DbPool) -> Result<bool, RbInternalError> {
         .map_err(|_| "RBPH_ROOT_PASSWORD is required to create the initial Root user")?;
     validate_password(&password)?;
 
-    let email_owner = sqlx::query_scalar::<_, i32>("SELECT id FROM rb_user WHERE email = $1")
-        .bind(ROOT_EMAIL)
+    let email_owner = sqlx::query_scalar!("SELECT id FROM rb_user WHERE email = $1", ROOT_EMAIL)
         .fetch_optional(&mut *tx)
         .await?;
     if email_owner.is_some() {
@@ -42,15 +40,15 @@ pub async fn ensure_root(pool: &DbPool) -> Result<bool, RbInternalError> {
     }
 
     let password_hash = bcrypt::hash(password, 12)?;
-    sqlx::query(
+    sqlx::query!(
         "INSERT INTO rb_user (id, email, pass, urole, nickname, must_change_password)
          VALUES ($1, $2, $3, $4, $5, FALSE)",
+        ROOT_ID,
+        ROOT_EMAIL,
+        password_hash,
+        i16::from(RbUserRole::Root),
+        ROOT_NICKNAME,
     )
-    .bind(ROOT_ID)
-    .bind(ROOT_EMAIL)
-    .bind(password_hash)
-    .bind(i16::from(RbUserRole::Root))
-    .bind(ROOT_NICKNAME)
     .execute(&mut *tx)
     .await?;
 

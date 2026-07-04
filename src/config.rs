@@ -56,6 +56,46 @@ fn default_storage_kind() -> String {
 pub struct AuthConfig {
     pub captcha: CaptchaConfig,
     pub email: EmailConfig,
+    #[serde(default)]
+    pub rate_limit: AuthRateLimitConfig,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(default)]
+pub struct AuthRateLimitConfig {
+    pub enabled: bool,
+    pub login_ip_email_failures: u64,
+    pub login_ip_attempts: u64,
+    pub login_window_seconds: u64,
+    pub registration_email_attempts: u64,
+    pub registration_ip_attempts: u64,
+    pub registration_window_seconds: u64,
+}
+
+impl Default for AuthRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            login_ip_email_failures: 5,
+            login_ip_attempts: 30,
+            login_window_seconds: 15 * 60,
+            registration_email_attempts: 3,
+            registration_ip_attempts: 10,
+            registration_window_seconds: 60 * 60,
+        }
+    }
+}
+
+impl AuthRateLimitConfig {
+    pub fn is_valid(&self) -> bool {
+        !self.enabled
+            || (self.login_ip_email_failures > 0
+                && self.login_ip_attempts > 0
+                && self.login_window_seconds > 0
+                && self.registration_email_attempts > 0
+                && self.registration_ip_attempts > 0
+                && self.registration_window_seconds > 0)
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -101,5 +141,38 @@ impl Settings {
             .add_source(config::Environment::with_prefix("RBPH").separator("__"))
             .build()?;
         cfg.try_deserialize()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthRateLimitConfig;
+
+    #[test]
+    fn auth_rate_limit_defaults_are_balanced() {
+        let config = AuthRateLimitConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.login_ip_email_failures, 5);
+        assert_eq!(config.login_ip_attempts, 30);
+        assert_eq!(config.login_window_seconds, 900);
+        assert_eq!(config.registration_email_attempts, 3);
+        assert_eq!(config.registration_ip_attempts, 10);
+        assert_eq!(config.registration_window_seconds, 3600);
+        assert!(config.is_valid());
+    }
+
+    #[test]
+    fn enabled_auth_rate_limit_rejects_zero_values() {
+        let config = AuthRateLimitConfig {
+            login_ip_email_failures: 0,
+            ..Default::default()
+        };
+        assert!(!config.is_valid());
+
+        let disabled = AuthRateLimitConfig {
+            enabled: false,
+            ..config
+        };
+        assert!(disabled.is_valid());
     }
 }

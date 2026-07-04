@@ -17,7 +17,7 @@ chrono = "0.4.45"
 config = "0.15.23"
 dashmap = "6.1.0"
 deadpool = "0.12.3"
-deadpool-redis = "0.22.0"
+deadpool-redis = { version = "0.22.0", features = ["script"] }
 derive_more = "2.0.1"
 dotenvy = "0.15.7"
 env_logger = "0.11.10"

@@ -11,6 +11,8 @@ use serde::Serialize;
 #[repr(i32)]
 #[derive(IntoPrimitive)]
 enum RbErrorCode {
+    ServiceUnavailable = -111,
+    TooManyRequests = -110,
     CaptchaUnavailable = -109,
     CaptchaInvalid = -108,
     Maintenance = -107,
@@ -27,6 +29,9 @@ pub struct RbError {
     pub code: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<u64>,
 
     #[serde(skip_serializing)]
     pub status_code: StatusCode,
@@ -47,6 +52,7 @@ impl RbError {
         Self {
             code,
             message: None,
+            retry_after: None,
             status_code: StatusCode::BAD_REQUEST,
         }
     }
@@ -55,6 +61,7 @@ impl RbError {
         Self {
             code,
             message: None,
+            retry_after: None,
             status_code: StatusCode::CONFLICT,
         }
     }
@@ -63,6 +70,7 @@ impl RbError {
         Self {
             code,
             message: None,
+            retry_after: None,
             status_code: StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
@@ -78,6 +86,7 @@ impl RbError {
         Self {
             code: RbErrorCode::InternalServerError.into(),
             message: Some(format!("Internal Server Error ({code})")),
+            retry_after: None,
             status_code: StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -86,6 +95,7 @@ impl RbError {
         Self {
             code: RbErrorCode::Unauthorized.into(),
             message: Some("Unauthorized".to_string()),
+            retry_after: None,
             status_code: StatusCode::UNAUTHORIZED,
         }
     }
@@ -94,6 +104,7 @@ impl RbError {
         Self {
             code: RbErrorCode::Forbidden.into(),
             message: Some("Forbidden".to_string()),
+            retry_after: None,
             status_code: StatusCode::FORBIDDEN,
         }
     }
@@ -102,6 +113,7 @@ impl RbError {
         Self {
             code: RbErrorCode::PasswordChangeRequired.into(),
             message: Some("Password change required".to_string()),
+            retry_after: None,
             status_code: StatusCode::FORBIDDEN,
         }
     }
@@ -110,6 +122,7 @@ impl RbError {
         Self {
             code: RbErrorCode::Maintenance.into(),
             message: Some(message.into()),
+            retry_after: None,
             status_code: StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -118,6 +131,7 @@ impl RbError {
         Self {
             code: RbErrorCode::CaptchaInvalid.into(),
             message: Some("Captcha verification failed".to_string()),
+            retry_after: None,
             status_code: StatusCode::BAD_REQUEST,
         }
     }
@@ -126,6 +140,7 @@ impl RbError {
         Self {
             code: RbErrorCode::CaptchaUnavailable.into(),
             message: Some("Captcha service unavailable".to_string()),
+            retry_after: None,
             status_code: StatusCode::SERVICE_UNAVAILABLE,
         }
     }
@@ -134,12 +149,35 @@ impl RbError {
         Self {
             code: RbErrorCode::NotFound.into(),
             message: Some("Not Found".to_string()),
+            retry_after: None,
             status_code: StatusCode::NOT_FOUND,
         }
     }
 
+    pub fn too_many_requests(retry_after: u64) -> Self {
+        Self {
+            code: RbErrorCode::TooManyRequests.into(),
+            message: None,
+            retry_after: Some(retry_after),
+            status_code: StatusCode::TOO_MANY_REQUESTS,
+        }
+    }
+
+    pub fn service_unavailable() -> Self {
+        Self {
+            code: RbErrorCode::ServiceUnavailable.into(),
+            message: None,
+            retry_after: None,
+            status_code: StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+
     pub fn resp(&self) -> HttpResponse {
-        HttpResponse::build(self.status_code).json(self)
+        let mut response = HttpResponse::build(self.status_code);
+        if let Some(retry_after) = self.retry_after {
+            response.insert_header(("Retry-After", retry_after.to_string()));
+        }
+        response.json(self)
     }
 
     pub fn err(self) -> Result<(), Self> {
@@ -267,5 +305,19 @@ impl From<String> for RbInternalError {
 impl From<&str> for RbInternalError {
     fn from(value: &str) -> Self {
         value.to_string().into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::http::StatusCode;
+
+    use super::RbError;
+
+    #[test]
+    fn rate_limit_error_includes_retry_after() {
+        let response = RbError::too_many_requests(42).resp();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers().get("Retry-After").unwrap(), "42");
     }
 }

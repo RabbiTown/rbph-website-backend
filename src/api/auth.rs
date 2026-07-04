@@ -1,13 +1,14 @@
 use crate::{
     AppState, db,
-    error::RbError,
+    error::{RbError, RbInternalError},
     module::{
+        auth_rate_limit,
         captcha::{CaptchaAction, CaptchaPublicConfig, CaptchaVerifyError},
         session,
     },
 };
 use actix_session::Session;
-use actix_web::{HttpResponse, Result, web};
+use actix_web::{HttpRequest, HttpResponse, Result, web};
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -24,6 +25,37 @@ fn validate_printable(s: &str) -> Result<(), ValidationError> {
     }
 
     Ok(())
+}
+
+const DUMMY_PASSWORD_HASH: &str = "$2b$12$tu7u2NM5PFaFcs3F.ZykLe8F2olKRQYH8zSQK9hybJdDZta8Pmnd6";
+
+fn client_identifier(req: &HttpRequest) -> String {
+    let connection_info = req.connection_info();
+    connection_info
+        .realip_remote_addr()
+        .map(str::to_owned)
+        .or_else(|| req.peer_addr().map(|address| address.ip().to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+async fn consume_rate_limit(
+    app: &AppState,
+    key: &str,
+    limit: u64,
+    window_seconds: u64,
+) -> Result<(), actix_web::Error> {
+    if let Some(retry_after) = auth_rate_limit::consume(&app.kv, key, limit, window_seconds)
+        .await
+        .map_err(rate_limit_unavailable)?
+    {
+        return Err(RbError::too_many_requests(retry_after).into());
+    }
+    Ok(())
+}
+
+fn rate_limit_unavailable(error: RbInternalError) -> actix_web::Error {
+    log::warn!("Authentication rate limiter unavailable: {error:?}");
+    RbError::service_unavailable().into()
 }
 
 // -- pre-login --
@@ -102,7 +134,6 @@ struct UserLoginResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum UserLoginResult {
-    NotExists = -2,
     WrongPwd = -1,
     Ok = 0,
 }
@@ -110,13 +141,49 @@ enum UserLoginResult {
 async fn login(
     req: web::Json<UserLoginRequest>,
     sess: Session,
+    http_req: HttpRequest,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let req = req.normalized();
-    if let Err(e) = req.validate() {
+    let rate_limit = &app.settings.auth.rate_limit;
+    let client = client_identifier(&http_req);
+    let login_ip_email_key = rate_limit
+        .enabled
+        .then(|| auth_rate_limit::key("login_ip_email", &format!("{client}\0{}", req.email)));
+
+    if rate_limit.enabled {
+        consume_rate_limit(
+            app.get_ref(),
+            &auth_rate_limit::key("login_ip", &client),
+            rate_limit.login_ip_attempts,
+            rate_limit.login_window_seconds,
+        )
+        .await?;
+
+        if let Some(retry_after) = auth_rate_limit::blocked(
+            &app.kv,
+            login_ip_email_key.as_deref().unwrap(),
+            rate_limit.login_ip_email_failures,
+        )
+        .await
+        .map_err(rate_limit_unavailable)?
+        {
+            return RbError::too_many_requests(retry_after).http_err();
+        }
+    }
+
+    if req.validate().is_err() {
+        if let Some(key) = &login_ip_email_key {
+            consume_rate_limit(
+                app.get_ref(),
+                key,
+                rate_limit.login_ip_email_failures,
+                rate_limit.login_window_seconds,
+            )
+            .await?;
+        }
         RbError::unauth()
             .code(UserLoginResult::WrongPwd.into())
-            .msg(e.to_string())
             .err()?;
     }
     let captcha_required = app.system_settings.read().await.captcha_login_required;
@@ -129,20 +196,35 @@ async fn login(
     .await?;
 
     let user = db::user::get_verify_by_email(&app.db, &req.email).await?;
-    if user.is_none() {
-        RbError::unauth()
-            .code(UserLoginResult::NotExists.into())
-            .err()?
+    let password_valid = match &user {
+        Some(user) => bcrypt::verify(&req.password, &user.pass),
+        None => bcrypt::verify(&req.password, DUMMY_PASSWORD_HASH).map(|_| false),
+    }
+    .map_err(RbError::internal)?;
+
+    if !password_valid {
+        if let Some(key) = &login_ip_email_key {
+            consume_rate_limit(
+                app.get_ref(),
+                key,
+                rate_limit.login_ip_email_failures,
+                rate_limit.login_window_seconds,
+            )
+            .await?;
+        }
+        return RbError::unauth()
+            .code(UserLoginResult::WrongPwd.into())
+            .http_err();
     }
 
-    let user = user.unwrap();
-    match bcrypt::verify(&req.password, &user.pass) {
-        Ok(true) => {}
-        Ok(false) => RbError::unauth()
-            .code(UserLoginResult::WrongPwd.into())
-            .err()?,
-        Err(e) => RbError::internal(e).err()?,
+    if let Some(key) = &login_ip_email_key {
+        auth_rate_limit::clear(&app.kv, key)
+            .await
+            .map_err(rate_limit_unavailable)?;
     }
+    let Some(user) = user else {
+        return RbError::internal("password verification state is inconsistent").http_err();
+    };
 
     let max_sessions = app.system_settings.read().await.max_sessions as usize;
     session::append(&app.kv, &sess, user.id, max_sessions).await?;
@@ -209,6 +291,7 @@ enum UserRegisterResult {
 
 async fn register(
     req: web::Json<UserRegisterRequest>,
+    http_req: HttpRequest,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let settings = app.system_settings.read().await.clone();
@@ -219,6 +302,24 @@ async fn register(
     }
 
     let req = req.normalized();
+    let rate_limit = &app.settings.auth.rate_limit;
+    if rate_limit.enabled {
+        consume_rate_limit(
+            app.get_ref(),
+            &auth_rate_limit::key("registration_ip", &client_identifier(&http_req)),
+            rate_limit.registration_ip_attempts,
+            rate_limit.registration_window_seconds,
+        )
+        .await?;
+        consume_rate_limit(
+            app.get_ref(),
+            &auth_rate_limit::key("registration_email", &req.email),
+            rate_limit.registration_email_attempts,
+            rate_limit.registration_window_seconds,
+        )
+        .await?;
+    }
+
     if let Err(e) = req.validate() {
         RbError::bad_req(UserRegisterResult::Invalid.into())
             .msg(e.to_string())
@@ -247,8 +348,6 @@ async fn register(
         }
 
         let token = db::user::put_pending(&app.kv, &req.email, &req.password).await?;
-
-        log::debug!("register : {} ({})", req.email, token);
 
         email
             .send_verify_email(

@@ -14,6 +14,15 @@ asset_root = "./assets"
 
 [auth]
 
+[auth.rate_limit]
+enabled = true
+login_ip_email_failures = 5
+login_ip_attempts = 30
+login_window_seconds = 900
+registration_email_attempts = 3
+registration_ip_attempts = 10
+registration_window_seconds = 3600
+
 [auth.captcha]
 provider = "disabled"
 

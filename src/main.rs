@@ -58,6 +58,10 @@ async fn main() -> std::io::Result<()> {
     }
 
     let settings = settings.unwrap();
+    if !settings.auth.rate_limit.is_valid() {
+        log::error!("Invalid auth rate limit configuration: enabled limits must be positive");
+        std::process::exit(1);
+    }
     let app_config = settings.app.clone();
     let db_config = settings.db.clone();
     let storage_config = settings.storage.clone();

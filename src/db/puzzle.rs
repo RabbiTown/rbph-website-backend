@@ -24,6 +24,7 @@ use crate::{
     model::game::{
         RbContentType, RbJudgeAction, RbPuzzlePenaltyType, RbPuzzleType, RbTeamPuzzleState,
     },
+    model::user::RbUserRole,
 };
 
 static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap::new);
@@ -141,20 +142,18 @@ pub async fn get_puzzle_user_info(
     db_pool: &DbPool,
     user_id: i32,
     puzzle_id: i32,
+    user_role: RbUserRole,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
-    let game_id = get_puzzle_game(db_pool, puzzle_id).await?;
-    if game_id.is_none() {
+    let Some(game_id) = get_puzzle_game(db_pool, puzzle_id).await? else {
         return Ok(None);
-    }
-    let game_id = game_id.unwrap();
+    };
 
-    // TODO : check game is online & in progress
-
-    let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
-    if team_id.is_none() {
+    let Some(team_id) = db::game::get_game_user_info(db_pool, user_id, game_id, user_role)
+        .await?
+        .and_then(|info| info.team_id)
+    else {
         return Ok(None);
-    }
-    let team_id = team_id.unwrap();
+    };
 
     let access = can_team_access_puzzle(db_pool, team_id, puzzle_id).await?;
 
@@ -172,13 +171,14 @@ pub async fn get_hint_user_info(
     kv_pool: &KvPool,
     user_id: i32,
     hint_id: i32,
+    user_role: RbUserRole,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
     let puzzle_id = get_hint_puzzle(db_pool, kv_pool, hint_id).await?;
     if puzzle_id.is_none() {
         return Ok(None);
     }
 
-    get_puzzle_user_info(db_pool, user_id, puzzle_id.unwrap()).await
+    get_puzzle_user_info(db_pool, user_id, puzzle_id.unwrap(), user_role).await
 }
 
 #[derive(FromRow, Serialize)]

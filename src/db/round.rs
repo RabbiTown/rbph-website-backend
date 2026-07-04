@@ -6,6 +6,7 @@ use crate::{
     db::{self, game::GameUserInfo, puzzle::RbPuzzleTeamStateShowData},
     error::RbInternalError,
     model::game::{RbContentType, RbTeamPuzzleState},
+    model::user::RbUserRole,
 };
 
 pub async fn get_round_game(
@@ -79,20 +80,18 @@ pub async fn get_round_user_info(
     db_pool: &DbPool,
     user_id: i32,
     round_id: i32,
+    user_role: RbUserRole,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
-    let game_id = get_round_game(db_pool, round_id).await?;
-    if game_id.is_none() {
+    let Some(game_id) = get_round_game(db_pool, round_id).await? else {
         return Ok(None);
-    }
-    let game_id = game_id.unwrap();
+    };
 
-    // TODO : check game is online & in progress
-
-    let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
-    if team_id.is_none() {
+    let Some(team_id) = db::game::get_game_user_info(db_pool, user_id, game_id, user_role)
+        .await?
+        .and_then(|info| info.team_id)
+    else {
         return Ok(None);
-    }
-    let team_id = team_id.unwrap();
+    };
 
     let access = get_round_state(db_pool, team_id, round_id).await?;
 

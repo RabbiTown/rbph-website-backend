@@ -61,7 +61,7 @@ async fn get_puzzle(
         return RbError::not_found().http_err();
     };
 
-    if db::puzzle::get_puzzle_user_info(&app.db, user.uid, puzzle_id)
+    if db::puzzle::get_puzzle_user_info(&app.db, user.uid, puzzle_id, user.req_role()?)
         .await?
         .is_none()
     {
@@ -82,7 +82,7 @@ async fn get_round(
         return RbError::not_found().http_err();
     };
 
-    if db::round::get_round_user_info(&app.db, user.uid, round_id)
+    if db::round::get_round_user_info(&app.db, user.uid, round_id, user.req_role()?)
         .await?
         .is_none()
     {

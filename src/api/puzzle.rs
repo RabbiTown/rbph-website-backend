@@ -19,6 +19,7 @@ use crate::{
     error::{RbError, RbInternalError},
     extractor::auth::AuthUser,
     game::judge::JudgeResult,
+    model::user::RbUserRole,
     module::sync::{PuzzleHintUnlockedSync, PuzzleSubmittedSync, PuzzleUnlockInfo},
 };
 
@@ -304,8 +305,13 @@ async fn check_puzzle_middleware(
         .ok_or_else(RbError::not_found)?;
 
     let app = req.app_data::<web::Data<AppState>>().unwrap();
+    let role = req
+        .extensions()
+        .get::<RbUserRole>()
+        .copied()
+        .ok_or_else(RbError::forbid)?;
 
-    let info = db::puzzle::get_puzzle_user_info(&app.db, user_id, puzzle_id)
+    let info = db::puzzle::get_puzzle_user_info(&app.db, user_id, puzzle_id, role)
         .await?
         .ok_or_else(RbError::not_found)?;
     let team_id = info.team_id.ok_or_else(RbError::not_found)?;
@@ -335,10 +341,15 @@ async fn check_hint_middleware(
         .ok_or_else(RbError::not_found)?;
 
     let app = req.app_data::<web::Data<AppState>>().unwrap();
+    let role = req
+        .extensions()
+        .get::<RbUserRole>()
+        .copied()
+        .ok_or_else(RbError::forbid)?;
 
     let puzzle_id = db::puzzle::get_hint_puzzle(&app.db, &app.kv, hint_id).await?;
     let puzzle_id = puzzle_id.ok_or_else(RbError::not_found)?;
-    let info = db::puzzle::get_hint_user_info(&app.db, &app.kv, user_id, hint_id)
+    let info = db::puzzle::get_hint_user_info(&app.db, &app.kv, user_id, hint_id, role)
         .await?
         .ok_or_else(RbError::not_found)?;
     let team_id = info.team_id.ok_or_else(RbError::not_found)?;

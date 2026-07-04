@@ -9,7 +9,10 @@ use actix_web::{
 };
 use serde::Deserialize;
 
-use crate::{AppState, api::error_handler, db, error::RbError, extractor::auth::AuthUser};
+use crate::{
+    AppState, api::error_handler, db, error::RbError, extractor::auth::AuthUser,
+    model::user::RbUserRole,
+};
 
 #[derive(Deserialize)]
 struct RoundPathInfo {
@@ -63,8 +66,13 @@ async fn check_round_middleware(
         .ok_or_else(RbError::not_found)?;
 
     let app = req.app_data::<web::Data<AppState>>().unwrap();
+    let role = req
+        .extensions()
+        .get::<RbUserRole>()
+        .copied()
+        .ok_or_else(RbError::forbid)?;
 
-    match db::round::get_round_user_info(&app.db, user_id, round_id).await? {
+    match db::round::get_round_user_info(&app.db, user_id, round_id, role).await? {
         Some(info) => {
             req.extensions_mut().insert(info);
         }

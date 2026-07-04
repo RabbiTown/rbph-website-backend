@@ -330,11 +330,6 @@ async fn promote_self(
     }))
 }
 
-// TODO : add paging
-async fn list_all() -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().finish())
-}
-
 async fn get_info(req: web::Path<TeamPathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let result = db::team::get_by_id_show(&app.db, req.team_id).await?;
     if result.is_none() {
@@ -370,8 +365,7 @@ async fn check_leader_middleware(
 
 // /games/{game_id}/teams/...
 pub fn games_config(cfg: &mut web::ServiceConfig) {
-    cfg.route("", web::get().to(list_all))
-        .route("/self", web::get().to(get_self))
+    cfg.route("/self", web::get().to(get_self))
         .route("/self", web::post().to(create_self))
         .route("/self/leave", web::post().to(leave_self))
         .route("/self/currency", web::get().to(get_self_currency))

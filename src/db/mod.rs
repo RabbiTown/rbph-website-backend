@@ -15,14 +15,25 @@ pub mod team;
 pub mod ticket;
 pub mod user;
 
-use sqlx::postgres::PgPoolOptions;
+use std::str::FromStr;
 
-use crate::DbPool;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
-pub async fn create_pool(url: &str, max_connections: u32) -> Result<DbPool, sqlx::Error> {
+use crate::{DbPool, config::DbConfig};
+
+pub async fn create_pool(config: &DbConfig) -> Result<DbPool, sqlx::Error> {
+    let mut options = PgConnectOptions::from_str(&config.addr)?;
+    if let Some(password) = config
+        .password
+        .as_deref()
+        .filter(|password| !password.is_empty())
+    {
+        options = options.password(password);
+    }
+
     let pool = PgPoolOptions::new()
-        .max_connections(max_connections)
-        .connect(url)
+        .max_connections(config.max_connections)
+        .connect_with(options)
         .await?;
     Ok(pool)
 }

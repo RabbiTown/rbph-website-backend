@@ -13,26 +13,23 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn get_secret_key(&self) -> [u8; 64] {
-        let decoded = BASE64_STANDARD.decode(&self.secret_key);
-
-        if decoded.is_err() {
-            log::warn!("invalid secret key found, default to zero bytes.")
+    pub fn get_secret_key(&self) -> Result<[u8; 64], String> {
+        let decoded = BASE64_STANDARD
+            .decode(&self.secret_key)
+            .map_err(|_| "app.secret_key must be valid Base64")?;
+        if decoded.len() != 64 {
+            return Err("app.secret_key must decode to exactly 64 bytes".to_string());
         }
-
-        let decoded = decoded.unwrap_or_default();
-
         let mut key = [0u8; 64];
-        let len = decoded.len().min(64);
-        key[..len].copy_from_slice(&decoded[..len]);
-
-        key
+        key.copy_from_slice(&decoded);
+        Ok(key)
     }
 }
 
 #[derive(Deserialize, Clone)]
 pub struct DbConfig {
     pub addr: String,
+    pub password: Option<String>,
     #[serde(default = "default_db_max_connections")]
     pub max_connections: u32,
 }
@@ -146,7 +143,24 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::AuthRateLimitConfig;
+    use super::{AppConfig, AuthRateLimitConfig};
+
+    #[test]
+    fn session_secret_requires_exactly_64_bytes() {
+        let valid = AppConfig {
+            production: true,
+            bind_addr: ("127.0.0.1".to_string(), 9999),
+            kv_addr: "redis://localhost/1".to_string(),
+            secret_key: base64::Engine::encode(&base64::prelude::BASE64_STANDARD, [7u8; 64]),
+        };
+        assert!(valid.get_secret_key().is_ok());
+
+        let invalid = AppConfig {
+            secret_key: "c2hvcnQ=".to_string(),
+            ..valid
+        };
+        assert!(invalid.get_secret_key().is_err());
+    }
 
     #[test]
     fn auth_rate_limit_defaults_are_balanced() {

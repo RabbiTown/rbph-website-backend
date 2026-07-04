@@ -2,10 +2,11 @@
 production = false
 bind_addr = ["127.0.0.1", 9999]
 kv_addr = "redis://localhost/1"
-secret_key = "cmJwaDIwMjZAZGV2"
+secret_key = "cmJwaC1kZXZlbG9wbWVudC1zZWNyZXQta2V5LTAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA=="
 
 [db]
 addr = "postgres://postgres:123456@localhost/rbph"
+password = ""
 max_connections = 32
 
 [storage]

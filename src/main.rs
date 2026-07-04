@@ -6,6 +6,7 @@ mod error;
 mod expr;
 mod extractor;
 mod game;
+mod health;
 mod middleware;
 mod model;
 mod module;
@@ -28,6 +29,8 @@ use crate::{
     middleware::maintenance::MaintenanceMiddleware,
     module::{captcha::CaptchaService, email::EmailService, sync::SyncHub},
 };
+
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub type DbPool = PgPool;
 pub type KvPool = deadpool_redis::Pool;
@@ -66,16 +69,34 @@ async fn main() -> std::io::Result<()> {
     let db_config = settings.db.clone();
     let storage_config = settings.storage.clone();
 
-    let db_pool = db::create_pool(&db_config.addr, db_config.max_connections)
+    let db_pool = db::create_pool(&db_config).await.unwrap_or_else(|error| {
+        log::error!("Failed to connect to PostgreSQL: {error}");
+        std::process::exit(1);
+    });
+    MIGRATOR.run(&db_pool).await.unwrap_or_else(|error| {
+        log::error!("Failed to run database migrations: {error}");
+        std::process::exit(1);
+    });
+    module::root::ensure_root(&db_pool)
         .await
-        .unwrap();
+        .unwrap_or_else(|error| {
+            log::error!("Failed to initialize Root user: {error:?}");
+            std::process::exit(1);
+        });
 
     let kv_pool = deadpool_redis::Config::from_url(&app_config.kv_addr)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .unwrap();
 
     let session_store = RedisSessionStore::new(&app_config.kv_addr).await.unwrap();
-    let secret_key = Key::from(&app_config.get_secret_key());
+    let secret_key_bytes = match app_config.get_secret_key() {
+        Ok(key) => key,
+        Err(error) => {
+            log::error!("Invalid session secret: {error}");
+            std::process::exit(1);
+        }
+    };
+    let secret_key = Key::from(&secret_key_bytes);
 
     let sync_hub = Arc::new(SyncHub::default());
     let release_schedule_changed = Arc::new(Notify::new());
@@ -155,6 +176,7 @@ async fn main() -> std::io::Result<()> {
                     .cookie_name("rbph_session".to_string())
                     .build(),
             )
+            .configure(health::config)
             .configure(asset::config)
             .service(
                 web::scope("/api")

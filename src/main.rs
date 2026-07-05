@@ -45,7 +45,7 @@ pub struct AppState {
     pub release_schedule_changed: Arc<Notify>,
     pub captcha: Option<Arc<CaptchaService>>,
     pub email: Option<Arc<EmailService>>,
-    pub storage: module::storage::LocalStorage,
+    pub storage: module::storage::StorageManager,
 }
 
 #[actix_web::main]
@@ -63,6 +63,10 @@ async fn main() -> std::io::Result<()> {
     let settings = settings.unwrap();
     if !settings.auth.rate_limit.is_valid() {
         log::error!("Invalid auth rate limit configuration: enabled limits must be positive");
+        std::process::exit(1);
+    }
+    if let Err(error) = settings.storage.validate() {
+        log::error!("Invalid storage configuration: {error}");
         std::process::exit(1);
     }
     let app_config = settings.app.clone();
@@ -143,7 +147,27 @@ async fn main() -> std::io::Result<()> {
     }
     let system_settings = Arc::new(RwLock::new(current_system_settings));
 
-    let storage = module::storage::LocalStorage::new(storage_config.asset_root.clone());
+    let storage = module::storage::StorageManager::new(&storage_config).unwrap_or_else(|error| {
+        log::error!("Failed to initialize storage: {error:?}");
+        std::process::exit(1);
+    });
+    let used_storage_backends = db::asset::list_used_backends(&db_pool)
+        .await
+        .unwrap_or_else(|error| {
+            log::error!("Failed to inspect used storage backends: {error:?}");
+            std::process::exit(1);
+        });
+    let missing_storage_backends = used_storage_backends
+        .into_iter()
+        .filter(|backend| !storage.has_backend(backend))
+        .collect::<Vec<_>>();
+    if !missing_storage_backends.is_empty() {
+        log::error!(
+            "Database assets reference unconfigured storage backends: {}",
+            missing_storage_backends.join(", ")
+        );
+        std::process::exit(1);
+    }
 
     let app_state = AppState {
         db: db_pool,

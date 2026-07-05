@@ -1,4 +1,6 @@
 use base64::{Engine, prelude::BASE64_STANDARD};
+use std::collections::BTreeMap;
+
 use config::Config;
 use serde::Deserialize;
 
@@ -40,13 +42,83 @@ const fn default_db_max_connections() -> u32 {
 
 #[derive(Deserialize, Clone)]
 pub struct StorageConfig {
-    #[serde(default = "default_storage_kind")]
-    pub kind: String,
-    pub asset_root: String,
+    pub default_backend: String,
+    pub backends: BTreeMap<String, StorageBackendConfig>,
 }
 
-fn default_storage_kind() -> String {
-    "local".to_string()
+#[derive(Deserialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StorageBackendConfig {
+    Local {
+        label: String,
+        asset_root: String,
+    },
+    Cos {
+        label: String,
+        region: String,
+        bucket: String,
+        secret_id: String,
+        secret_key: String,
+        public_base_url: String,
+    },
+}
+
+impl StorageConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.backends.contains_key(&self.default_backend) {
+            return Err("storage.default_backend must reference a configured backend".to_string());
+        }
+        if !self
+            .backends
+            .values()
+            .any(|backend| matches!(backend, StorageBackendConfig::Local { .. }))
+        {
+            return Err("at least one local storage backend must be configured".to_string());
+        }
+
+        for (id, backend) in &self.backends {
+            if !valid_storage_backend_id(id) {
+                return Err(format!("invalid storage backend id: {id}"));
+            }
+            let label = match backend {
+                StorageBackendConfig::Local { label, asset_root } => {
+                    if asset_root.trim().is_empty() {
+                        return Err(format!("storage backend {id} has an empty asset_root"));
+                    }
+                    label
+                }
+                StorageBackendConfig::Cos {
+                    label,
+                    region,
+                    bucket,
+                    secret_id,
+                    secret_key,
+                    public_base_url,
+                } => {
+                    if region.trim().is_empty()
+                        || bucket.trim().is_empty()
+                        || secret_id.trim().is_empty()
+                        || secret_key.trim().is_empty()
+                        || !public_base_url.starts_with("https://")
+                    {
+                        return Err(format!("storage backend {id} has invalid COS settings"));
+                    }
+                    label
+                }
+            };
+            if label.trim().is_empty() || label.chars().count() > 64 {
+                return Err(format!("storage backend {id} has an invalid label"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_storage_backend_id(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic())
+        && value.len() <= 32
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 #[derive(Deserialize, Clone)]
@@ -135,6 +207,7 @@ impl Settings {
     pub fn read_from_file(file: &str) -> Result<Self, config::ConfigError> {
         let cfg = Config::builder()
             .add_source(config::File::with_name(file).required(true))
+            .add_source(config::File::with_name("config.local.toml").required(false))
             .add_source(config::Environment::with_prefix("RBPH").separator("__"))
             .build()?;
         cfg.try_deserialize()
@@ -143,7 +216,9 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, AuthRateLimitConfig};
+    use std::collections::BTreeMap;
+
+    use super::{AppConfig, AuthRateLimitConfig, StorageBackendConfig, StorageConfig};
 
     #[test]
     fn session_secret_requires_exactly_64_bytes() {
@@ -188,5 +263,73 @@ mod tests {
             ..config
         };
         assert!(disabled.is_valid());
+    }
+
+    #[test]
+    fn named_storage_requires_valid_default_and_local_backend() {
+        let mut backends = BTreeMap::new();
+        backends.insert(
+            "local".to_string(),
+            StorageBackendConfig::Local {
+                label: "Local".to_string(),
+                asset_root: "./assets".to_string(),
+            },
+        );
+        let valid = StorageConfig {
+            default_backend: "local".to_string(),
+            backends,
+        };
+        assert!(valid.validate().is_ok());
+
+        let invalid_default = StorageConfig {
+            default_backend: "missing".to_string(),
+            backends: valid.backends.clone(),
+        };
+        assert!(invalid_default.validate().is_err());
+
+        let cos_only = StorageConfig {
+            default_backend: "cos".to_string(),
+            backends: BTreeMap::from([(
+                "cos".to_string(),
+                StorageBackendConfig::Cos {
+                    label: "COS".to_string(),
+                    region: "ap-shanghai".to_string(),
+                    bucket: "example-1234567890".to_string(),
+                    secret_id: "id".to_string(),
+                    secret_key: "key".to_string(),
+                    public_base_url: "https://assets.example.com".to_string(),
+                },
+            )]),
+        };
+        assert!(cos_only.validate().is_err());
+
+        let mut invalid_id = valid;
+        invalid_id.backends.insert(
+            "cos/provider".to_string(),
+            StorageBackendConfig::Cos {
+                label: "COS".to_string(),
+                region: "ap-shanghai".to_string(),
+                bucket: "example-1234567890".to_string(),
+                secret_id: "id".to_string(),
+                secret_key: "key".to_string(),
+                public_base_url: "https://assets.example.com".to_string(),
+            },
+        );
+        assert!(invalid_id.validate().is_err());
+
+        let mut invalid_cos = invalid_id;
+        invalid_cos.backends.remove("cos/provider");
+        invalid_cos.backends.insert(
+            "cos".to_string(),
+            StorageBackendConfig::Cos {
+                label: "COS".to_string(),
+                region: "ap-shanghai".to_string(),
+                bucket: "example-1234567890".to_string(),
+                secret_id: "id".to_string(),
+                secret_key: "key".to_string(),
+                public_base_url: "http://assets.example.com".to_string(),
+            },
+        );
+        assert!(invalid_cos.validate().is_err());
     }
 }

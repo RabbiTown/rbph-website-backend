@@ -10,7 +10,7 @@ use crate::{
     AppState, DbPool,
     db::{asset, puzzle_backend},
     error::RbInternalError,
-    module::storage::LocalStorage,
+    module::storage::StorageManager,
 };
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ pub struct RuntimeServices {
 #[derive(Clone)]
 pub struct AssetRuntime {
     pub db: DbPool,
-    pub storage: LocalStorage,
+    pub storage: StorageManager,
     pub max_read_bytes: u64,
 }
 
@@ -222,10 +222,13 @@ fn read_asset_bytes(
     relative_path: &str,
 ) -> Result<Vec<u8>, JsError> {
     let file = readable_asset_file(asset_runtime, object_key, relative_path)?;
+    let Some(local) = asset_runtime.storage.local(&file.backend) else {
+        return Err(js_err("$asset backend resources must use local storage"));
+    };
     if file.size < 0 || file.size as u64 > asset_runtime.max_read_bytes {
         return Err(js_err("$asset file is too large"));
     }
-    block_on_io(asset_runtime.storage.read_object_file_limited(
+    block_on_io(local.read_object_file_limited(
         &file.object_key,
         &file.relative_path,
         asset_runtime.max_read_bytes,

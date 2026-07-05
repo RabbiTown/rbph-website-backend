@@ -10,7 +10,11 @@ password = ""
 max_connections = 32
 
 [storage]
+default_backend = "local"
+
+[storage.backends.local]
 kind = "local"
+label = "Local"
 asset_root = "./assets"
 
 [auth]

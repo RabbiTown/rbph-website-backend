@@ -25,9 +25,7 @@ async fn ready(app: web::Data<AppState>) -> HttpResponse {
             .is_ok(),
         Err(_) => false,
     };
-    let storage_ready = tokio::fs::metadata(app.storage.root())
-        .await
-        .is_ok_and(|metadata| metadata.is_dir());
+    let storage_ready = app.storage.ready().await;
 
     if db_ready && kv_ready && storage_ready {
         HttpResponse::Ok().json(HealthResponse { status: "ready" })

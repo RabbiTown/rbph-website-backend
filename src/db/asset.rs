@@ -37,6 +37,7 @@ pub struct RbAssetFileAdminData {
 #[derive(Clone, Serialize)]
 pub struct RbAssetReadableFile {
     pub group_id: i32,
+    pub backend: String,
     pub object_key: String,
     pub original_name: String,
     pub relative_path: String,
@@ -140,7 +141,7 @@ pub async fn list_readable_files_by_object_key(
 ) -> Result<Vec<RbAssetReadableFile>, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetReadableFile,
-        r#"SELECT f.group_id, g.object_key, g.original_name,
+        r#"SELECT f.group_id, g.backend, g.object_key, g.original_name,
             f.relative_path, f.mime_type, f.size, f.sha256
         FROM rb_asset_file f
         JOIN rb_asset_group g ON g.id = f.group_id
@@ -170,7 +171,7 @@ pub async fn get_readable_file_by_object_key(
 ) -> Result<Option<RbAssetReadableFile>, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetReadableFile,
-        r#"SELECT f.group_id, g.object_key, g.original_name,
+        r#"SELECT f.group_id, g.backend, g.object_key, g.original_name,
             f.relative_path, f.mime_type, f.size, f.sha256
         FROM rb_asset_file f
         JOIN rb_asset_group g ON g.id = f.group_id
@@ -189,6 +190,32 @@ pub async fn get_readable_file_by_object_key(
     .fetch_optional(pool)
     .await?;
 
+    Ok(result)
+}
+
+pub async fn get_public_file_backend(
+    pool: &DbPool,
+    object_key: &str,
+    relative_path: &str,
+) -> Result<Option<String>, RbInternalError> {
+    let result = sqlx::query_scalar!(
+        r#"SELECT g.backend
+        FROM rb_asset_group g
+        JOIN rb_asset_file f ON f.group_id = g.id
+        WHERE g.object_key = $1 AND f.relative_path = $2;"#,
+        object_key,
+        relative_path
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(result)
+}
+
+pub async fn list_used_backends(pool: &DbPool) -> Result<Vec<String>, RbInternalError> {
+    let result =
+        sqlx::query_scalar!("SELECT DISTINCT backend FROM rb_asset_group ORDER BY backend ASC;")
+            .fetch_all(pool)
+            .await?;
     Ok(result)
 }
 

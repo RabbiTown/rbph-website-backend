@@ -77,6 +77,20 @@ struct AssetAdminListResponse {
 }
 
 #[derive(Serialize)]
+struct AssetStorageBackendData {
+    backend: String,
+    kind: &'static str,
+    label: String,
+    recommended: bool,
+}
+
+#[derive(Serialize)]
+struct AssetStorageBackendResponse {
+    code: AssetAdminResult,
+    backends: Vec<AssetStorageBackendData>,
+}
+
+#[derive(Serialize)]
 struct AssetAdminDeleteResponse {
     code: AssetAdminResult,
 }
@@ -147,10 +161,28 @@ async fn list(query: web::Query<AssetListQuery>, app: web::Data<AppState>) -> Re
     }))
 }
 
+async fn storage_backends(app: web::Data<AppState>) -> HttpResponse {
+    HttpResponse::Ok().json(AssetStorageBackendResponse {
+        code: AssetAdminResult::Ok,
+        backends: app
+            .storage
+            .available_backends()
+            .into_iter()
+            .map(|backend| AssetStorageBackendData {
+                backend: backend.id,
+                kind: backend.kind,
+                label: backend.label,
+                recommended: backend.recommended,
+            })
+            .collect(),
+    })
+}
+
 async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<HttpResponse> {
     let mut game_id: Option<i32> = None;
     let mut puzzle_id: Option<i32> = None;
     let mut round_id: Option<i32> = None;
+    let mut backend: Option<String> = None;
     let mut mode = UploadMode::File;
     let mut file_name: Option<String> = None;
     let mut file_mime: Option<String> = None;
@@ -202,11 +234,15 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
             "game_id" => game_id = text.trim().parse::<i32>().ok(),
             "puzzle_id" => puzzle_id = text.trim().parse::<i32>().ok(),
             "round_id" => round_id = text.trim().parse::<i32>().ok(),
+            "backend" => backend = Some(text.trim().to_string()),
             _ => {}
         }
     }
 
     let Some(game_id) = game_id else {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    };
+    let Some(backend) = backend.filter(|value| app.storage.has_backend(value)) else {
         return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
     };
     if !db::game::exists(&app.db, game_id, crate::model::user::RbUserRole::Admin).await? {
@@ -277,7 +313,7 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
         files: stored_files,
     } = app
         .storage
-        .store_group_files(&object_key, &files)
+        .store_group_files(&backend, &object_key, &files)
         .await
         .map_err(|_| RbError::bad_req(AssetAdminResult::Invalid.into()))?;
 
@@ -289,7 +325,7 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
                 game_id,
                 puzzle_id,
                 round_id,
-                backend: "local",
+                backend: &backend,
                 object_key: &object_key,
                 original_name: &group_name,
                 mime_type: &group_mime,
@@ -323,7 +359,14 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
             value
         }
         Err(err) => {
-            let _ = tokio::fs::remove_dir_all(app.storage.object_dir(&object_key)).await;
+            let paths = stored_files
+                .iter()
+                .map(|file| file.relative_path.clone())
+                .collect::<Vec<_>>();
+            let _ = app
+                .storage
+                .delete_files(&backend, &object_key, &paths)
+                .await;
             return Err(err.into());
         }
     };
@@ -346,7 +389,7 @@ async fn recompute_group_metadata(
         .collect::<Vec<_>>();
     let summary = app
         .storage
-        .summarize_existing_group_files(&group.object_key, &paths)
+        .summarize_existing_group_files(&group.backend, &group.object_key, &paths)
         .await
         .map_err(|_| RbError::internal("failed to summarize asset group files"))?;
 
@@ -418,17 +461,14 @@ async fn patch_file(
                 return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
             }
 
-            let old_path = app
-                .storage
-                .object_path(&group.object_key, &file.relative_path);
-            let new_path = app.storage.object_path(&group.object_key, &relative_path);
-            if let Some(parent) = new_path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|_| RbError::internal("failed to create asset directory"))?;
-            }
-
-            tokio::fs::rename(&old_path, &new_path)
+            app.storage
+                .rename_file(
+                    &group.backend,
+                    &group.object_key,
+                    &file.relative_path,
+                    &relative_path,
+                    &file.mime_type,
+                )
                 .await
                 .map_err(|_| RbError::internal("failed to rename asset file"))?;
 
@@ -442,13 +482,31 @@ async fn patch_file(
             {
                 Ok(Some(file)) => file,
                 Ok(None) => {
-                    let _ = tokio::fs::rename(&new_path, &old_path).await;
+                    let _ = app
+                        .storage
+                        .rename_file(
+                            &group.backend,
+                            &group.object_key,
+                            &relative_path,
+                            &file.relative_path,
+                            &file.mime_type,
+                        )
+                        .await;
                     return RbError::not_found()
                         .code(AssetAdminResult::NotFound.into())
                         .http_err();
                 }
                 Err(error) => {
-                    let _ = tokio::fs::rename(&new_path, &old_path).await;
+                    let _ = app
+                        .storage
+                        .rename_file(
+                            &group.backend,
+                            &group.object_key,
+                            &relative_path,
+                            &file.relative_path,
+                            &file.mime_type,
+                        )
+                        .await;
                     return Err(error.into());
                 }
             };
@@ -525,17 +583,45 @@ async fn patch_folder(
         return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
     }
 
-    let old_fs_path = app.storage.object_path(&group.object_key, &folder_path);
-    let new_fs_path = app.storage.object_path(&group.object_key, &new_folder_path);
-    if let Some(parent) = new_fs_path.parent() {
-        tokio::fs::create_dir_all(parent)
+    let mut renamed: Vec<(String, String, String)> = Vec::new();
+    for file in &affected {
+        let suffix = file
+            .relative_path
+            .strip_prefix(&folder_path)
+            .unwrap_or_default();
+        let relative_path = format!("{new_folder_path}{suffix}");
+        if app
+            .storage
+            .rename_file(
+                &group.backend,
+                &group.object_key,
+                &file.relative_path,
+                &relative_path,
+                &file.mime_type,
+            )
             .await
-            .map_err(|_| RbError::internal("failed to create asset directory"))?;
+            .is_err()
+        {
+            for (old_path, new_path, mime_type) in renamed.iter().rev() {
+                let _ = app
+                    .storage
+                    .rename_file(
+                        &group.backend,
+                        &group.object_key,
+                        new_path,
+                        old_path,
+                        mime_type,
+                    )
+                    .await;
+            }
+            return Err(RbError::internal("failed to rename asset folder").into());
+        }
+        renamed.push((
+            file.relative_path.clone(),
+            relative_path,
+            file.mime_type.clone(),
+        ));
     }
-
-    tokio::fs::rename(&old_fs_path, &new_fs_path)
-        .await
-        .map_err(|_| RbError::internal("failed to rename asset folder"))?;
 
     let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
     let mut update_failed = false;
@@ -556,13 +642,38 @@ async fn patch_folder(
 
     if update_failed {
         let _ = tx.rollback().await;
-        let _ = tokio::fs::rename(&new_fs_path, &old_fs_path).await;
+        for (old_path, new_path, mime_type) in renamed.iter().rev() {
+            let _ = app
+                .storage
+                .rename_file(
+                    &group.backend,
+                    &group.object_key,
+                    new_path,
+                    old_path,
+                    mime_type,
+                )
+                .await;
+        }
         return RbError::not_found()
             .code(AssetAdminResult::NotFound.into())
             .http_err();
     }
 
-    tx.commit().await.map_err(RbInternalError::from)?;
+    if let Err(error) = tx.commit().await {
+        for (old_path, new_path, mime_type) in renamed.iter().rev() {
+            let _ = app
+                .storage
+                .rename_file(
+                    &group.backend,
+                    &group.object_key,
+                    new_path,
+                    old_path,
+                    mime_type,
+                )
+                .await;
+        }
+        return Err(RbInternalError::from(error).into());
+    }
     let files = db::asset::list_files(&app.db, group.id).await?;
     let group = recompute_group_metadata(&app, group, &files).await?;
 
@@ -595,7 +706,12 @@ async fn delete_file(
         }
         tx.commit().await.map_err(RbInternalError::from)?;
 
-        tokio::fs::remove_dir_all(app.storage.object_dir(&group.object_key))
+        let paths = files
+            .iter()
+            .map(|file| file.relative_path.clone())
+            .collect::<Vec<_>>();
+        app.storage
+            .delete_files(&group.backend, &group.object_key, &paths)
             .await
             .map_err(|_| RbError::internal("failed to remove asset group files"))?;
 
@@ -607,10 +723,12 @@ async fn delete_file(
         }));
     }
 
-    let file_path = app
-        .storage
-        .object_path(&group.object_key, &file.relative_path);
-    tokio::fs::remove_file(&file_path)
+    app.storage
+        .delete_files(
+            &group.backend,
+            &group.object_key,
+            std::slice::from_ref(&file.relative_path),
+        )
         .await
         .map_err(|_| RbError::internal("failed to remove asset file"))?;
 
@@ -641,6 +759,7 @@ async fn delete(path: web::Path<AssetPathInfo>, app: web::Data<AppState>) -> Res
             .code(AssetAdminResult::NotFound.into())
             .http_err();
     };
+    let files = db::asset::list_files(&app.db, group.id).await?;
 
     let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
     let deleted = db::asset::admin_delete_group(&mut *tx, path.group_id).await?;
@@ -651,8 +770,12 @@ async fn delete(path: web::Path<AssetPathInfo>, app: web::Data<AppState>) -> Res
     }
     tx.commit().await.map_err(RbInternalError::from)?;
 
-    let file_path = app.storage.object_dir(&group.object_key);
-    tokio::fs::remove_dir_all(&file_path)
+    let paths = files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect::<Vec<_>>();
+    app.storage
+        .delete_files(&group.backend, &group.object_key, &paths)
         .await
         .map_err(|_| RbError::internal("failed to remove asset group files"))?;
 
@@ -664,6 +787,7 @@ async fn delete(path: web::Path<AssetPathInfo>, app: web::Data<AppState>) -> Res
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("assets")
+            .route("/storage-backends", web::get().to(storage_backends))
             .route("", web::get().to(list))
             .route("", web::post().to(append))
             .route("/{group_id}", web::patch().to(patch))

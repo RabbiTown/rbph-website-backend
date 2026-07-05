@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(MAX(re.id), 0) AS \"cursor!\"\n        FROM rb_release_event re\n        WHERE re.game_id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cursor!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "38fecb3675755ac50a23ee3801b094f0949fd281300e77e8659b595fe88149b9"
+}

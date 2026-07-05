@@ -121,7 +121,7 @@ pub async fn can_team_access_puzzle(
             FROM rb_team_puzzle tp
             JOIN rb_team t ON t.id = tp.team_id
             JOIN rb_puzzle p ON p.id = tp.puzzle_id
-            JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+            JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
             WHERE tp.team_id = $1
                 AND tp.puzzle_id = $2
                 AND NOT t.is_banned
@@ -287,7 +287,7 @@ pub async fn get_puzzle_team_state(
                 ARRAY_AGG(DISTINCT s.real_answer) FILTER (WHERE s.real_answer IS NOT NULL) AS answers
         FROM rb_team_puzzle tp
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
             AND fs.team_id = tp.team_id
             AND fs.saction = 0
@@ -806,7 +806,7 @@ pub async fn submit_answer(
         FROM rb_team_puzzle tp
         JOIN rb_team t ON t.id = tp.team_id
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         WHERE tp.team_id = $1 AND tp.puzzle_id = $2
         FOR UPDATE OF tp;",
         team_id,
@@ -1684,7 +1684,7 @@ pub async fn get_hints_show_for_team(
             h.cooldown, h.cost_id, h.cost_amount
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
         WHERE p.id = $2 AND tp.state >= 0 AND rp.release_at <= NOW()
         ORDER BY h.sort, h.id;",
@@ -1716,7 +1716,7 @@ pub async fn get_hints_team_state(
         FROM rb_hint h
         JOIN rb_team_hint th ON th.hint_id = h.id
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = th.team_id
         WHERE th.team_id = $1
             AND h.puzzle_id = $2
@@ -1760,7 +1760,7 @@ pub async fn sync_due_hints(
         "SELECT MIN(GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
         WHERE h.puzzle_id = $2
             AND tp.state >= 0
@@ -1795,7 +1795,7 @@ pub async fn purchase_hint(
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_round r ON r.id = p.round_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_member tm ON tm.game_id = r.game_id
         JOIN rb_team t ON t.id = tm.team_id
         JOIN rb_user u ON u.id = tm.user_id
@@ -2023,6 +2023,8 @@ pub struct RbPuzzleAdminData {
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
     pub release_phase_id: Option<i32>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub immediate_release_at: Option<OffsetDateTime>,
     pub round_id: i32,
     pub ticket_enabled: bool,
     pub ticket_cooldown: i32,
@@ -2048,6 +2050,8 @@ pub struct RbPuzzleCreateData {
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
     pub release_phase_id: Option<i32>,
+    #[serde(default)]
+    pub release_immediately: bool,
     pub round_id: i32,
     #[serde(default = "default_ticket_enabled")]
     pub ticket_enabled: bool,
@@ -2080,6 +2084,7 @@ pub struct RbPuzzleUpdateData {
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
     )]
     pub release_phase_id: Option<Option<i32>>,
+    pub release_immediately: Option<bool>,
     pub round_id: Option<i32>,
     pub ticket_enabled: Option<bool>,
     pub ticket_cooldown: Option<i32>,
@@ -2105,7 +2110,8 @@ pub async fn admin_list(
         sqlx::query_as!(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -2119,7 +2125,8 @@ pub async fn admin_list(
         sqlx::query_as!(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -2139,7 +2146,8 @@ pub async fn admin_get(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
@@ -2152,19 +2160,80 @@ pub async fn admin_get(
     Ok(result)
 }
 
+async fn clear_immediate_release_events_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    puzzle_ids: &[i32],
+) -> Result<(), RbInternalError> {
+    sqlx::query!(
+        "DELETE FROM rb_release_event_puzzle rep
+        USING rb_release_event re
+        WHERE rep.event_id = re.id AND re.event_type = 1
+            AND rep.puzzle_id = ANY($1);",
+        puzzle_ids
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn create_immediate_release_event_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    game_id: i32,
+    puzzle_ids: &[i32],
+    occurred_at: OffsetDateTime,
+) -> Result<(), RbInternalError> {
+    let event_id = sqlx::query_scalar!(
+        "INSERT INTO rb_release_event (game_id, event_type, occurred_at)
+        VALUES ($1, 1, $2) RETURNING id;",
+        game_id,
+        occurred_at
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query!(
+        "INSERT INTO rb_release_event_puzzle (event_id, puzzle_id)
+        SELECT $1, p.id FROM rb_puzzle p
+        WHERE p.game_id = $2 AND p.id = ANY($3);",
+        event_id,
+        game_id,
+        puzzle_ids
+    )
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query!(
+        "INSERT INTO rb_release_event_puzzle_team (event_id, puzzle_id, team_id)
+        SELECT $1, tp.puzzle_id, tp.team_id
+        FROM rb_team_puzzle tp
+        JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        WHERE p.game_id = $2 AND tp.puzzle_id = ANY($3) AND tp.state >= 0;",
+        event_id,
+        game_id,
+        puzzle_ids
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 pub async fn admin_create(
     pool: &DbPool,
     data: &RbPuzzleCreateData,
 ) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
+    let mut tx = pool.begin().await?;
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
             slug, sort, title, ptype, content, content_type, judge, penalty,
-            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown
+            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,
+            ticket_enabled, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::INT, r.id, $13, $14
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+            CASE WHEN $13 THEN NULL ELSE $12::INT END,
+            CASE WHEN $13 THEN NOW() ELSE NULL END,
+            r.id, $14, $15
         FROM rb_round r
         WHERE r.id = $1
+            AND NOT ($13 AND $12::INT IS NOT NULL)
             AND ($12::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_release_phase rp
                 WHERE rp.id = $12::INT AND rp.game_id = r.game_id
@@ -2173,7 +2242,8 @@ pub async fn admin_create(
             ))
         RETURNING id, game_id,
             slug, sort, title, ptype, content, content_type, judge, penalty,
-            max_submit, unlock_cond, release_phase_id, round_id, ticket_enabled, ticket_cooldown, ctime_at;",
+            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,
+            ticket_enabled, ticket_cooldown, ctime_at;",
         data.round_id,
         data.slug,
         data.sort,
@@ -2186,12 +2256,19 @@ pub async fn admin_create(
         data.max_submit,
         data.unlock_cond,
         data.release_phase_id,
+        data.release_immediately,
         data.ticket_enabled,
         data.ticket_cooldown
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-
+    if let Some(puzzle) = &result
+        && let Some(released_at) = puzzle.immediate_release_at
+    {
+        create_immediate_release_event_tx(&mut tx, puzzle.game_id, &[puzzle.id], released_at)
+            .await?;
+    }
+    tx.commit().await?;
     Ok(result)
 }
 
@@ -2206,7 +2283,13 @@ pub async fn admin_update(
     let slug = data.slug.clone().flatten();
     let release_phase_is_set = data.release_phase_id.is_some();
     let release_phase_id = data.release_phase_id.flatten();
+    let release_immediately = data.release_immediately == Some(true);
+    let release_is_set = release_phase_is_set || release_immediately;
 
+    let mut tx = pool.begin().await?;
+    if release_is_set {
+        clear_immediate_release_events_tx(&mut tx, &[puzzle_id]).await?;
+    }
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "UPDATE rb_puzzle p
@@ -2223,29 +2306,40 @@ pub async fn admin_update(
             penalty = COALESCE($10, p.penalty),
             max_submit = CASE WHEN $11 THEN $12 ELSE p.max_submit END,
             unlock_cond = COALESCE($13, p.unlock_cond),
-            release_phase_id = CASE WHEN $14 THEN $15 ELSE p.release_phase_id END,
+            release_phase_id = CASE
+                WHEN $16 THEN NULL
+                WHEN $14 THEN $15
+                ELSE p.release_phase_id
+            END,
+            immediate_release_at = CASE
+                WHEN $16 THEN NOW()
+                WHEN $14 THEN NULL
+                ELSE p.immediate_release_at
+            END,
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $16::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $17::INT
             ), p.round_id),
-            ticket_enabled = COALESCE($17, p.ticket_enabled),
-            ticket_cooldown = COALESCE($18, p.ticket_cooldown)
+            ticket_enabled = COALESCE($18, p.ticket_enabled),
+            ticket_cooldown = COALESCE($19, p.ticket_cooldown)
         WHERE p.id = $1
+            AND NOT ($16 AND $14)
             AND (NOT $14 OR $15::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_release_phase target_phase
                 WHERE target_phase.id = $15::INT AND target_phase.game_id = p.game_id
                     AND target_phase.release_at > NOW()
                     AND NOT EXISTS (SELECT 1 FROM rb_release_event target_event WHERE target_event.phase_id = target_phase.id)
             ))
-            AND ($16::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $16::INT
+            AND ($17::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $17::INT
             ))
-            AND ($16::INT IS NULL OR NOT EXISTS (
+            AND ($17::INT IS NULL OR NOT EXISTS (
                 SELECT 1 FROM rb_round owner_round
-                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $16::INT
+                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $17::INT
             ))
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id, p.round_id,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         puzzle_id,
         slug_is_set,
@@ -2262,13 +2356,21 @@ pub async fn admin_update(
         data.unlock_cond,
         release_phase_is_set,
         release_phase_id,
+        release_immediately,
         data.round_id,
         data.ticket_enabled,
         data.ticket_cooldown
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
-
+    if let Some(puzzle) = &result
+        && release_immediately
+        && let Some(released_at) = puzzle.immediate_release_at
+    {
+        create_immediate_release_event_tx(&mut tx, puzzle.game_id, &[puzzle.id], released_at)
+            .await?;
+    }
+    tx.commit().await?;
     Ok(result)
 }
 
@@ -2277,13 +2379,17 @@ pub async fn admin_batch_update_release_phase(
     game_id: i32,
     puzzle_ids: &[i32],
     release_phase_id: Option<i32>,
+    release_immediately: bool,
 ) -> Result<Option<Vec<RbPuzzleAdminData>>, RbInternalError> {
     let mut tx = pool.begin().await?;
+    clear_immediate_release_events_tx(&mut tx, puzzle_ids).await?;
     let puzzles = sqlx::query_as!(
         RbPuzzleAdminData,
         "UPDATE rb_puzzle p
-        SET release_phase_id = $3
+        SET release_phase_id = CASE WHEN $4 THEN NULL ELSE $3 END,
+            immediate_release_at = CASE WHEN $4 THEN NOW() ELSE NULL END
         WHERE p.game_id = $1 AND p.id = ANY($2)
+            AND NOT ($4 AND $3::INT IS NOT NULL)
             AND ($3::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_release_phase target
                 WHERE target.id = $3::INT AND target.game_id = p.game_id
@@ -2295,16 +2401,26 @@ pub async fn admin_batch_update_release_phase(
             ))
         RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype, p.content,
             p.content_type, p.judge, p.penalty, p.max_submit, p.unlock_cond,
-            p.release_phase_id, p.round_id, p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
+            p.release_phase_id, p.immediate_release_at, p.round_id,
+            p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         game_id,
         puzzle_ids,
-        release_phase_id
+        release_phase_id,
+        release_immediately
     )
     .fetch_all(&mut *tx)
     .await?;
 
     if puzzles.len() != puzzle_ids.len() {
         return Ok(None);
+    }
+
+    if release_immediately
+        && let Some(released_at) = puzzles
+            .first()
+            .and_then(|puzzle| puzzle.immediate_release_at)
+    {
+        create_immediate_release_event_tx(&mut tx, game_id, puzzle_ids, released_at).await?;
     }
 
     tx.commit().await?;

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN(GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1\n        WHERE h.puzzle_id = $2\n            AND tp.state >= 0\n            AND rp.release_at <= NOW()\n            AND h.title_hidden\n            AND GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second') > NOW();",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "next_unlock_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5e7f11fadcb6055dd4f20b43b02bc596ae5b644483942494f7f6ded0322bedb0"
+}

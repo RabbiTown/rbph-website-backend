@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (CASE\n            WHEN NOT COALESCE(tf.enabled, TRUE) THEN -2\n            WHEN COALESCE(gf.state, 2) = 0 THEN 0\n            WHEN NOT (tk.puzzle_id IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p\n                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n                WHERE p.id = tk.puzzle_id AND rp.release_at <= NOW()\n            )) THEN 0\n            ELSE COALESCE(gf.state, 2)\n        END)::SMALLINT AS \"access!\"\n        FROM rb_ticket tk\n        JOIN rb_team t ON t.id = tk.team_id\n        LEFT JOIN rb_game_feature gf ON gf.game_id = t.game_id\n            AND gf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END\n        LEFT JOIN rb_team_feature tf ON tf.team_id = t.id\n            AND tf.feature_type = CASE WHEN tk.puzzle_id IS NULL THEN 1 ELSE 2 END\n        WHERE tk.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access!",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ff39ed9a75bc360065a29eafce80b0526bcd876698d08ae233550c44ec89814c"
+}

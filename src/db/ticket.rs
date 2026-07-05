@@ -472,7 +472,7 @@ pub async fn player_ticket_feature_access(
             WHEN COALESCE(gf.state, 2) = 0 THEN 0
             WHEN NOT (tk.puzzle_id IS NULL OR EXISTS (
                 SELECT 1 FROM rb_puzzle p
-                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
                 WHERE p.id = tk.puzzle_id AND rp.release_at <= NOW()
             )) THEN 0
             ELSE COALESCE(gf.state, 2)
@@ -1832,14 +1832,14 @@ pub async fn open_puzzle_ticket(
             EXISTS (
                 SELECT 1 FROM rb_team_puzzle tp
                 JOIN rb_puzzle sp ON sp.id = tp.puzzle_id
-                JOIN rb_release_phase srp ON srp.id = sp.release_phase_id
+                JOIN rb_puzzle_effective_release srp ON srp.puzzle_id = sp.id
                 WHERE tp.puzzle_id = p.id AND tp.team_id = $1
                     AND tp.state >= 0
                     AND GREATEST(tp.ctime_at, srp.release_at) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')
             ) AS cooldown_ready
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         WHERE p.id = $2
             AND rp.release_at <= NOW();",
         team_id,
@@ -2004,14 +2004,14 @@ pub async fn get_team_puzzle_tickets(
         "SELECT
             (SELECT p.ticket_enabled
                 FROM rb_puzzle p
-                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND tp.state >= 0
                     AND rp.release_at <= NOW()
             ) AS ticket_enabled,
             EXISTS (
                 SELECT 1 FROM rb_puzzle p
-                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND p.ticket_enabled
                     AND tp.state >= 0
@@ -2021,7 +2021,7 @@ pub async fn get_team_puzzle_tickets(
             (
                 SELECT GREATEST(tp.ctime_at, rp.release_at) + (p.ticket_cooldown * INTERVAL '1 second')
                 FROM rb_puzzle p
-                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $1
                 WHERE p.id = $2 AND p.ticket_enabled
                     AND tp.state >= 0

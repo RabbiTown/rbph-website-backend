@@ -62,7 +62,7 @@ pub async fn get_round_state(
             SELECT 1 FROM rb_team_puzzle tp
             JOIN rb_team t ON t.id = tp.team_id
             JOIN rb_puzzle p ON p.id = tp.puzzle_id AND p.round_id = $2
-            JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+            JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
             WHERE tp.team_id = $1 AND NOT t.is_banned AND tp.state >= 0
                 AND rp.release_at <= NOW()
         );",
@@ -189,7 +189,7 @@ pub async fn get_state_for_team(
         "SELECT p.id, p.slug, p.title, tp.state AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
         FROM rb_puzzle p
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
         LEFT JOIN rb_submission s ON s.puzzle_id = p.id
             AND s.team_id = tp.team_id
@@ -215,7 +215,7 @@ pub async fn get_state_for_team(
         FROM rb_team_puzzle tp
         JOIN rb_round r ON r.id = $2
         JOIN rb_puzzle p ON p.id = tp.puzzle_id
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
             AND fs.team_id = tp.team_id
             AND fs.saction = 0
@@ -255,7 +255,7 @@ async fn get_state_cache_ttl(
     let seconds = sqlx::query_scalar!(
         "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(rp.release_at) - NOW())))::BIGINT
         FROM rb_puzzle p
-        JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
             AND tp.team_id = $1
             AND tp.state >= 0
@@ -335,7 +335,7 @@ pub async fn get_simple_list_for_team(
         WHERE r.game_id = $1
         AND EXISTS (
             SELECT 1 FROM rb_puzzle p
-            JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+            JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
             JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
                 AND tp.team_id = $2 AND tp.state >= 0
             WHERE p.round_id = r.id

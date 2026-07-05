@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_release_event_puzzle rep\n        USING rb_release_event re\n        WHERE rep.event_id = re.id AND re.event_type = 1\n            AND rep.puzzle_id = ANY($1);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "16544b9f92e3493b2b3b72bba146c71939c73331ad1cc14d4a512f79a5a37d3a"
+}

@@ -1,0 +1,127 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_puzzle p\n        SET release_phase_id = CASE WHEN $4 THEN NULL ELSE $3 END,\n            immediate_release_at = CASE WHEN $4 THEN NOW() ELSE NULL END\n        WHERE p.game_id = $1 AND p.id = ANY($2)\n            AND NOT ($4 AND $3::INT IS NOT NULL)\n            AND ($3::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_release_phase target\n                WHERE target.id = $3::INT AND target.game_id = p.game_id\n                    AND target.release_at > NOW()\n                    AND NOT EXISTS (\n                        SELECT 1 FROM rb_release_event target_event\n                        WHERE target_event.phase_id = target.id\n                    )\n            ))\n        RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype, p.content,\n            p.content_type, p.judge, p.penalty, p.max_submit, p.unlock_cond,\n            p.release_phase_id, p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "ptype",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 8,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "penalty",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "max_submit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "unlock_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "release_phase_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "immediate_release_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "ticket_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 16,
+        "name": "ticket_cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 17,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4Array",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f4be141e48e1d79cd29720c8ee2a869c074ef12cbf01cb7a4f45e3b6e9948412"
+}

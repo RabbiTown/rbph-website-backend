@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_release_event (phase_id, game_id, event_type, occurred_at)\n        SELECT rp.id, rp.game_id, 0, rp.release_at FROM rb_release_phase rp\n        WHERE rp.release_at <= NOW()\n        ORDER BY rp.release_at, rp.id\n        ON CONFLICT (phase_id) DO NOTHING;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "7dbf9f286a9748a1f54392abe99a977f38cc07a950d6d16c5ace32a293202e6d"
+}

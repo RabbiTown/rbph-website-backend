@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(rp.release_at) - NOW())))::BIGINT\n        FROM rb_puzzle p\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id\n            AND tp.team_id = $1\n            AND tp.state >= 0\n        WHERE p.round_id = $2\n            AND rp.release_at > NOW();",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ceil",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8288e5c12aea9a01311af72f9bf4431414c44ef30c01e73e26d0dd1f1f7bd7bc"
+}

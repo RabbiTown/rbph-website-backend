@@ -40,6 +40,8 @@ struct PuzzleBatchReleaseRequest {
     game_id: i32,
     puzzle_ids: Vec<i32>,
     release_phase_id: Option<i32>,
+    #[serde(default)]
+    release_immediately: bool,
 }
 
 #[derive(Deserialize)]
@@ -159,9 +161,15 @@ fn validate_create(data: &RbPuzzleCreateData) -> bool {
         && validate_json_shape(data)
         && validate_judge_action(&data.judge)
         && data.penalty.is_array()
+        && !(data.release_immediately && data.release_phase_id.is_some())
 }
 
 fn validate_update(data: &RbPuzzleUpdateData) -> bool {
+    if data.release_immediately == Some(false)
+        || (data.release_immediately.is_some() && data.release_phase_id.is_some())
+    {
+        return false;
+    }
     if let Some(ptype) = data.ptype
         && !validate_ptype(ptype)
     {
@@ -337,6 +345,7 @@ async fn append(
     };
     invalidate_puzzle_cache(&app, puzzle.game_id, puzzle.id).await;
     invalidate_round_state_cache(&app, puzzle.round_id).await;
+    crate::module::release::process_due_releases(app.get_ref()).await?;
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
         code: PuzzleAdminResult::Ok,
@@ -351,6 +360,7 @@ async fn batch_update_release_phase(
     let puzzle_ids = req.puzzle_ids.iter().copied().collect::<HashSet<_>>();
     if req.game_id <= 0
         || req.release_phase_id.is_some_and(|id| id <= 0)
+        || (req.release_immediately && req.release_phase_id.is_some())
         || puzzle_ids.is_empty()
         || puzzle_ids.len() > 500
         || puzzle_ids.iter().any(|id| *id <= 0)
@@ -365,6 +375,7 @@ async fn batch_update_release_phase(
         req.game_id,
         &puzzle_ids,
         req.release_phase_id,
+        req.release_immediately,
     )
     .await?
     else {
@@ -380,6 +391,7 @@ async fn batch_update_release_phase(
     for round_id in round_ids {
         invalidate_round_state_cache(&app, round_id).await;
     }
+    crate::module::release::process_due_releases(app.get_ref()).await?;
 
     Ok(HttpResponse::Ok().json(PuzzleAdminListResponse {
         code: PuzzleAdminResult::Ok,
@@ -444,6 +456,7 @@ async fn edit(
     {
         invalidate_round_state_cache(&app, previous.round_id).await;
     }
+    crate::module::release::process_due_releases(app.get_ref()).await?;
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
         code: PuzzleAdminResult::Ok,
@@ -551,4 +564,26 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/{puzzle_id}/clear-states", web::post().to(clear_states))
             .route("/{puzzle_id}", web::delete().to(delete)),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_immediate_release_patch_shape() {
+        assert!(validate_update(&RbPuzzleUpdateData {
+            release_immediately: Some(true),
+            ..Default::default()
+        }));
+        assert!(!validate_update(&RbPuzzleUpdateData {
+            release_immediately: Some(false),
+            ..Default::default()
+        }));
+        assert!(!validate_update(&RbPuzzleUpdateData {
+            release_phase_id: Some(None),
+            release_immediately: Some(true),
+            ..Default::default()
+        }));
+    }
 }

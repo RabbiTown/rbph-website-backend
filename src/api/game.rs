@@ -164,15 +164,10 @@ async fn sync_releases(
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?;
     crate::module::release::process_due_releases(app.get_ref()).await?;
-    let events =
-        db::release::sync_events(&app.db, path.game_id, team_id, body.after.max(0)).await?;
-    let release_cursor = events
-        .last()
-        .map(|event| event.id)
-        .unwrap_or(db::release::release_cursor(&app.db, path.game_id).await?);
+    let sync = db::release::sync_events(&app.db, path.game_id, team_id, body.after.max(0)).await?;
     Ok(HttpResponse::Ok().json(ReleaseSyncResponse {
-        release_cursor,
-        events,
+        release_cursor: sync.cursor,
+        events: sync.events,
         phases: db::release::list_player(&app.db, path.game_id).await?,
         features: db::feature::player_states(&app.db, path.game_id).await?,
         server_time: OffsetDateTime::now_utc(),

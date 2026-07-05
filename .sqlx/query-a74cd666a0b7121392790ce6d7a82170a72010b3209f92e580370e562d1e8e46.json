@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.ticket_enabled, p.title AS puzzle_title, p.round_id, r.game_id,\n            EXISTS (\n                SELECT 1 FROM rb_team_puzzle tp\n                JOIN rb_puzzle sp ON sp.id = tp.puzzle_id\n                JOIN rb_puzzle_effective_release srp ON srp.puzzle_id = sp.id\n                WHERE tp.puzzle_id = p.id AND tp.team_id = $1\n                    AND tp.state >= 0\n                    AND GREATEST(tp.ctime_at, srp.release_at) <= NOW() - (p.ticket_cooldown * INTERVAL '1 second')\n            ) AS cooldown_ready\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        WHERE p.id = $2\n            AND rp.release_at <= NOW();",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cooldown_ready",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "a74cd666a0b7121392790ce6d7a82170a72010b3209f92e580370e562d1e8e46"
+}

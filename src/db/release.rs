@@ -13,6 +13,8 @@ use crate::{
 
 pub const RELEASE_VISIBILITY_HIDDEN: i16 = 0;
 pub const RELEASE_VISIBILITY_PUBLIC: i16 = 1;
+pub const RELEASE_EVENT_PHASE: i16 = 0;
+pub const RELEASE_EVENT_IMMEDIATE_PUZZLES: i16 = 1;
 
 #[derive(Serialize)]
 pub struct ReleasePhaseAdminData {
@@ -72,7 +74,7 @@ pub struct ReleasePhaseUpdateData {
 #[derive(Clone)]
 pub struct PendingReleaseEvent {
     pub id: i64,
-    pub phase_id: i32,
+    pub phase_id: Option<i32>,
     pub game_id: i32,
     pub occurred_at: OffsetDateTime,
 }
@@ -112,8 +114,13 @@ pub struct ReleaseSyncEvent {
     pub event_type: &'static str,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub occurred_at: OffsetDateTime,
-    pub phase: PlayerReleasePhaseData,
+    pub phase: Option<PlayerReleasePhaseData>,
     pub puzzles: Vec<ReleasedPuzzleData>,
+}
+
+pub struct ReleaseSyncResult {
+    pub cursor: i64,
+    pub events: Vec<ReleaseSyncEvent>,
 }
 
 async fn load_changes(
@@ -313,8 +320,8 @@ pub async fn delete_admin(
 
 pub async fn materialize_due(pool: &DbPool) -> Result<(), RbInternalError> {
     sqlx::query!(
-        "INSERT INTO rb_release_event (phase_id, occurred_at)
-        SELECT rp.id, rp.release_at FROM rb_release_phase rp
+        "INSERT INTO rb_release_event (phase_id, game_id, event_type, occurred_at)
+        SELECT rp.id, rp.game_id, 0, rp.release_at FROM rb_release_phase rp
         WHERE rp.release_at <= NOW()
         ORDER BY rp.release_at, rp.id
         ON CONFLICT (phase_id) DO NOTHING;"
@@ -329,9 +336,8 @@ pub async fn pending_notifications(
 ) -> Result<Vec<PendingReleaseEvent>, RbInternalError> {
     Ok(sqlx::query_as!(
         PendingReleaseEvent,
-        "SELECT re.id, re.phase_id, rp.game_id, re.occurred_at
+        "SELECT re.id, re.phase_id, re.game_id, re.occurred_at
         FROM rb_release_event re
-        JOIN rb_release_phase rp ON rp.id = re.phase_id
         WHERE re.notified_at IS NULL
         ORDER BY re.id;"
     )
@@ -365,8 +371,7 @@ pub async fn release_cursor(pool: &DbPool, game_id: i32) -> Result<i64, RbIntern
     Ok(sqlx::query_scalar!(
         "SELECT COALESCE(MAX(re.id), 0) AS \"cursor!\"
         FROM rb_release_event re
-        JOIN rb_release_phase rp ON rp.id = re.phase_id
-        WHERE rp.game_id = $1;",
+        WHERE re.game_id = $1;",
         game_id
     )
     .fetch_one(pool)
@@ -425,21 +430,22 @@ pub async fn sync_events(
     game_id: i32,
     team_id: Option<i32>,
     after: i64,
-) -> Result<Vec<ReleaseSyncEvent>, RbInternalError> {
+) -> Result<ReleaseSyncResult, RbInternalError> {
     let rows = sqlx::query!(
-        "SELECT re.id, re.occurred_at, rp.id AS phase_id
+        "SELECT re.id, re.occurred_at, re.phase_id, re.event_type
         FROM rb_release_event re
-        JOIN rb_release_phase rp ON rp.id = re.phase_id
-        WHERE rp.game_id = $1 AND re.id > $2
+        WHERE re.game_id = $1 AND re.id > $2
         ORDER BY re.id LIMIT 100;",
         game_id,
         after.max(0)
     )
     .fetch_all(pool)
     .await?;
+    let cursor = rows.last().map_or(after.max(0), |row| row.id);
     let mut events = Vec::with_capacity(rows.len());
     for row in rows {
         let puzzles = if let Some(team_id) = team_id {
+            let phase_id = row.phase_id;
             sqlx::query_as!(
                 ReleasedPuzzleData,
                 "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug,
@@ -447,41 +453,81 @@ pub async fn sync_events(
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
-                WHERE p.release_phase_id = $1 AND tp.state >= 0
+                LEFT JOIN rb_release_event_puzzle rep
+                    ON rep.puzzle_id = p.id AND rep.event_id = $3
+                LEFT JOIN rb_release_event_puzzle_team rept
+                    ON rept.event_id = rep.event_id AND rept.puzzle_id = rep.puzzle_id
+                        AND rept.team_id = $2
+                WHERE tp.state >= 0
+                    AND (($4::SMALLINT = 0 AND p.release_phase_id = $1)
+                        OR ($4::SMALLINT = 1 AND rep.event_id IS NOT NULL
+                            AND rept.event_id IS NOT NULL
+                            AND p.immediate_release_at IS NOT NULL))
                 ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
-                row.phase_id,
-                team_id
+                phase_id,
+                team_id,
+                row.id,
+                row.event_type
             )
             .fetch_all(pool)
             .await?
         } else {
             Vec::new()
         };
-        events.push(ReleaseSyncEvent {
-            id: row.id,
-            event_type: "phase_released",
-            occurred_at: row.occurred_at,
-            phase: get_player_phase(pool, row.phase_id)
-                .await?
-                .ok_or("Release phase not found")?,
-            puzzles,
-        });
+        match row.event_type {
+            RELEASE_EVENT_PHASE => {
+                let phase_id = row.phase_id.ok_or("Release phase event has no phase")?;
+                events.push(ReleaseSyncEvent {
+                    id: row.id,
+                    event_type: "phase_released",
+                    occurred_at: row.occurred_at,
+                    phase: Some(
+                        get_player_phase(pool, phase_id)
+                            .await?
+                            .ok_or("Release phase not found")?,
+                    ),
+                    puzzles,
+                });
+            }
+            RELEASE_EVENT_IMMEDIATE_PUZZLES if !puzzles.is_empty() => {
+                events.push(ReleaseSyncEvent {
+                    id: row.id,
+                    event_type: "puzzles_released",
+                    occurred_at: row.occurred_at,
+                    phase: None,
+                    puzzles,
+                });
+            }
+            RELEASE_EVENT_IMMEDIATE_PUZZLES => {}
+            _ => return Err("Invalid release event type".into()),
+        }
     }
-    Ok(events)
+    Ok(ReleaseSyncResult { cursor, events })
 }
 
-pub async fn phase_cache_targets(
+pub async fn event_cache_targets(
     pool: &DbPool,
-    phase_id: i32,
+    event_id: i64,
+    phase_id: Option<i32>,
 ) -> Result<(Vec<i32>, Vec<i32>), RbInternalError> {
     let puzzles = sqlx::query_scalar!(
-        "SELECT id FROM rb_puzzle WHERE release_phase_id = $1;",
+        "SELECT p.id FROM rb_puzzle p
+        LEFT JOIN rb_release_event_puzzle rep
+            ON rep.puzzle_id = p.id AND rep.event_id = $1
+        WHERE ($2::INT IS NOT NULL AND p.release_phase_id = $2)
+            OR ($2::INT IS NULL AND rep.event_id IS NOT NULL);",
+        event_id,
         phase_id
     )
     .fetch_all(pool)
     .await?;
     let rounds = sqlx::query_scalar!(
-        "SELECT DISTINCT round_id FROM rb_puzzle WHERE release_phase_id = $1;",
+        "SELECT DISTINCT p.round_id FROM rb_puzzle p
+        LEFT JOIN rb_release_event_puzzle rep
+            ON rep.puzzle_id = p.id AND rep.event_id = $1
+        WHERE ($2::INT IS NOT NULL AND p.release_phase_id = $2)
+            OR ($2::INT IS NULL AND rep.event_id IS NOT NULL);",
+        event_id,
         phase_id
     )
     .fetch_all(pool)

@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT re.id, re.phase_id, re.game_id, re.occurred_at\n        FROM rb_release_event re\n        WHERE re.notified_at IS NULL\n        ORDER BY re.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "phase_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "b6d8c5f95bb18d749a202f6d07c3df4fdac7302370ea5d8ec42d91c954300a57"
+}

@@ -7,19 +7,16 @@ use crate::{AppState, db, error::RbInternalError};
 pub async fn process_due_releases(app: &AppState) -> Result<(), RbInternalError> {
     db::release::materialize_due(&app.db).await?;
     for event in db::release::pending_notifications(&app.db).await? {
-        if db::feature::apply_phase_changes(
-            &app.db,
-            event.game_id,
-            event.phase_id,
-            event.occurred_at,
-        )
-        .await?
+        if let Some(phase_id) = event.phase_id
+            && db::feature::apply_phase_changes(&app.db, event.game_id, phase_id, event.occurred_at)
+                .await?
         {
             db::board::LEADER_BOARD_CACHE
                 .invalidate_game(event.game_id)
                 .await;
         }
-        let (puzzles, rounds) = db::release::phase_cache_targets(&app.db, event.phase_id).await?;
+        let (puzzles, rounds) =
+            db::release::event_cache_targets(&app.db, event.id, event.phase_id).await?;
         for puzzle_id in puzzles {
             db::cache::del_pattern(&app.kv, &format!("puzzle:{puzzle_id}:team:*:full_state"))
                 .await?;

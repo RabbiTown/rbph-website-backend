@@ -122,7 +122,7 @@ async fn judge_puzzle(
                 "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
-                JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
                 WHERE p.id = ANY($1)
                     AND tp.state >= 0

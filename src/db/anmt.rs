@@ -112,7 +112,7 @@ where
             FROM rb_announcement_puzzle ap
             JOIN rb_puzzle p ON p.id = ap.puzzle_id
             JOIN rb_round r ON r.id = p.round_id
-            JOIN rb_release_phase rp ON rp.id = p.release_phase_id AND rp.release_at <= NOW()
+            JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id AND rp.release_at <= NOW()
             JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2 AND tp.state >= 0
             WHERE ap.announcement_id = ANY($1)
             ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
@@ -275,7 +275,7 @@ pub async fn list_all_for_team(
                     SELECT 1
                     FROM rb_announcement_puzzle ap
                     JOIN rb_puzzle p ON p.id = ap.puzzle_id
-                    JOIN rb_release_phase rp ON rp.id = p.release_phase_id AND rp.release_at <= NOW()
+                    JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id AND rp.release_at <= NOW()
                     JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
                         AND tp.team_id = t.id AND tp.state >= 0
                     WHERE ap.announcement_id = a.id

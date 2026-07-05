@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_release_event_puzzle_team (event_id, puzzle_id, team_id)\n        SELECT $1, tp.puzzle_id, tp.team_id\n        FROM rb_team_puzzle tp\n        JOIN rb_puzzle p ON p.id = tp.puzzle_id\n        WHERE p.game_id = $2 AND tp.puzzle_id = ANY($3) AND tp.state >= 0;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4d8831fc86710fb10d5697896f6ca4cef878e5039811cd2acab04374758513da"
+}

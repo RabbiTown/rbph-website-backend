@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tp.state >= 0 AND rp.release_at <= NOW() AND NOT t.is_banned AS \"access!\"\n        FROM rb_team_puzzle tp\n        JOIN rb_team t ON t.id = tp.team_id\n        JOIN rb_puzzle p ON p.id = tp.puzzle_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        WHERE tp.team_id = $1 AND tp.puzzle_id = $2\n        FOR UPDATE OF tp;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3cd14d4d27c6b8efae79634c43a0aff7933b31e805b5bf0aadc8dc900b76936d"
+}

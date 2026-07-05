@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id FROM rb_puzzle p\n        LEFT JOIN rb_release_event_puzzle rep\n            ON rep.puzzle_id = p.id AND rep.event_id = $1\n        WHERE ($2::INT IS NOT NULL AND p.release_phase_id = $2)\n            OR ($2::INT IS NULL AND rep.event_id IS NOT NULL);",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7cc695a604fcea43514427f9691a13c10eecd9095b19e0873c195c8401f6792f"
+}

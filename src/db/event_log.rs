@@ -170,7 +170,7 @@ pub async fn list_team_activity(
         LEFT JOIN rb_user u ON u.id = el.user_id
         LEFT JOIN rb_user tu ON tu.id = el.target_user_id
         LEFT JOIN rb_puzzle p ON p.id = el.puzzle_id
-        LEFT JOIN rb_release_phase rp ON rp.id = p.release_phase_id
+        LEFT JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         WHERE el.team_id = $1
             AND el.event_scope = $2
             AND (

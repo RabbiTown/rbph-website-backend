@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT backend FROM rb_asset_group ORDER BY backend ASC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "backend",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "292df09c1bfb1d088811491e7a023729b2d7d52e9351674bf090c5c287a48400"
+}

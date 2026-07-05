@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.backend\n        FROM rb_asset_group g\n        JOIN rb_asset_file f ON f.group_id = g.id\n        WHERE g.object_key = $1 AND f.relative_path = $2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "backend",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7fb4d1d9e378b4b9b2c76dbab2d4093e54836edfcb669b49aba60b0a7438d309"
+}

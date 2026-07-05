@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sqlx::prelude::FromRow;
+use sqlx::{Postgres, prelude::FromRow};
 use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError, model::game::RbContentType};
@@ -91,11 +91,14 @@ struct AnnouncementPuzzleRow {
     is_round_puzzle: bool,
 }
 
-async fn load_puzzles(
-    pool: &DbPool,
+async fn load_puzzles<'e, E>(
+    executor: E,
     announcement_ids: &[i32],
     team_id: Option<i32>,
-) -> Result<HashMap<i32, Vec<AnnouncementPuzzleData>>, RbInternalError> {
+) -> Result<HashMap<i32, Vec<AnnouncementPuzzleData>>, RbInternalError>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     if announcement_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -104,7 +107,8 @@ async fn load_puzzles(
         sqlx::query_as!(
             AnnouncementPuzzleRow,
             "SELECT ap.announcement_id, p.id, p.slug, p.title, p.round_id,
-                r.slug AS round_slug, (r.puzzle = p.id) AS \"is_round_puzzle!\"
+                r.slug AS round_slug,
+                COALESCE(r.puzzle = p.id, FALSE) AS \"is_round_puzzle!\"
             FROM rb_announcement_puzzle ap
             JOIN rb_puzzle p ON p.id = ap.puzzle_id
             JOIN rb_round r ON r.id = p.round_id
@@ -115,13 +119,14 @@ async fn load_puzzles(
             announcement_ids,
             team_id
         )
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?
     } else {
         sqlx::query_as!(
             AnnouncementPuzzleRow,
             "SELECT ap.announcement_id, p.id, p.slug, p.title, p.round_id,
-                r.slug AS round_slug, (r.puzzle = p.id) AS \"is_round_puzzle!\"
+                r.slug AS round_slug,
+                COALESCE(r.puzzle = p.id, FALSE) AS \"is_round_puzzle!\"
             FROM rb_announcement_puzzle ap
             JOIN rb_puzzle p ON p.id = ap.puzzle_id
             JOIN rb_round r ON r.id = p.round_id
@@ -129,7 +134,7 @@ async fn load_puzzles(
             ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
             announcement_ids
         )
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?
     };
 
@@ -193,6 +198,39 @@ async fn attach_admin_puzzles(
             utime_at: row.utime_at,
         })
         .collect())
+}
+
+async fn admin_get_in_tx(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    announcement_id: i32,
+) -> Result<Option<AdminAnnouncementData>, RbInternalError> {
+    let row = sqlx::query_as!(
+        AdminAnnouncementRow,
+        "SELECT a.id, a.title, a.content, a.content_type, a.is_pinned, a.is_shown,
+            a.game_id, a.ctime_at, a.utime_at
+        FROM rb_announcement a
+        WHERE a.id = $1;",
+        announcement_id
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let mut puzzles = load_puzzles(&mut **tx, &[row.id], None).await?;
+    Ok(Some(AdminAnnouncementData {
+        id: row.id,
+        title: row.title,
+        content: row.content,
+        content_type: row.content_type,
+        is_pinned: row.is_pinned,
+        is_shown: row.is_shown,
+        game_id: row.game_id,
+        puzzles: puzzles.remove(&row.id).unwrap_or_default(),
+        ctime_at: row.ctime_at,
+        utime_at: row.utime_at,
+    }))
 }
 
 pub async fn list_all_for_public(
@@ -357,10 +395,11 @@ pub async fn admin_create(
     .fetch_one(&mut *tx)
     .await?;
     replace_puzzles(&mut tx, id, &data.puzzle_ids).await?;
-    tx.commit().await?;
-    admin_get(pool, id)
+    let announcement = admin_get_in_tx(&mut tx, id)
         .await?
-        .ok_or_else(|| "Created announcement not found".into())
+        .ok_or("Created announcement not found")?;
+    tx.commit().await?;
+    Ok(announcement)
 }
 
 pub async fn admin_update(
@@ -390,8 +429,9 @@ pub async fn admin_update(
         return Ok(None);
     };
     replace_puzzles(&mut tx, id, &data.puzzle_ids).await?;
+    let announcement = admin_get_in_tx(&mut tx, id).await?;
     tx.commit().await?;
-    admin_get(pool, id).await
+    Ok(announcement)
 }
 
 pub async fn admin_delete(pool: &DbPool, announcement_id: i32) -> Result<bool, RbInternalError> {

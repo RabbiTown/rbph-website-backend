@@ -443,7 +443,7 @@ pub async fn sync_events(
             sqlx::query_as!(
                 ReleasedPuzzleData,
                 "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug,
-                    (r.puzzle = p.id) AS \"is_round_puzzle!\"
+                    COALESCE(r.puzzle = p.id, FALSE) AS \"is_round_puzzle!\"
                 FROM rb_puzzle p
                 JOIN rb_round r ON r.id = p.round_id
                 JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2

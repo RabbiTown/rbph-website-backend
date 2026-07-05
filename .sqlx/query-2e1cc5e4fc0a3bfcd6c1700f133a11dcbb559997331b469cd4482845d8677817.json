@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug,\n                    (r.puzzle = p.id) AS \"is_round_puzzle!\"\n                FROM rb_puzzle p\n                JOIN rb_round r ON r.id = p.round_id\n                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2\n                WHERE p.release_phase_id = $1 AND tp.state >= 0\n                ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "query": "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug,\n                    COALESCE(r.puzzle = p.id, FALSE) AS \"is_round_puzzle!\"\n                FROM rb_puzzle p\n                JOIN rb_round r ON r.id = p.round_id\n                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2\n                WHERE p.release_phase_id = $1 AND tp.state >= 0\n                ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -49,5 +49,5 @@
       null
     ]
   },
-  "hash": "aabe1f25c2616906034162c843a2fa0c2020ca0b4b96c6ac8f2a8472284961a5"
+  "hash": "2e1cc5e4fc0a3bfcd6c1700f133a11dcbb559997331b469cd4482845d8677817"
 }

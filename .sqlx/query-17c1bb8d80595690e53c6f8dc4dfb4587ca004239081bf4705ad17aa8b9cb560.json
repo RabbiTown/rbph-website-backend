@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_puzzle_trigger\n                (team_id, puzzle_id, trigger_key, source_submission_id)\n            SELECT $1, $2, trigger_key, $4\n            FROM UNNEST($3::text[]) AS trigger_key\n            ON CONFLICT DO NOTHING;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "TextArray",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "17c1bb8d80595690e53c6f8dc4dfb4587ca004239081bf4705ad17aa8b9cb560"
+}

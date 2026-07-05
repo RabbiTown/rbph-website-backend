@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = $1;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c499432fbe346d96b5f5a4f558298ddd2ef7634ba61c0d8c7c663905b1b1d95"
+}

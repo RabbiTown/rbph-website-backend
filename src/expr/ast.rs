@@ -39,6 +39,7 @@ pub enum GateExpr {
     AllSolved(SetExpr),
     AnySolved(SetExpr),
     GameStarted,
+    Triggered(PuzzleRef, String),
 
     Cmp {
         op: CmpOp,
@@ -121,6 +122,9 @@ pub fn eval_compiled<S: PuzzleStates>(state: &S, expr: &GateExpr) -> bool {
         }
 
         GateExpr::GameStarted => state.game_started(),
+        GateExpr::Triggered(puzzle, key) => {
+            resolve_puzzle(state, puzzle).is_some_and(|id| state.is_triggered(id, key))
+        }
 
         GateExpr::Cmp { op, lhs, rhs } => {
             cmp_usize(op.clone(), eval_value(state, lhs), eval_value(state, rhs))

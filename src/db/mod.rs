@@ -2,6 +2,7 @@ pub mod anmt;
 pub mod asset;
 pub mod board;
 pub mod cache;
+pub mod content;
 pub mod event_log;
 pub mod feature;
 pub mod game;

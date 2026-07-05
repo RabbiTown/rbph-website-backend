@@ -47,6 +47,11 @@
         "ordinal": 8,
         "name": "finish_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "content_blocks_dirty",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -64,7 +69,8 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
   "hash": "44b67e1eb00b1c604ae4982d03d2f85c586611d21b806abe00aab9874ec84f11"

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        ORDER BY r.game_id, r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -35,76 +35,62 @@
       },
       {
         "ordinal": 6,
-        "name": "content",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 7,
-        "name": "content_type",
-        "type_info": "Int2"
-      },
-      {
-        "ordinal": 8,
         "name": "judge",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 9,
+        "ordinal": 7,
         "name": "penalty",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 10,
+        "ordinal": 8,
         "name": "max_submit",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 9,
         "name": "unlock_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 12,
+        "ordinal": 10,
         "name": "release_phase_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 11,
         "name": "immediate_release_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 14,
+        "ordinal": 12,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 15,
+        "ordinal": 13,
         "name": "ticket_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 16,
+        "ordinal": 14,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 17,
+        "ordinal": 15,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": [
-        "Int4"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
       false,
       true,
-      false,
-      false,
       false,
       false,
       false,
@@ -120,5 +106,5 @@
       false
     ]
   },
-  "hash": "d8b1e00e759618c4a5136afbe4fb11f21d415c0ac7ae08b04186ccd038ce4463"
+  "hash": "cebb4c33e7b64a56111ee7ef0054e35279fb95f53fc76485fc666bb60d6a71e4"
 }

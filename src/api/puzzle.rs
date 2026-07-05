@@ -33,6 +33,27 @@ struct HintPathInfo {
     hint_id: i32,
 }
 
+#[derive(Serialize)]
+struct PuzzleContentsResponse {
+    code: i32,
+    contents: Vec<db::content::RbContentBlockShowData>,
+}
+
+async fn get_contents(
+    path: web::Path<PuzzlePathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let game_id = db::puzzle::get_puzzle_game(&app.db, path.puzzle_id)
+        .await?
+        .ok_or_else(RbError::not_found)?;
+    let contents =
+        db::content::visible_for_team(&app.db, team_id, Some(path.puzzle_id), None, game_id)
+            .await?;
+    Ok(HttpResponse::Ok().json(PuzzleContentsResponse { code: 0, contents }))
+}
+
 async fn get_puzzle(
     path: web::Path<PuzzlePathInfo>,
     user: AuthUser,
@@ -367,6 +388,7 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
         web::scope("/{puzzle_id}")
             .wrap(middleware::from_fn(check_puzzle_middleware))
             .route("", web::get().to(get_puzzle))
+            .route("/contents", web::get().to(get_contents))
             .route("/submit", web::post().to(judge_puzzle))
             .route("/hints", web::get().to(get_puzzle_hints))
             .route("/hints/sync", web::post().to(sync_due_hints))

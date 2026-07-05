@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,\n            ticket_enabled, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,\n            CASE WHEN $13 THEN NULL ELSE $12::INT END,\n            CASE WHEN $13 THEN NOW() ELSE NULL END,\n            r.id, $14, $15\n        FROM rb_round r\n        WHERE r.id = $1\n            AND NOT ($13 AND $12::INT IS NOT NULL)\n            AND ($12::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_release_phase rp\n                WHERE rp.id = $12::INT AND rp.game_id = r.game_id\n                    AND rp.release_at > NOW()\n                    AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)\n            ))\n        RETURNING id, game_id,\n            slug, sort, title, ptype, content, content_type, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,\n            ticket_enabled, ticket_cooldown, ctime_at;",
+  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,\n            ticket_enabled, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9,\n            CASE WHEN $11 THEN NULL ELSE $10::INT END,\n            CASE WHEN $11 THEN NOW() ELSE NULL END,\n            r.id, $12, $13\n        FROM rb_round r\n        WHERE r.id = $1\n            AND NOT ($11 AND $10::INT IS NOT NULL)\n            AND ($10::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_release_phase rp\n                WHERE rp.id = $10::INT AND rp.game_id = r.game_id\n                    AND rp.release_at > NOW()\n                    AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)\n            ))\n        RETURNING id, game_id,\n            slug, sort, title, ptype, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,\n            ticket_enabled, ticket_cooldown, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -35,61 +35,51 @@
       },
       {
         "ordinal": 6,
-        "name": "content",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 7,
-        "name": "content_type",
-        "type_info": "Int2"
-      },
-      {
-        "ordinal": 8,
         "name": "judge",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 9,
+        "ordinal": 7,
         "name": "penalty",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 10,
+        "ordinal": 8,
         "name": "max_submit",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 9,
         "name": "unlock_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 12,
+        "ordinal": 10,
         "name": "release_phase_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 11,
         "name": "immediate_release_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 14,
+        "ordinal": 12,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 15,
+        "ordinal": 13,
         "name": "ticket_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 16,
+        "ordinal": 14,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 17,
+        "ordinal": 15,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -100,8 +90,6 @@
         "Varchar",
         "Int4",
         "Varchar",
-        "Int2",
-        "Text",
         "Int2",
         "Jsonb",
         "Jsonb",
@@ -122,8 +110,6 @@
       false,
       false,
       false,
-      false,
-      false,
       true,
       false,
       true,
@@ -134,5 +120,5 @@
       false
     ]
   },
-  "hash": "76623f3b4c8a0117c7ea06b9c8967849432fb2941b60ef5db90d17432a14517b"
+  "hash": "a7af833d0d7bf05a9642ca164634450d97fbdf7a378e3c08e1c4ab5b0eb1a59d"
 }

@@ -21,6 +21,8 @@ pub struct JudgeRule {
     result: Option<String>,
     answer: Option<String>,
     pub function: Option<String>,
+    #[serde(default)]
+    pub triggers: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -30,6 +32,8 @@ pub struct JudgeResult {
     pub answer: Option<String>,
     #[serde(default)]
     pub ignored: bool,
+    #[serde(default)]
+    pub triggers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -40,6 +44,8 @@ pub struct JudgeBackendOutput {
     pub answer: Option<String>,
     #[serde(default)]
     pub ignored: Option<bool>,
+    #[serde(default)]
+    pub triggers: Vec<String>,
 }
 
 impl From<JudgeBackendOutput> for JudgeResult {
@@ -49,6 +55,7 @@ impl From<JudgeBackendOutput> for JudgeResult {
             result: value.result,
             answer: value.answer,
             ignored: value.ignored.unwrap_or(false),
+            triggers: value.triggers,
         }
     }
 }
@@ -74,6 +81,16 @@ where
 
 pub fn value_to_judge(v: Value) -> Result<Vec<JudgeRule>, RbInternalError> {
     let rules: Vec<JudgeRule> = serde_json::from_value(v)?;
+
+    if rules
+        .iter()
+        .flat_map(|rule| &rule.triggers)
+        .any(|key| !valid_trigger_key(key))
+    {
+        return Err(RbInternalError::Other(
+            "judge rule contains an invalid trigger key".to_string(),
+        ));
+    }
 
     let rules = rules
         .into_iter()
@@ -109,6 +126,7 @@ where
                         result: rule.result.clone(),
                         answer: rule.answer.clone(),
                         ignored: false,
+                        triggers: rule.triggers.clone(),
                     });
                 }
             }
@@ -123,6 +141,7 @@ where
                     result: rule.result.clone(),
                     answer: rule.answer.clone(),
                     ignored: false,
+                    triggers: rule.triggers.clone(),
                 });
             }
             _ => {}
@@ -134,5 +153,13 @@ where
         result: None,
         answer: None,
         ignored: false,
+        triggers: Vec::new(),
     })
+}
+
+pub fn valid_trigger_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic())
+        && value.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }

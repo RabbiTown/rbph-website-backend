@@ -21,4 +21,7 @@ pub trait PuzzleStates {
     fn round_slug(&self, slug: &str) -> Option<RoundId>;
     fn round_puzzles(&self, id: RoundId) -> Option<Vec<PuzzleId>>;
     fn game_started(&self) -> bool;
+    fn is_triggered(&self, _id: PuzzleId, _key: &str) -> bool {
+        false
+    }
 }

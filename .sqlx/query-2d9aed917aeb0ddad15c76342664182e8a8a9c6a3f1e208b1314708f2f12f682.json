@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_content_block (round_id, sort, name, content, content_type)\n            VALUES ($1, 0, 'Default', $2, $3);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2d9aed917aeb0ddad15c76342664182e8a8a9c6a3f1e208b1314708f2f12f682"
+}

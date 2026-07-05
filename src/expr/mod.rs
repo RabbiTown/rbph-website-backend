@@ -70,6 +70,10 @@ mod test {
         fn game_started(&self) -> bool {
             true
         }
+
+        fn is_triggered(&self, id: super::types::PuzzleId, key: &str) -> bool {
+            id == 2 && key == "extra-content"
+        }
     }
 
     #[test]
@@ -111,6 +115,10 @@ mod test {
         let expr = "(game-started)";
         let result = eval(&state, expr);
         assert!(result);
+
+        assert!(eval(&state, "(triggered 2 extra-content)"));
+        assert!(eval(&state, "(triggered alpha extra-content)"));
+        assert!(!eval(&state, "(triggered 2 missing)"));
 
         let expr = "
         (or

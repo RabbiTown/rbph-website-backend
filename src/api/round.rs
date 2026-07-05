@@ -7,7 +7,7 @@ use actix_web::{
     middleware::{self, Next},
     web,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState, api::error_handler, db, error::RbError, extractor::auth::AuthUser,
@@ -17,6 +17,26 @@ use crate::{
 #[derive(Deserialize)]
 struct RoundPathInfo {
     round_id: i32,
+}
+
+#[derive(Serialize)]
+struct RoundContentsResponse {
+    code: i32,
+    contents: Vec<db::content::RbContentBlockShowData>,
+}
+
+async fn get_contents(
+    path: web::Path<RoundPathInfo>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
+    let game_id = db::round::get_round_game(&app.db, path.round_id)
+        .await?
+        .ok_or_else(RbError::not_found)?;
+    let contents =
+        db::content::visible_for_team(&app.db, team_id, None, Some(path.round_id), game_id).await?;
+    Ok(HttpResponse::Ok().json(RoundContentsResponse { code: 0, contents }))
 }
 
 async fn get_round(
@@ -90,6 +110,7 @@ pub fn rounds_config(cfg: &mut web::ServiceConfig) {
         web::scope("/{round_id}")
             .wrap(middleware::from_fn(check_round_middleware))
             .route("", web::get().to(get_round))
+            .route("/contents", web::get().to(get_contents))
             .default_service(web::route().to(error_handler)),
     );
 }

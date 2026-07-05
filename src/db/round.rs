@@ -5,7 +5,7 @@ use crate::{
     AppState, DbPool, KvPool,
     db::{self, game::GameUserInfo, puzzle::RbPuzzleTeamStateShowData},
     error::RbInternalError,
-    model::game::{RbContentType, RbTeamPuzzleState},
+    model::game::RbTeamPuzzleState,
     model::user::RbUserRole,
 };
 
@@ -109,8 +109,6 @@ pub struct RbRoundShowData {
     pub id: i32,
     pub slug: Option<String>,
     pub title: String,
-    pub content: String,
-    pub content_type: RbContentType,
     pub cover: Option<String>,
     pub game_id: i32,
     pub puzzle: Option<i32>,
@@ -122,7 +120,7 @@ pub async fn get_info_show(
 ) -> Result<Option<RbRoundShowData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundShowData,
-        "SELECT id, slug, title, content, content_type, cover, game_id, puzzle
+        "SELECT id, slug, title, cover, game_id, puzzle
         FROM rb_round
         WHERE id = $1",
         round_id
@@ -139,7 +137,7 @@ pub async fn get_info_show_str(
     round_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("round:{round_id}:show");
+    let key = format!("round:{round_id}:show:v2");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(Some(cache));
@@ -357,8 +355,6 @@ pub struct RbRoundAdminData {
     pub slug: Option<String>,
     pub sort: i32,
     pub title: String,
-    pub content: String,
-    pub content_type: i16,
     pub cover: Option<String>,
     pub game_id: i32,
     pub puzzle: Option<i32>,
@@ -387,8 +383,6 @@ pub struct RbRoundUpdateData {
     pub slug: Option<Option<String>>,
     pub sort: Option<i32>,
     pub title: Option<String>,
-    pub content: Option<String>,
-    pub content_type: Option<i16>,
     #[serde(
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
@@ -408,7 +402,7 @@ pub async fn admin_list(
     let result = if let Some(game_id) = game_id {
         sqlx::query_as!(
             RbRoundAdminData,
-            "SELECT id, slug, sort, title, content, content_type, cover, game_id, puzzle
+            "SELECT id, slug, sort, title, cover, game_id, puzzle
         FROM rb_round
         WHERE game_id = $1
         ORDER BY sort, id;",
@@ -419,7 +413,7 @@ pub async fn admin_list(
     } else {
         sqlx::query_as!(
             RbRoundAdminData,
-            "SELECT id, slug, sort, title, content, content_type, cover, game_id, puzzle
+            "SELECT id, slug, sort, title, cover, game_id, puzzle
         FROM rb_round
         ORDER BY game_id, sort, id;",
         )
@@ -436,7 +430,7 @@ pub async fn admin_get(
 ) -> Result<Option<RbRoundAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundAdminData,
-        "SELECT id, slug, sort, title, content, content_type, cover, game_id, puzzle
+        "SELECT id, slug, sort, title, cover, game_id, puzzle
         FROM rb_round
         WHERE id = $1;",
         round_id
@@ -451,24 +445,35 @@ pub async fn admin_create(
     pool: &DbPool,
     data: &RbRoundCreateData,
 ) -> Result<Option<RbRoundAdminData>, RbInternalError> {
+    let mut tx = pool.begin().await?;
     let result = sqlx::query_as!(
         RbRoundAdminData,
-        "INSERT INTO rb_round (slug, sort, title, content, content_type, cover, game_id, puzzle)
-        SELECT $2, $3, $4, $5, $6, $7, g.id, NULL::INT
+        "INSERT INTO rb_round (slug, sort, title, cover, game_id, puzzle)
+        SELECT $2, $3, $4, $5, g.id, NULL::INT
         FROM rb_game g
-        WHERE g.id = $1 AND $8::INT IS NULL
-        RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",
+        WHERE g.id = $1 AND $6::INT IS NULL
+        RETURNING id, slug, sort, title, cover, game_id, puzzle;",
         data.game_id,
         data.slug,
         data.sort,
         data.title,
-        data.content,
-        data.content_type,
         data.cover,
         data.puzzle
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    if let Some(round) = &result {
+        sqlx::query!(
+            "INSERT INTO rb_content_block (round_id, sort, name, content, content_type)
+            VALUES ($1, 0, 'Default', $2, $3);",
+            round.id,
+            data.content,
+            data.content_type
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
 
     Ok(result)
 }
@@ -491,30 +496,26 @@ pub async fn admin_update(
         SET slug = CASE WHEN $2 THEN $3 ELSE r.slug END,
             sort = COALESCE($4, r.sort),
             title = COALESCE($5, r.title),
-            content = COALESCE($6, r.content),
-            content_type = COALESCE($7, r.content_type),
-            cover = CASE WHEN $8 THEN $9 ELSE r.cover END,
+            cover = CASE WHEN $6 THEN $7 ELSE r.cover END,
             puzzle = CASE
-                WHEN $10 AND $11::INT IS NULL THEN NULL
-                WHEN $10 THEN $11::INT
+                WHEN $8 AND $9::INT IS NULL THEN NULL
+                WHEN $8 THEN $9::INT
                 ELSE r.puzzle
             END
         WHERE r.id = $1
             AND (
-                NOT $10 OR $11::INT IS NULL OR EXISTS (
+                NOT $8 OR $9::INT IS NULL OR EXISTS (
                     SELECT 1
                     FROM rb_puzzle p
-                    WHERE p.id = $11::INT AND p.round_id = r.id
+                    WHERE p.id = $9::INT AND p.round_id = r.id
                 )
             )
-        RETURNING id, slug, sort, title, content, content_type, cover, game_id, puzzle;",
+        RETURNING id, slug, sort, title, cover, game_id, puzzle;",
         round_id,
         slug_is_set,
         slug,
         data.sort,
         data.title,
-        data.content,
-        data.content_type,
         cover_is_set,
         cover,
         puzzle_is_set,

@@ -1719,6 +1719,12 @@ pub async fn admin_update(
     .fetch_optional(&mut *tx)
     .await?;
     debug_assert!(updated.is_some());
+    if data
+        .is_locked
+        .is_some_and(|value| value != current.is_locked)
+    {
+        db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
+    }
     if let Some(features) = &data.features {
         for feature in features {
             sqlx::query!(

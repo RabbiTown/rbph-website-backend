@@ -82,12 +82,6 @@ fn validate_create(data: &RbRoundCreateData) -> bool {
 }
 
 fn validate_update(data: &RbRoundUpdateData) -> bool {
-    if let Some(content_type) = data.content_type
-        && !validate_content_type(content_type)
-    {
-        return false;
-    }
-
     if let Some(slug) = &data.slug
         && !validate_slug_option(slug)
     {
@@ -101,7 +95,7 @@ async fn invalidate_round_cache(app: &AppState, game_id: i32, round_id: i32) {
     db::puzzle::invalidate_admin_cache(game_id, 0);
 
     if let Ok(mut conn) = app.kv.get().await {
-        let _: Result<(), _> = conn.del(format!("round:{round_id}:show")).await;
+        let _: Result<(), _> = conn.del(format!("round:{round_id}:show:v2")).await;
     }
 
     let _ = db::cache::del_pattern(&app.kv, &format!("round:{round_id}:team:*:full_state")).await;

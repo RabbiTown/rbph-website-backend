@@ -114,6 +114,17 @@ fn validate_judge_action(value: &serde_json::Value) -> bool {
                 return false;
             }
 
+            if map.get("triggers").is_some_and(|value| {
+                value.as_array().is_none_or(|items| {
+                    items.iter().any(|item| {
+                        item.as_str()
+                            .is_none_or(|key| !crate::game::judge::valid_trigger_key(key))
+                    })
+                })
+            }) {
+                return false;
+            }
+
             map.values().all(validate_judge_action)
         }
         _ => true,
@@ -172,12 +183,6 @@ fn validate_update(data: &RbPuzzleUpdateData) -> bool {
     }
     if let Some(ptype) = data.ptype
         && !validate_ptype(ptype)
-    {
-        return false;
-    }
-
-    if let Some(content_type) = data.content_type
-        && !validate_content_type(content_type)
     {
         return false;
     }
@@ -272,7 +277,7 @@ async fn invalidate_puzzle_cache(app: &AppState, game_id: i32, puzzle_id: i32) {
     db::puzzle::invalidate_admin_cache(game_id, puzzle_id);
 
     if let Ok(mut conn) = app.kv.get().await {
-        let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show")).await;
+        let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v2")).await;
     }
 }
 

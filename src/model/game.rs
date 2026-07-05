@@ -262,6 +262,9 @@ pub struct RbTeam {
     pub name: String,
     pub is_banned: bool,
     pub is_locked: bool,
+    #[allow(dead_code)]
+    #[serde(skip)]
+    pub content_blocks_dirty: bool,
     pub pass: String,
     pub bio: String,
     pub game_id: i32,

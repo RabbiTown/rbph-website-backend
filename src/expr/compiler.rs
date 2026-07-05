@@ -170,6 +170,28 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                     }
                     Ok(GateExpr::GameStarted)
                 }
+                "triggered" => {
+                    if items.len() != 3 {
+                        return Err(CompileError::BadForm("triggered expects 2 args"));
+                    }
+                    let key = atom(&items[2])?;
+                    let valid_key = !key.is_empty()
+                        && key.len() <= 64
+                        && key.chars().enumerate().all(|(index, ch)| {
+                            if index == 0 {
+                                ch.is_ascii_alphabetic()
+                            } else {
+                                ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
+                            }
+                        });
+                    if !valid_key {
+                        return Err(CompileError::BadForm("invalid trigger key"));
+                    }
+                    Ok(GateExpr::Triggered(
+                        parse_puzzle_ref(&items[1])?,
+                        key.to_string(),
+                    ))
+                }
                 "gt" | "ge" | "lt" | "le" | "eq" | "ne" => {
                     if items.len() != 3 {
                         return Err(CompileError::BadForm("comparison expects 2 args"));

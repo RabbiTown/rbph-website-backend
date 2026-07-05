@@ -1,5 +1,6 @@
 mod announcement;
 mod asset;
+mod content;
 mod feature;
 mod game;
 mod hint;
@@ -26,6 +27,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .default_service(web::route().to(error_handler)),
     )
     .configure(asset::config)
+    .configure(content::config)
     .configure(hint::config)
     .configure(log::config)
     .configure(puzzle_backend::config)

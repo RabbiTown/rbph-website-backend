@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id FROM rb_team t\n        WHERE t.id IN (SELECT team_id FROM rb_team_puzzle WHERE puzzle_id = $1)\n        ORDER BY t.id FOR UPDATE;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "131dfb952a15ed7eabb0ebb2c62f05db8345b9dcf565c6ab08c125c8b877a6be"
+}

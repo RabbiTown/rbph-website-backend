@@ -356,6 +356,30 @@ pub async fn mark_notified(pool: &DbPool, event_id: i64) -> Result<(), RbInterna
     Ok(())
 }
 
+pub async fn mark_content_blocks_dirty(
+    pool: &DbPool,
+    event_id: i64,
+    phase_id: Option<i32>,
+) -> Result<(), RbInternalError> {
+    sqlx::query!(
+        "UPDATE rb_team t SET content_blocks_dirty = TRUE
+        WHERE EXISTS (
+            SELECT 1 FROM rb_team_puzzle tp
+            JOIN rb_puzzle p ON p.id = tp.puzzle_id
+            LEFT JOIN rb_release_event_puzzle_team rept
+                ON rept.event_id = $1 AND rept.puzzle_id = p.id AND rept.team_id = tp.team_id
+            WHERE tp.team_id = t.id AND tp.state >= 0
+                AND (($2::INT IS NOT NULL AND p.release_phase_id = $2)
+                    OR rept.event_id IS NOT NULL)
+        );",
+        event_id,
+        phase_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn next_delay_seconds(pool: &DbPool) -> Result<Option<u64>, RbInternalError> {
     let seconds = sqlx::query_scalar!(
         "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(rp.release_at) - NOW())))::BIGINT

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team t SET content_blocks_dirty = TRUE\n        WHERE EXISTS (\n            SELECT 1 FROM rb_team_puzzle tp\n            JOIN rb_puzzle p ON p.id = tp.puzzle_id\n            LEFT JOIN rb_release_event_puzzle_team rept\n                ON rept.event_id = $1 AND rept.puzzle_id = p.id AND rept.team_id = tp.team_id\n            WHERE tp.team_id = t.id AND tp.state >= 0\n                AND (($2::INT IS NOT NULL AND p.release_phase_id = $2)\n                    OR rept.event_id IS NOT NULL)\n        );",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f925daf15b7af4aa4dc48a54b8e9eb8d671c080b9630fb056d1da80c7e8b0f7"
+}

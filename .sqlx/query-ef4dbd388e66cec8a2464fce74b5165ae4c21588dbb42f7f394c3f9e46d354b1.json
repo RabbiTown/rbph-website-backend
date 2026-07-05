@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_content_block (puzzle_id, sort, name, content, content_type)\n            VALUES ($1, 0, 'Default', $2, $3);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ef4dbd388e66cec8a2464fce74b5165ae4c21588dbb42f7f394c3f9e46d354b1"
+}

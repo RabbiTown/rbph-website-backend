@@ -194,8 +194,6 @@ pub struct RbPuzzleShowData {
     pub slug: Option<String>,
     pub title: String,
     pub ptype: RbPuzzleType,
-    pub content: String,
-    pub content_type: RbContentType,
     pub round: RbPuzzleShowRoundData,
     pub game_id: i32,
     pub announcements: Vec<db::anmt::RbAnnouncementShowData>,
@@ -206,7 +204,7 @@ pub async fn get_puzzle_show(
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
     let result = sqlx::query!(
-        "SELECT p.id, p.slug, p.title, p.ptype, p.content, p.content_type,
+        "SELECT p.id, p.slug, p.title, p.ptype,
                 p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id
@@ -221,8 +219,6 @@ pub async fn get_puzzle_show(
         slug: x.slug,
         title: x.title,
         ptype: x.ptype.into(),
-        content: x.content,
-        content_type: x.content_type.into(),
         round: RbPuzzleShowRoundData {
             id: x.round_id,
             slug: x.round_slug,
@@ -239,7 +235,7 @@ pub async fn get_puzzle_show_str(
     puzzle_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:show");
+    let key = format!("puzzle:{puzzle_id}:show:v2");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(Some(cache));
@@ -526,6 +522,10 @@ pub async fn solve_backend_puzzle(
 ) -> Result<bool, RbInternalError> {
     let mut tx = app.db.begin().await?;
 
+    sqlx::query_scalar!("SELECT id FROM rb_team WHERE id = $1 FOR UPDATE", team_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
     let submission = sqlx::query_as!(
         BackendSubmissionShowData,
         r#"SELECT id, team_id, user_id, puzzle_id, user_answer, norm_answer,
@@ -562,6 +562,7 @@ pub async fn solve_backend_puzzle(
     }
 
     if solved {
+        db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
         db::ticket::close_puzzle_tickets_on_solve(&mut tx, team_id, puzzle_id, user_id).await?;
     }
 
@@ -801,6 +802,10 @@ pub async fn submit_answer(
 
     let team_id = user.req_team_id()?.ok_or("Require team_id")?;
 
+    sqlx::query_scalar!("SELECT id FROM rb_team WHERE id = $1 FOR UPDATE", team_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
     let access = sqlx::query_scalar!(
         "SELECT tp.state >= 0 AND rp.release_at <= NOW() AND NOT t.is_banned AS \"access!\"
         FROM rb_team_puzzle tp
@@ -927,6 +932,16 @@ pub async fn submit_answer(
     })
     .await?;
 
+    if result
+        .triggers
+        .iter()
+        .any(|key| !crate::game::judge::valid_trigger_key(key))
+    {
+        return Err(RbInternalError::Other(
+            "judge returned an invalid trigger key".to_string(),
+        ));
+    }
+
     sqlx::query!(
         "UPDATE rb_submission
         SET saction = $1, sresult = $2, real_answer = $3, ignored = $5
@@ -939,6 +954,28 @@ pub async fn submit_answer(
     )
     .execute(&mut *tx)
     .await?;
+
+    if !result.ignored
+        && !matches!(result.action, RbJudgeAction::Error)
+        && !result.triggers.is_empty()
+    {
+        let inserted_triggers = sqlx::query!(
+            "INSERT INTO rb_team_puzzle_trigger
+                (team_id, puzzle_id, trigger_key, source_submission_id)
+            SELECT $1, $2, trigger_key, $4
+            FROM UNNEST($3::text[]) AS trigger_key
+            ON CONFLICT DO NOTHING;",
+            team_id,
+            puzzle_id,
+            &result.triggers,
+            submit_id
+        )
+        .execute(&mut *tx)
+        .await?;
+        if inserted_triggers.rows_affected() > 0 {
+            db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
+        }
+    }
 
     db::event_log::insert_tx(
         &mut tx,
@@ -1005,6 +1042,7 @@ pub async fn submit_answer(
             }
 
             if update.rows_affected() > 0 {
+                db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
                 solved = true;
                 do_unlock = true;
                 db::event_log::insert_tx(
@@ -1061,6 +1099,7 @@ pub async fn submit_answer(
             .await?;
 
             if result.rows_affected() > 0 {
+                db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
                 db::event_log::insert_tx(
                     &mut tx,
                     db::event_log::EventLogInput {
@@ -1297,6 +1336,7 @@ struct RbPuzzleStates {
     puzzle_slugs: HashMap<String, u32>,
     round_slugs: HashMap<String, u32>,
     round_puzzles: HashMap<u32, Vec<u32>>,
+    triggers: HashSet<(i32, String)>,
     game_started: bool,
 }
 
@@ -1327,6 +1367,11 @@ impl PuzzleStates for RbPuzzleStates {
     fn game_started(&self) -> bool {
         self.game_started
     }
+
+    fn is_triggered(&self, id: expr::types::PuzzleId, key: &str) -> bool {
+        self.triggers
+            .contains(&(id.try_into().unwrap_or(i32::MAX), key.to_string()))
+    }
 }
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
@@ -1347,6 +1392,14 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
 
     let game_id = info[0].game_id;
     let solved = info.iter().filter_map(|r| r.puzzle_id).collect();
+    let triggers = sqlx::query_as::<_, (i32, String)>(
+        "SELECT puzzle_id, trigger_key FROM rb_team_puzzle_trigger WHERE team_id = $1",
+    )
+    .bind(team_id)
+    .fetch_all(&app.db)
+    .await?
+    .into_iter()
+    .collect();
 
     let round_rows = sqlx::query!(
         "SELECT id, slug
@@ -1396,6 +1449,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         puzzle_slugs,
         round_slugs,
         round_puzzles,
+        triggers,
         game_started: info[0].is_locked,
     };
 
@@ -1427,6 +1481,15 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         )
         .fetch_all(&app.db)
         .await?;
+
+        if !inserted.is_empty() {
+            sqlx::query!(
+                "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = $1;",
+                team_id
+            )
+            .execute(&app.db)
+            .await?;
+        }
 
         for puzzle in inserted {
             db::event_log::insert_pool(
@@ -1510,6 +1573,23 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
         Some(expr::compile_gate_expr(unlock_cond).map_err(RbInternalError::Other)?)
     };
 
+    let trigger_rows = sqlx::query_as::<_, (i32, i32, String)>(
+        "SELECT tpt.team_id, tpt.puzzle_id, tpt.trigger_key
+        FROM rb_team_puzzle_trigger tpt
+        JOIN rb_team t ON t.id = tpt.team_id
+        WHERE t.game_id = $1",
+    )
+    .bind(game_id)
+    .fetch_all(&app.db)
+    .await?;
+    let mut team_triggers: HashMap<i32, HashSet<(i32, String)>> = HashMap::new();
+    for (team_id, trigger_puzzle_id, key) in trigger_rows {
+        team_triggers
+            .entry(team_id)
+            .or_default()
+            .insert((trigger_puzzle_id, key));
+    }
+
     let candidate_rows = sqlx::query!(
         "SELECT t.id, t.is_locked, solved.puzzle_id AS \"solved_puzzle_id?\"
         FROM rb_team t
@@ -1539,6 +1619,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
             puzzle_slugs: puzzle_slugs.clone(),
             round_slugs: round_slugs.clone(),
             round_puzzles: round_puzzles.clone(),
+            triggers: team_triggers.get(&team_id).cloned().unwrap_or_default(),
             game_started: team_locked,
         };
         let eligible = compiled_unlock_cond
@@ -1579,6 +1660,15 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
     .fetch_all(&app.db)
     .await?;
 
+    if !inserted_team_ids.is_empty() {
+        sqlx::query!(
+            "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = ANY($1);",
+            &inserted_team_ids
+        )
+        .execute(&app.db)
+        .await?;
+    }
+
     Ok(inserted_team_ids)
 }
 
@@ -1597,6 +1687,15 @@ pub async fn admin_clear_puzzle_team_states(
     puzzle_id: i32,
 ) -> Result<AdminClearPuzzleTeamStatesResult, RbInternalError> {
     let mut tx = pool.begin().await?;
+
+    let locked_team_ids = sqlx::query_scalar!(
+        "SELECT t.id FROM rb_team t
+        WHERE t.id IN (SELECT team_id FROM rb_team_puzzle WHERE puzzle_id = $1)
+        ORDER BY t.id FOR UPDATE;",
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
 
     let puzzle_state_team_ids = sqlx::query_scalar!(
         "DELETE FROM rb_team_puzzle
@@ -1634,6 +1733,15 @@ pub async fn admin_clear_puzzle_team_states(
     )
     .fetch_all(&mut *tx)
     .await?;
+
+    if !locked_team_ids.is_empty() {
+        sqlx::query!(
+            "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = ANY($1);",
+            &locked_team_ids
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
 
     tx.commit().await?;
 
@@ -2016,8 +2124,6 @@ pub struct RbPuzzleAdminData {
     pub sort: i32,
     pub title: String,
     pub ptype: i16,
-    pub content: String,
-    pub content_type: i16,
     pub judge: serde_json::Value,
     pub penalty: serde_json::Value,
     pub max_submit: Option<i32>,
@@ -2069,8 +2175,6 @@ pub struct RbPuzzleUpdateData {
     pub sort: Option<i32>,
     pub title: Option<String>,
     pub ptype: Option<i16>,
-    pub content: Option<String>,
-    pub content_type: Option<i16>,
     pub judge: Option<serde_json::Value>,
     pub penalty: Option<serde_json::Value>,
     #[serde(
@@ -2109,7 +2213,7 @@ pub async fn admin_list(
     let result = if let Some(game_id) = game_id {
         sqlx::query_as!(
             RbPuzzleAdminData,
-            "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
+            "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
@@ -2124,7 +2228,7 @@ pub async fn admin_list(
     } else {
         sqlx::query_as!(
             RbPuzzleAdminData,
-            "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
+            "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
@@ -2145,7 +2249,7 @@ pub async fn admin_get(
 ) -> Result<Option<RbPuzzleAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
-        "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
+        "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
@@ -2223,25 +2327,25 @@ pub async fn admin_create(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
-            slug, sort, title, ptype, content, content_type, judge, penalty,
+            slug, sort, title, ptype, judge, penalty,
             max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,
             ticket_enabled, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-            CASE WHEN $13 THEN NULL ELSE $12::INT END,
-            CASE WHEN $13 THEN NOW() ELSE NULL END,
-            r.id, $14, $15
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9,
+            CASE WHEN $11 THEN NULL ELSE $10::INT END,
+            CASE WHEN $11 THEN NOW() ELSE NULL END,
+            r.id, $12, $13
         FROM rb_round r
         WHERE r.id = $1
-            AND NOT ($13 AND $12::INT IS NOT NULL)
-            AND ($12::INT IS NULL OR EXISTS (
+            AND NOT ($11 AND $10::INT IS NOT NULL)
+            AND ($10::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_release_phase rp
-                WHERE rp.id = $12::INT AND rp.game_id = r.game_id
+                WHERE rp.id = $10::INT AND rp.game_id = r.game_id
                     AND rp.release_at > NOW()
                     AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)
             ))
         RETURNING id, game_id,
-            slug, sort, title, ptype, content, content_type, judge, penalty,
+            slug, sort, title, ptype, judge, penalty,
             max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,
             ticket_enabled, ticket_cooldown, ctime_at;",
         data.round_id,
@@ -2249,8 +2353,6 @@ pub async fn admin_create(
         data.sort,
         data.title,
         data.ptype,
-        data.content,
-        data.content_type,
         data.judge,
         data.penalty,
         data.max_submit,
@@ -2262,6 +2364,17 @@ pub async fn admin_create(
     )
     .fetch_optional(&mut *tx)
     .await?;
+    if let Some(puzzle) = &result {
+        sqlx::query!(
+            "INSERT INTO rb_content_block (puzzle_id, sort, name, content, content_type)
+            VALUES ($1, 0, 'Default', $2, $3);",
+            puzzle.id,
+            data.content,
+            data.content_type
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
     if let Some(puzzle) = &result
         && let Some(released_at) = puzzle.immediate_release_at
     {
@@ -2300,44 +2413,42 @@ pub async fn admin_update(
             END,
             title = COALESCE($5, p.title),
             ptype = COALESCE($6, p.ptype),
-            content = COALESCE($7, p.content),
-            content_type = COALESCE($8, p.content_type),
-            judge = COALESCE($9, p.judge),
-            penalty = COALESCE($10, p.penalty),
-            max_submit = CASE WHEN $11 THEN $12 ELSE p.max_submit END,
-            unlock_cond = COALESCE($13, p.unlock_cond),
+            judge = COALESCE($7, p.judge),
+            penalty = COALESCE($8, p.penalty),
+            max_submit = CASE WHEN $9 THEN $10 ELSE p.max_submit END,
+            unlock_cond = COALESCE($11, p.unlock_cond),
             release_phase_id = CASE
-                WHEN $16 THEN NULL
-                WHEN $14 THEN $15
+                WHEN $14 THEN NULL
+                WHEN $12 THEN $13
                 ELSE p.release_phase_id
             END,
             immediate_release_at = CASE
-                WHEN $16 THEN NOW()
-                WHEN $14 THEN NULL
+                WHEN $14 THEN NOW()
+                WHEN $12 THEN NULL
                 ELSE p.immediate_release_at
             END,
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $17::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $15::INT
             ), p.round_id),
-            ticket_enabled = COALESCE($18, p.ticket_enabled),
-            ticket_cooldown = COALESCE($19, p.ticket_cooldown)
+            ticket_enabled = COALESCE($16, p.ticket_enabled),
+            ticket_cooldown = COALESCE($17, p.ticket_cooldown)
         WHERE p.id = $1
-            AND NOT ($16 AND $14)
-            AND (NOT $14 OR $15::INT IS NULL OR EXISTS (
+            AND NOT ($14 AND $12)
+            AND (NOT $12 OR $13::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_release_phase target_phase
-                WHERE target_phase.id = $15::INT AND target_phase.game_id = p.game_id
+                WHERE target_phase.id = $13::INT AND target_phase.game_id = p.game_id
                     AND target_phase.release_at > NOW()
                     AND NOT EXISTS (SELECT 1 FROM rb_release_event target_event WHERE target_event.phase_id = target_phase.id)
             ))
-            AND ($17::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $17::INT
+            AND ($15::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $15::INT
             ))
-            AND ($17::INT IS NULL OR NOT EXISTS (
+            AND ($15::INT IS NULL OR NOT EXISTS (
                 SELECT 1 FROM rb_round owner_round
-                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $17::INT
+                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $15::INT
             ))
         RETURNING p.id, p.game_id,
-            p.slug, p.sort, p.title, p.ptype, p.content, p.content_type,
+            p.slug, p.sort, p.title, p.ptype,
             p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
@@ -2347,8 +2458,6 @@ pub async fn admin_update(
         data.sort,
         data.title,
         data.ptype,
-        data.content,
-        data.content_type,
         data.judge,
         data.penalty,
         max_submit_is_set,
@@ -2399,8 +2508,8 @@ pub async fn admin_batch_update_release_phase(
                         WHERE target_event.phase_id = target.id
                     )
             ))
-        RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype, p.content,
-            p.content_type, p.judge, p.penalty, p.max_submit, p.unlock_cond,
+        RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype,
+            p.judge, p.penalty, p.max_submit, p.unlock_cond,
             p.release_phase_id, p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         game_id,

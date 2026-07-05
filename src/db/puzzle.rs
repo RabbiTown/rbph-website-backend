@@ -1392,13 +1392,14 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
 
     let game_id = info[0].game_id;
     let solved = info.iter().filter_map(|r| r.puzzle_id).collect();
-    let triggers = sqlx::query_as::<_, (i32, String)>(
+    let triggers = sqlx::query!(
         "SELECT puzzle_id, trigger_key FROM rb_team_puzzle_trigger WHERE team_id = $1",
+        team_id
     )
-    .bind(team_id)
     .fetch_all(&app.db)
     .await?
     .into_iter()
+    .map(|row| (row.puzzle_id, row.trigger_key))
     .collect();
 
     let round_rows = sqlx::query!(
@@ -1573,21 +1574,21 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
         Some(expr::compile_gate_expr(unlock_cond).map_err(RbInternalError::Other)?)
     };
 
-    let trigger_rows = sqlx::query_as::<_, (i32, i32, String)>(
+    let trigger_rows = sqlx::query!(
         "SELECT tpt.team_id, tpt.puzzle_id, tpt.trigger_key
         FROM rb_team_puzzle_trigger tpt
         JOIN rb_team t ON t.id = tpt.team_id
         WHERE t.game_id = $1",
+        game_id
     )
-    .bind(game_id)
     .fetch_all(&app.db)
     .await?;
     let mut team_triggers: HashMap<i32, HashSet<(i32, String)>> = HashMap::new();
-    for (team_id, trigger_puzzle_id, key) in trigger_rows {
+    for row in trigger_rows {
         team_triggers
-            .entry(team_id)
+            .entry(row.team_id)
             .or_default()
-            .insert((trigger_puzzle_id, key));
+            .insert((row.puzzle_id, row.trigger_key));
     }
 
     let candidate_rows = sqlx::query!(

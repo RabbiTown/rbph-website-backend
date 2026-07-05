@@ -34,8 +34,16 @@ async fn get_contents(
     let game_id = db::round::get_round_game(&app.db, path.round_id)
         .await?
         .ok_or_else(RbError::not_found)?;
-    let contents =
-        db::content::visible_for_team(&app.db, team_id, None, Some(path.round_id), game_id).await?;
+    let contents = db::content::visible_for_team(
+        &app.db,
+        Some(&app.storage),
+        app.settings.storage.content_cdn_backend.is_some(),
+        team_id,
+        None,
+        Some(path.round_id),
+        game_id,
+    )
+    .await?;
     Ok(HttpResponse::Ok().json(RoundContentsResponse { code: 0, contents }))
 }
 

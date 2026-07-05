@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_content_block_unlock (team_id, content_block_id)\n                VALUES ($1, $2) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f7c74f22ecd2b7e1472888fbe7a5ef1c09cc777327a2f43e1725b910c51fbe1a"
+}

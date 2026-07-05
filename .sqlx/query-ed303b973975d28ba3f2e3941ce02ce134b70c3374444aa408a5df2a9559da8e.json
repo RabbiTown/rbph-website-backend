@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT content_blocks_dirty, is_locked FROM rb_team\n        WHERE id = $1 AND game_id = $2 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content_blocks_dirty",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_locked",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ed303b973975d28ba3f2e3941ce02ce134b70c3374444aa408a5df2a9559da8e"
+}

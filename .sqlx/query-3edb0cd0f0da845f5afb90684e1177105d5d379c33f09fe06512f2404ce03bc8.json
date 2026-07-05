@@ -1,0 +1,108 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_content_block (puzzle_id, round_id, sort, name)\n        SELECT $1, $2, COALESCE((\n            SELECT MAX(cb.sort) + 1 FROM rb_content_block cb\n            WHERE cb.puzzle_id IS NOT DISTINCT FROM $1\n                AND cb.round_id IS NOT DISTINCT FROM $2\n        ), 0), $3\n        WHERE (($1::INT IS NOT NULL AND $2::INT IS NULL\n                    AND EXISTS (SELECT 1 FROM rb_puzzle WHERE id = $1))\n                OR ($2::INT IS NOT NULL AND $1::INT IS NULL\n                    AND EXISTS (SELECT 1 FROM rb_round WHERE id = $2)))\n        RETURNING id, puzzle_id, round_id, sort, name, content, content_type,\n            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,\n            visibility_cond, ctime_at, utime_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "cdn_backend",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "cdn_object_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "cdn_relative_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "cdn_sha256",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "cdn_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 12,
+        "name": "visibility_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3edb0cd0f0da845f5afb90684e1177105d5d379c33f09fe06512f2404ce03bc8"
+}

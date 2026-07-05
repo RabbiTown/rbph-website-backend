@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tp.puzzle_id FROM rb_team_puzzle tp JOIN rb_puzzle p ON p.id = tp.puzzle_id\n        WHERE tp.team_id = $1 AND p.game_id = $2 AND tp.state >= 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b448bf8f4cac227644cfcca6d835b1fc6556a579329c7bbe521b08421a87b388"
+}

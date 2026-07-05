@@ -48,9 +48,16 @@ async fn get_contents(
     let game_id = db::puzzle::get_puzzle_game(&app.db, path.puzzle_id)
         .await?
         .ok_or_else(RbError::not_found)?;
-    let contents =
-        db::content::visible_for_team(&app.db, team_id, Some(path.puzzle_id), None, game_id)
-            .await?;
+    let contents = db::content::visible_for_team(
+        &app.db,
+        Some(&app.storage),
+        app.settings.storage.content_cdn_backend.is_some(),
+        team_id,
+        Some(path.puzzle_id),
+        None,
+        game_id,
+    )
+    .await?;
     Ok(HttpResponse::Ok().json(PuzzleContentsResponse { code: 0, contents }))
 }
 

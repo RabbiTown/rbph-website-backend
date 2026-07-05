@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tpt.puzzle_id, tpt.trigger_key FROM rb_team_puzzle_trigger tpt\n        JOIN rb_puzzle p ON p.id = tpt.puzzle_id WHERE tpt.team_id = $1 AND p.game_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "trigger_key",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a8a7f0309123821d589653168e40beb6ea7f0be0c51488fe252583bea7d18124"
+}

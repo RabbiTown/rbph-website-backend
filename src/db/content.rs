@@ -10,6 +10,7 @@ use crate::{
     error::RbInternalError,
     expr::{self, types::PuzzleStates},
     model::game::RbContentType,
+    module::storage::StorageManager,
 };
 
 #[derive(Clone, FromRow, Serialize)]
@@ -21,6 +22,11 @@ pub struct RbContentBlockAdminData {
     pub name: String,
     pub content: String,
     pub content_type: i16,
+    pub cdn_backend: Option<String>,
+    pub cdn_object_key: Option<String>,
+    pub cdn_relative_path: Option<String>,
+    pub cdn_sha256: Option<String>,
+    pub cdn_size: Option<i64>,
     pub visibility_cond: String,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -38,21 +44,73 @@ pub struct RbContentBlockShowData {
     pub content_url: Option<String>,
 }
 
+pub struct ContentBlockArtifact<'a> {
+    pub backend: &'a str,
+    pub object_key: &'a str,
+    pub relative_path: &'a str,
+    pub sha256: &'a str,
+    pub size: i64,
+}
+
+pub struct ContentBlockUpdate<'a> {
+    pub name: &'a str,
+    pub content: &'a str,
+    pub content_type: i16,
+    pub visibility_cond: &'a str,
+    pub update_artifact: bool,
+    pub artifact: Option<ContentBlockArtifact<'a>>,
+}
+
+pub struct ContentBlockArtifactDelete {
+    pub backend: String,
+    pub object_key: String,
+    pub relative_path: String,
+}
+
+impl RbContentBlockAdminData {
+    pub fn artifact_delete(&self) -> Option<ContentBlockArtifactDelete> {
+        Some(ContentBlockArtifactDelete {
+            backend: self.cdn_backend.clone()?,
+            object_key: self.cdn_object_key.clone()?,
+            relative_path: self.cdn_relative_path.clone()?,
+        })
+    }
+}
+
 pub async fn admin_list(
     pool: &DbPool,
     puzzle_id: Option<i32>,
     round_id: Option<i32>,
 ) -> Result<Vec<RbContentBlockAdminData>, RbInternalError> {
-    Ok(sqlx::query_as::<_, RbContentBlockAdminData>(
+    Ok(sqlx::query_as!(
+        RbContentBlockAdminData,
         "SELECT id, puzzle_id, round_id, sort, name, content, content_type,
+            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,
             visibility_cond, ctime_at, utime_at
         FROM rb_content_block
         WHERE puzzle_id IS NOT DISTINCT FROM $1 AND round_id IS NOT DISTINCT FROM $2
         ORDER BY sort, id",
+        puzzle_id,
+        round_id
     )
-    .bind(puzzle_id)
-    .bind(round_id)
     .fetch_all(pool)
+    .await?)
+}
+
+pub async fn admin_get(
+    pool: &DbPool,
+    id: i32,
+) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbContentBlockAdminData,
+        "SELECT id, puzzle_id, round_id, sort, name, content, content_type,
+            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,
+            visibility_cond, ctime_at, utime_at
+        FROM rb_content_block
+        WHERE id = $1",
+        id
+    )
+    .fetch_optional(pool)
     .await?)
 }
 
@@ -62,7 +120,8 @@ pub async fn admin_create(
     round_id: Option<i32>,
     name: &str,
 ) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
-    Ok(sqlx::query_as::<_, RbContentBlockAdminData>(
+    Ok(sqlx::query_as!(
+        RbContentBlockAdminData,
         "INSERT INTO rb_content_block (puzzle_id, round_id, sort, name)
         SELECT $1, $2, COALESCE((
             SELECT MAX(cb.sort) + 1 FROM rb_content_block cb
@@ -74,11 +133,12 @@ pub async fn admin_create(
                 OR ($2::INT IS NOT NULL AND $1::INT IS NULL
                     AND EXISTS (SELECT 1 FROM rb_round WHERE id = $2)))
         RETURNING id, puzzle_id, round_id, sort, name, content, content_type,
+            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,
             visibility_cond, ctime_at, utime_at",
+        puzzle_id,
+        round_id,
+        name
     )
-    .bind(puzzle_id)
-    .bind(round_id)
-    .bind(name)
     .fetch_optional(pool)
     .await?)
 }
@@ -86,34 +146,46 @@ pub async fn admin_create(
 pub async fn admin_update(
     tx: &mut Transaction<'_, Postgres>,
     id: i32,
-    name: &str,
-    content: &str,
-    content_type: i16,
-    visibility_cond: &str,
+    data: ContentBlockUpdate<'_>,
 ) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
-    let previous_condition = sqlx::query_scalar::<_, String>(
+    let previous_condition = sqlx::query_scalar!(
         "SELECT visibility_cond FROM rb_content_block WHERE id = $1",
+        id
     )
-    .bind(id)
     .fetch_optional(&mut **tx)
     .await?;
-    let result = sqlx::query_as::<_, RbContentBlockAdminData>(
+    let result = sqlx::query_as!(
+        RbContentBlockAdminData,
         "UPDATE rb_content_block
         SET name = $2, content = $3, content_type = $4, visibility_cond = $5,
+            cdn_backend = CASE WHEN $6 THEN $7 ELSE cdn_backend END,
+            cdn_object_key = CASE WHEN $6 THEN $8 ELSE cdn_object_key END,
+            cdn_relative_path = CASE WHEN $6 THEN $9 ELSE cdn_relative_path END,
+            cdn_sha256 = CASE WHEN $6 THEN $10 ELSE cdn_sha256 END,
+            cdn_size = CASE WHEN $6 THEN $11 ELSE cdn_size END,
             utime_at = NOW()
         WHERE id = $1
         RETURNING id, puzzle_id, round_id, sort, name, content, content_type,
+            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,
             visibility_cond, ctime_at, utime_at",
+        id,
+        data.name,
+        data.content,
+        data.content_type,
+        data.visibility_cond,
+        data.update_artifact,
+        data.artifact.as_ref().map(|artifact| artifact.backend),
+        data.artifact.as_ref().map(|artifact| artifact.object_key),
+        data.artifact
+            .as_ref()
+            .map(|artifact| artifact.relative_path),
+        data.artifact.as_ref().map(|artifact| artifact.sha256),
+        data.artifact.as_ref().map(|artifact| artifact.size),
     )
-    .bind(id)
-    .bind(name)
-    .bind(content)
-    .bind(content_type)
-    .bind(visibility_cond)
     .fetch_optional(&mut **tx)
     .await?;
-    if result.is_some() && previous_condition.as_deref() != Some(visibility_cond) {
-        sqlx::query(
+    if result.is_some() && previous_condition.as_deref() != Some(data.visibility_cond) {
+        sqlx::query!(
             "UPDATE rb_team SET content_blocks_dirty = TRUE
             WHERE game_id = (
                 SELECT COALESCE(p.game_id, r.game_id)
@@ -122,8 +194,8 @@ pub async fn admin_update(
                 LEFT JOIN rb_round r ON r.id = cb.round_id
                 WHERE cb.id = $1
             )",
+            id
         )
-        .bind(id)
         .execute(&mut **tx)
         .await?;
     }
@@ -131,12 +203,13 @@ pub async fn admin_update(
 }
 
 pub async fn admin_delete(pool: &DbPool, id: i32) -> Result<bool, RbInternalError> {
-    Ok(sqlx::query("DELETE FROM rb_content_block WHERE id = $1")
-        .bind(id)
-        .execute(pool)
-        .await?
-        .rows_affected()
-        > 0)
+    Ok(
+        sqlx::query!("DELETE FROM rb_content_block WHERE id = $1", id)
+            .execute(pool)
+            .await?
+            .rows_affected()
+            > 0,
+    )
 }
 
 pub async fn admin_reorder(
@@ -153,11 +226,13 @@ pub async fn admin_reorder(
     }
     let mut tx = pool.begin().await?;
     for (sort, id) in ids.iter().enumerate() {
-        sqlx::query("UPDATE rb_content_block SET sort = $2, utime_at = NOW() WHERE id = $1")
-            .bind(id)
-            .bind(sort as i32)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "UPDATE rb_content_block SET sort = $2, utime_at = NOW() WHERE id = $1",
+            id,
+            sort as i32
+        )
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(true)
@@ -165,27 +240,29 @@ pub async fn admin_reorder(
 
 pub async fn admin_clear_unlocks(pool: &DbPool, id: i32) -> Result<u64, RbInternalError> {
     let mut tx = pool.begin().await?;
-    let team_ids = sqlx::query_scalar::<_, i32>(
+    let team_ids = sqlx::query_scalar!(
         "SELECT t.id FROM rb_team t
         WHERE t.id IN (
             SELECT team_id FROM rb_team_content_block_unlock WHERE content_block_id = $1
         ) ORDER BY t.id FOR UPDATE",
+        id
     )
-    .bind(id)
     .fetch_all(&mut *tx)
     .await?;
-    let deleted = sqlx::query_scalar::<_, i32>(
+    let deleted = sqlx::query_scalar!(
         "DELETE FROM rb_team_content_block_unlock
         WHERE content_block_id = $1 RETURNING team_id",
+        id
     )
-    .bind(id)
     .fetch_all(&mut *tx)
     .await?;
     if !team_ids.is_empty() {
-        sqlx::query("UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = ANY($1)")
-            .bind(&team_ids)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = ANY($1)",
+            &team_ids
+        )
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(deleted.len() as u64)
@@ -195,10 +272,12 @@ pub async fn mark_team_dirty_tx(
     tx: &mut Transaction<'_, Postgres>,
     team_id: i32,
 ) -> Result<(), RbInternalError> {
-    sqlx::query("UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = $1")
-        .bind(team_id)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query!(
+        "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = $1",
+        team_id
+    )
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -241,54 +320,58 @@ async fn team_states(
     game_id: i32,
     game_started: bool,
 ) -> Result<TeamContentStates, RbInternalError> {
-    let solved = sqlx::query_scalar::<_, i32>(
+    let solved = sqlx::query_scalar!(
         "SELECT tp.puzzle_id FROM rb_team_puzzle tp JOIN rb_puzzle p ON p.id = tp.puzzle_id
         WHERE tp.team_id = $1 AND p.game_id = $2 AND tp.state >= 1",
+        team_id,
+        game_id
     )
-    .bind(team_id)
-    .bind(game_id)
     .fetch_all(&mut *conn)
     .await?
     .into_iter()
     .filter_map(|id| id.try_into().ok())
     .collect();
-    let puzzles = sqlx::query_as::<_, (i32, Option<String>, i32)>(
+    let puzzles = sqlx::query!(
         "SELECT id, slug, round_id FROM rb_puzzle WHERE game_id = $1",
+        game_id
     )
-    .bind(game_id)
     .fetch_all(&mut *conn)
     .await?;
-    let rounds = sqlx::query_as::<_, (i32, Option<String>)>(
-        "SELECT id, slug FROM rb_round WHERE game_id = $1",
-    )
-    .bind(game_id)
-    .fetch_all(&mut *conn)
-    .await?;
-    let triggers = sqlx::query_as::<_, (i32, String)>(
+    let rounds = sqlx::query!("SELECT id, slug FROM rb_round WHERE game_id = $1", game_id)
+        .fetch_all(&mut *conn)
+        .await?;
+    let triggers = sqlx::query!(
         "SELECT tpt.puzzle_id, tpt.trigger_key FROM rb_team_puzzle_trigger tpt
         JOIN rb_puzzle p ON p.id = tpt.puzzle_id WHERE tpt.team_id = $1 AND p.game_id = $2",
+        team_id,
+        game_id
     )
-    .bind(team_id)
-    .bind(game_id)
     .fetch_all(&mut *conn)
     .await?
     .into_iter()
-    .filter_map(|(id, key)| id.try_into().ok().map(|id| (id, key)))
+    .filter_map(|row| {
+        row.puzzle_id
+            .try_into()
+            .ok()
+            .map(|id| (id, row.trigger_key))
+    })
     .collect();
     let mut puzzle_slugs = HashMap::new();
     let mut round_puzzles: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (id, slug, round_id) in puzzles {
-        let Ok(id) = id.try_into() else { continue };
-        if let Some(slug) = slug {
+    for row in puzzles {
+        let Ok(id) = row.id.try_into() else {
+            continue;
+        };
+        if let Some(slug) = row.slug {
             puzzle_slugs.insert(slug, id);
         }
-        if let Ok(round_id) = round_id.try_into() {
+        if let Ok(round_id) = row.round_id.try_into() {
             round_puzzles.entry(round_id).or_default().push(id);
         }
     }
     let round_slugs = rounds
         .into_iter()
-        .filter_map(|(id, slug)| Some((slug?, id.try_into().ok()?)))
+        .filter_map(|row| Some((row.slug?, row.id.try_into().ok()?)))
         .collect();
     Ok(TeamContentStates {
         solved,
@@ -306,26 +389,28 @@ async fn refresh_team_unlocks_if_dirty(
     game_id: i32,
 ) -> Result<(), RbInternalError> {
     let mut tx = pool.begin().await?;
-    let team = sqlx::query_as::<_, (bool, bool)>(
+    let team = sqlx::query!(
         "SELECT content_blocks_dirty, is_locked FROM rb_team
         WHERE id = $1 AND game_id = $2 FOR UPDATE",
+        team_id,
+        game_id
     )
-    .bind(team_id)
-    .bind(game_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((dirty, game_started)) = team else {
+    let Some(team) = team else {
         tx.commit().await?;
         return Ok(());
     };
-    if !dirty {
+    if !team.content_blocks_dirty {
         tx.commit().await?;
         return Ok(());
     }
 
-    let blocks = sqlx::query_as::<_, RbContentBlockAdminData>(
+    let blocks = sqlx::query_as!(
+        RbContentBlockAdminData,
         "SELECT cb.id, cb.puzzle_id, cb.round_id, cb.sort, cb.name, cb.content,
-            cb.content_type, cb.visibility_cond, cb.ctime_at, cb.utime_at
+            cb.content_type, cb.cdn_backend, cb.cdn_object_key, cb.cdn_relative_path,
+            cb.cdn_sha256, cb.cdn_size, cb.visibility_cond, cb.ctime_at, cb.utime_at
         FROM rb_content_block cb
         LEFT JOIN rb_puzzle p ON p.id = cb.puzzle_id
         LEFT JOIN rb_round r ON r.id = cb.round_id
@@ -349,15 +434,15 @@ async fn refresh_team_unlocks_if_dirty(
                 ))
             )
         ORDER BY cb.id",
+        game_id,
+        team_id
     )
-    .bind(game_id)
-    .bind(team_id)
     .fetch_all(&mut *tx)
     .await?;
-    let mut unlocked = sqlx::query_scalar::<_, i32>(
+    let mut unlocked = sqlx::query_scalar!(
         "SELECT content_block_id FROM rb_team_content_block_unlock WHERE team_id = $1",
+        team_id
     )
-    .bind(team_id)
     .fetch_all(&mut *tx)
     .await?
     .into_iter()
@@ -367,18 +452,18 @@ async fn refresh_team_unlocks_if_dirty(
         .filter(|block| !unlocked.contains(&block.id))
         .collect::<Vec<_>>();
     if !pending.is_empty() {
-        let states = team_states(&mut tx, team_id, game_id, game_started).await?;
+        let states = team_states(&mut tx, team_id, game_id, team.is_locked).await?;
         for block in pending {
             let allowed = expr::compile_gate_expr(&block.visibility_cond)
                 .ok()
                 .is_some_and(|cond| expr::ast::eval_compiled(&states, &cond));
             if allowed {
-                sqlx::query(
+                sqlx::query!(
                     "INSERT INTO rb_team_content_block_unlock (team_id, content_block_id)
                 VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    team_id,
+                    block.id
                 )
-                .bind(team_id)
-                .bind(block.id)
                 .execute(&mut *tx)
                 .await?;
                 unlocked.insert(block.id);
@@ -386,16 +471,20 @@ async fn refresh_team_unlocks_if_dirty(
         }
     }
 
-    sqlx::query("UPDATE rb_team SET content_blocks_dirty = FALSE WHERE id = $1")
-        .bind(team_id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query!(
+        "UPDATE rb_team SET content_blocks_dirty = FALSE WHERE id = $1",
+        team_id
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }
 
 pub async fn visible_for_team(
     pool: &DbPool,
+    storage: Option<&StorageManager>,
+    content_cdn_enabled: bool,
     team_id: i32,
     puzzle_id: Option<i32>,
     round_id: Option<i32>,
@@ -403,10 +492,10 @@ pub async fn visible_for_team(
 ) -> Result<Vec<RbContentBlockShowData>, RbInternalError> {
     refresh_team_unlocks_if_dirty(pool, team_id, game_id).await?;
     let blocks = admin_list(pool, puzzle_id, round_id).await?;
-    let unlocked = sqlx::query_scalar::<_, i32>(
+    let unlocked = sqlx::query_scalar!(
         "SELECT content_block_id FROM rb_team_content_block_unlock WHERE team_id = $1",
+        team_id
     )
-    .bind(team_id)
     .fetch_all(pool)
     .await?
     .into_iter()
@@ -419,13 +508,32 @@ pub async fn visible_for_team(
         let mut hasher = Sha256::new();
         hasher.update(block.content_type.to_le_bytes());
         hasher.update(block.content.as_bytes());
+        let content_url = if content_cdn_enabled {
+            match (
+                storage,
+                block.cdn_backend.as_deref(),
+                block.cdn_object_key.as_deref(),
+                block.cdn_relative_path.as_deref(),
+            ) {
+                (Some(storage), Some(backend), Some(object_key), Some(relative_path)) => {
+                    storage.public_url(backend, object_key, relative_path)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         visible.push(RbContentBlockShowData {
             id: block.id,
             sort: block.sort,
-            content: block.content,
+            content: if content_url.is_some() {
+                String::new()
+            } else {
+                block.content
+            },
             content_type: block.content_type.into(),
             revision: format!("{:x}", hasher.finalize()),
-            content_url: None,
+            content_url,
         });
     }
     Ok(visible)

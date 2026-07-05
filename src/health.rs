@@ -14,7 +14,7 @@ async fn live() -> HttpResponse {
 }
 
 async fn ready(app: web::Data<AppState>) -> HttpResponse {
-    let db_ready = sqlx::query_scalar::<_, i32>("SELECT 1")
+    let db_ready = sqlx::query_scalar!("SELECT 1")
         .fetch_one(&app.db)
         .await
         .is_ok();

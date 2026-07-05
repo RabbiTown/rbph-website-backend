@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team SET content_blocks_dirty = TRUE\n            WHERE game_id = (\n                SELECT COALESCE(p.game_id, r.game_id)\n                FROM rb_content_block cb\n                LEFT JOIN rb_puzzle p ON p.id = cb.puzzle_id\n                LEFT JOIN rb_round r ON r.id = cb.round_id\n                WHERE cb.id = $1\n            )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f99a14f5e58476e3a962cfdb04427de311f0f4181fdd5dff33c627f84504128d"
+}

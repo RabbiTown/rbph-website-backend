@@ -527,13 +527,13 @@ where
     T: GameSettingGroup,
 {
     let path: Vec<String> = T::PATH.iter().map(|key| key.to_string()).collect();
-    let value = sqlx::query_scalar::<_, Option<Value>>(
+    let value = sqlx::query_scalar!(
         "SELECT settings #> $2
         FROM rb_game
         WHERE id = $1;",
+        game_id,
+        &path
     )
-    .bind(game_id)
-    .bind(path)
     .fetch_optional(pool)
     .await?;
 

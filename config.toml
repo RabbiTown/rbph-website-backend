@@ -11,6 +11,7 @@ max_connections = 32
 
 [storage]
 default_backend = "local"
+# content_cdn_backend = "cos"
 
 [storage.backends.local]
 kind = "local"

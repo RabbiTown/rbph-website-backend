@@ -9,12 +9,24 @@ CREATE TABLE rb_content_block (
     name            VARCHAR(120) NOT NULL,
     content         TEXT NOT NULL DEFAULT '',
     content_type    SMALLINT NOT NULL DEFAULT 0,
+    cdn_backend     VARCHAR(32),
+    cdn_object_key  TEXT,
+    cdn_relative_path TEXT,
+    cdn_sha256      VARCHAR(64),
+    cdn_size        BIGINT,
     visibility_cond TEXT NOT NULL DEFAULT 'default',
     ctime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     utime_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK ((puzzle_id IS NOT NULL)::INT + (round_id IS NOT NULL)::INT = 1),
     CHECK (content_type IN (0, 1, 2)),
-    CHECK (char_length(name) BETWEEN 1 AND 120)
+    CHECK (char_length(name) BETWEEN 1 AND 120),
+    CHECK (
+        (cdn_backend IS NULL AND cdn_object_key IS NULL AND cdn_relative_path IS NULL
+            AND cdn_sha256 IS NULL AND cdn_size IS NULL)
+        OR
+        (cdn_backend IS NOT NULL AND cdn_object_key IS NOT NULL AND cdn_relative_path IS NOT NULL
+            AND cdn_sha256 IS NOT NULL AND cdn_size IS NOT NULL AND cdn_size >= 0)
+    )
 );
 
 CREATE INDEX rb_idx_content_block_puzzle_sort

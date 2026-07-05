@@ -43,6 +43,8 @@ const fn default_db_max_connections() -> u32 {
 #[derive(Deserialize, Clone)]
 pub struct StorageConfig {
     pub default_backend: String,
+    #[serde(default)]
+    pub content_cdn_backend: Option<String>,
     pub backends: BTreeMap<String, StorageBackendConfig>,
 }
 
@@ -67,6 +69,13 @@ impl StorageConfig {
     pub fn validate(&self) -> Result<(), String> {
         if !self.backends.contains_key(&self.default_backend) {
             return Err("storage.default_backend must reference a configured backend".to_string());
+        }
+        if let Some(backend) = &self.content_cdn_backend
+            && !self.backends.contains_key(backend)
+        {
+            return Err(
+                "storage.content_cdn_backend must reference a configured backend".to_string(),
+            );
         }
         if !self
             .backends
@@ -277,18 +286,28 @@ mod tests {
         );
         let valid = StorageConfig {
             default_backend: "local".to_string(),
+            content_cdn_backend: None,
             backends,
         };
         assert!(valid.validate().is_ok());
 
         let invalid_default = StorageConfig {
             default_backend: "missing".to_string(),
+            content_cdn_backend: None,
             backends: valid.backends.clone(),
         };
         assert!(invalid_default.validate().is_err());
 
+        let invalid_content_cdn = StorageConfig {
+            default_backend: "local".to_string(),
+            content_cdn_backend: Some("missing".to_string()),
+            backends: valid.backends.clone(),
+        };
+        assert!(invalid_content_cdn.validate().is_err());
+
         let cos_only = StorageConfig {
             default_backend: "cos".to_string(),
+            content_cdn_backend: None,
             backends: BTreeMap::from([(
                 "cos".to_string(),
                 StorageBackendConfig::Cos {

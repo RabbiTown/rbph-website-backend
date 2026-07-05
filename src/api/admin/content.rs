@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use actix_web::{HttpResponse, Result, web};
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,10 @@ use crate::{
     expr,
     model::game::RbContentType,
 };
+
+const CONTENT_CDN_RELATIVE_PATH: &str = "body.txt";
+const CONTENT_CDN_MIME_TYPE: &str = "text/plain; charset=utf-8";
+const CONTENT_CDN_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
 #[derive(Deserialize)]
 struct OwnerPath {
@@ -62,6 +66,20 @@ struct OkResponse {
     code: i32,
 }
 
+struct PreparedArtifact {
+    backend: String,
+    object_key: String,
+    relative_path: String,
+    sha256: String,
+    size: i64,
+}
+
+struct PreparedBlockUpdate<'a> {
+    request: &'a UpdateBlockRequest,
+    update_artifact: bool,
+    artifact: Option<PreparedArtifact>,
+}
+
 fn valid_content_type(value: i16) -> bool {
     matches!(
         RbContentType::from(value),
@@ -71,6 +89,55 @@ fn valid_content_type(value: i16) -> bool {
 
 fn valid_condition(value: &str) -> bool {
     value == "default" || expr::compile_gate_expr(value).is_ok()
+}
+
+async fn upload_content_artifact(
+    app: &AppState,
+    backend: &str,
+    content: &str,
+) -> Result<PreparedArtifact, RbInternalError> {
+    let object_key = format!("content-{}", uuid::Uuid::new_v4());
+    let stored = app
+        .storage
+        .store_public_file(
+            backend,
+            &object_key,
+            CONTENT_CDN_RELATIVE_PATH,
+            content.as_bytes(),
+            CONTENT_CDN_MIME_TYPE,
+            Some(CONTENT_CDN_CACHE_CONTROL),
+        )
+        .await?;
+    Ok(PreparedArtifact {
+        backend: backend.to_string(),
+        object_key,
+        relative_path: CONTENT_CDN_RELATIVE_PATH.to_string(),
+        sha256: stored.sha256,
+        size: stored.size.try_into().unwrap_or(i64::MAX),
+    })
+}
+
+async fn delete_content_artifact(
+    app: &AppState,
+    artifact: &db::content::ContentBlockArtifactDelete,
+) {
+    if let Err(error) = app
+        .storage
+        .delete_files(
+            &artifact.backend,
+            &artifact.object_key,
+            std::slice::from_ref(&artifact.relative_path),
+        )
+        .await
+    {
+        log::warn!(
+            "failed to delete content CDN artifact {}/{} from {}: {}",
+            artifact.object_key,
+            artifact.relative_path,
+            artifact.backend,
+            error
+        );
+    }
 }
 
 async fn list_owner(
@@ -124,11 +191,12 @@ async fn update_owner(
     }) {
         return RbError::bad_req(-2).http_err();
     }
-    let owned = db::content::admin_list(&app.db, puzzle_id, round_id)
-        .await?
+    let current = db::content::admin_list(&app.db, puzzle_id, round_id).await?;
+    let current_by_id = current
         .into_iter()
-        .map(|block| block.id)
-        .collect::<HashSet<_>>();
+        .map(|block| (block.id, block))
+        .collect::<HashMap<_, _>>();
+    let owned = current_by_id.keys().copied().collect::<HashSet<_>>();
     let requested = request
         .blocks
         .iter()
@@ -138,23 +206,96 @@ async fn update_owner(
         return RbError::bad_req(-2).http_err();
     }
 
-    let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
+    let content_cdn_backend = app
+        .settings
+        .storage
+        .content_cdn_backend
+        .as_deref()
+        .filter(|backend| app.storage.supports_public_url(backend));
+    let mut uploaded = Vec::new();
+    let mut stale = Vec::new();
+    let mut prepared = Vec::with_capacity(request.blocks.len());
     for block in &request.blocks {
-        if db::content::admin_update(
-            &mut tx,
-            block.id,
-            block.name.trim(),
-            &block.content,
-            block.content_type,
-            &block.visibility_cond,
-        )
-        .await?
-        .is_none()
-        {
-            return RbError::not_found().code(-1).http_err();
-        }
+        let current = current_by_id
+            .get(&block.id)
+            .ok_or_else(RbError::not_found)?;
+        let content_changed =
+            current.content != block.content || current.content_type != block.content_type;
+        let artifact = if content_changed {
+            if let Some(old) = current.artifact_delete() {
+                stale.push(old);
+            }
+            if let Some(backend) = content_cdn_backend
+                && !block.content.is_empty()
+            {
+                let artifact = upload_content_artifact(app, backend, &block.content).await?;
+                uploaded.push(db::content::ContentBlockArtifactDelete {
+                    backend: artifact.backend.clone(),
+                    object_key: artifact.object_key.clone(),
+                    relative_path: artifact.relative_path.clone(),
+                });
+                Some(artifact)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        prepared.push(PreparedBlockUpdate {
+            request: block,
+            update_artifact: content_changed,
+            artifact,
+        });
     }
-    tx.commit().await.map_err(RbInternalError::from)?;
+
+    let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
+    let update_result = async {
+        for block in &prepared {
+            let artifact =
+                block
+                    .artifact
+                    .as_ref()
+                    .map(|artifact| db::content::ContentBlockArtifact {
+                        backend: &artifact.backend,
+                        object_key: &artifact.object_key,
+                        relative_path: &artifact.relative_path,
+                        sha256: &artifact.sha256,
+                        size: artifact.size,
+                    });
+            if db::content::admin_update(
+                &mut tx,
+                block.request.id,
+                db::content::ContentBlockUpdate {
+                    name: block.request.name.trim(),
+                    content: &block.request.content,
+                    content_type: block.request.content_type,
+                    visibility_cond: &block.request.visibility_cond,
+                    update_artifact: block.update_artifact,
+                    artifact,
+                },
+            )
+            .await?
+            .is_none()
+            {
+                return Err(RbError::not_found().code(-1).into());
+            }
+        }
+        tx.commit()
+            .await
+            .map_err(RbInternalError::from)
+            .map_err(actix_web::Error::from)?;
+        Ok::<(), actix_web::Error>(())
+    }
+    .await;
+    if let Err(error) = update_result {
+        for artifact in &uploaded {
+            delete_content_artifact(app, artifact).await;
+        }
+        return Err(error);
+    }
+    for artifact in &stale {
+        delete_content_artifact(app, artifact).await;
+    }
     let blocks = db::content::admin_list(&app.db, puzzle_id, round_id).await?;
     Ok(HttpResponse::Ok().json(ListResponse { code: 0, blocks }))
 }
@@ -216,8 +357,14 @@ async fn round_update(
 }
 
 async fn delete(path: web::Path<BlockPath>, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let artifact = db::content::admin_get(&app.db, path.block_id)
+        .await?
+        .and_then(|block| block.artifact_delete());
     if !db::content::admin_delete(&app.db, path.block_id).await? {
         return RbError::not_found().code(-1).http_err();
+    }
+    if let Some(artifact) = &artifact {
+        delete_content_artifact(&app, artifact).await;
     }
     Ok(HttpResponse::Ok().json(OkResponse { code: 0 }))
 }

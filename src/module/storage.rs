@@ -93,6 +93,12 @@ pub struct StoredAssetFile {
     pub path: String,
 }
 
+#[derive(Clone)]
+pub struct StoredPublicFile {
+    pub size: u64,
+    pub sha256: String,
+}
+
 pub struct StoredAssetGroup {
     pub size: u64,
     pub sha256: String,
@@ -225,6 +231,35 @@ impl LocalStorage {
             size: group_size,
             sha256: format!("{:x}", group_hasher.finalize()),
             files: stored_files,
+        })
+    }
+
+    pub async fn store_public_file(
+        &self,
+        object_key: &str,
+        relative_path: &str,
+        bytes: &[u8],
+        _mime_type: &str,
+        _cache_control: Option<&str>,
+    ) -> Result<StoredPublicFile, RbInternalError> {
+        fs::create_dir_all(self.root()).await?;
+
+        let final_path = self.object_path(object_key, relative_path);
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        let tmp_path = self.temp_path(object_key);
+        let mut file = fs::File::create(&tmp_path).await?;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        fs::rename(&tmp_path, &final_path).await?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        Ok(StoredPublicFile {
+            size: bytes.len() as u64,
+            sha256: format!("{:x}", hasher.finalize()),
         })
     }
 
@@ -378,6 +413,13 @@ impl StorageManager {
         self.backends.contains_key(backend)
     }
 
+    pub fn supports_public_url(&self, backend: &str) -> bool {
+        matches!(
+            self.backends.get(backend).map(|instance| &instance.backend),
+            Some(StorageBackend::Cos(_))
+        )
+    }
+
     pub async fn store_group_files(
         &self,
         backend: &str,
@@ -387,6 +429,34 @@ impl StorageManager {
         match &self.backend(backend)?.backend {
             StorageBackend::Local(local) => local.store_group_files(object_key, files).await,
             StorageBackend::Cos(cos) => cos.store_group_files(object_key, files).await,
+        }
+    }
+
+    pub async fn store_public_file(
+        &self,
+        backend: &str,
+        object_key: &str,
+        relative_path: &str,
+        bytes: &[u8],
+        mime_type: &str,
+        cache_control: Option<&str>,
+    ) -> Result<StoredPublicFile, RbInternalError> {
+        match &self.backend(backend)?.backend {
+            StorageBackend::Local(local) => {
+                local
+                    .store_public_file(object_key, relative_path, bytes, mime_type, cache_control)
+                    .await
+            }
+            StorageBackend::Cos(cos) => {
+                cos.put(object_key, relative_path, bytes, mime_type, cache_control)
+                    .await?;
+                let mut hasher = Sha256::new();
+                hasher.update(bytes);
+                Ok(StoredPublicFile {
+                    size: bytes.len() as u64,
+                    sha256: format!("{:x}", hasher.finalize()),
+                })
+            }
         }
     }
 
@@ -531,7 +601,13 @@ impl CosStorage {
                 &mut used_paths,
             );
             if let Err(error) = self
-                .put(object_key, &relative_path, &file.bytes, &file.mime_type)
+                .put(
+                    object_key,
+                    &relative_path,
+                    &file.bytes,
+                    &file.mime_type,
+                    None,
+                )
                 .await
             {
                 for stored in &stored_files {
@@ -607,15 +683,17 @@ impl CosStorage {
         relative_path: &str,
         bytes: &[u8],
         mime_type: &str,
+        cache_control: Option<&str>,
     ) -> Result<(), RbInternalError> {
         let path = cos_object_path(object_key, relative_path);
-        let response = self
+        let mut request = self
             .signed_request(Method::PUT, &path, &[])
             .header(header::CONTENT_TYPE, mime_type)
-            .body(bytes.to_vec())
-            .send()
-            .await
-            .map_err(storage_http_error)?;
+            .body(bytes.to_vec());
+        if let Some(cache_control) = cache_control {
+            request = request.header(header::CACHE_CONTROL, cache_control);
+        }
+        let response = request.send().await.map_err(storage_http_error)?;
         ensure_cos_success(response).await
     }
 

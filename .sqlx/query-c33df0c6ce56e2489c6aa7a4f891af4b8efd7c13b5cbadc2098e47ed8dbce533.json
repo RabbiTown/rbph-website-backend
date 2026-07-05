@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cb.id, cb.puzzle_id, cb.round_id, cb.sort, cb.name, cb.content,\n            cb.content_type, cb.cdn_backend, cb.cdn_object_key, cb.cdn_relative_path,\n            cb.cdn_sha256, cb.cdn_size, cb.visibility_cond, cb.ctime_at, cb.utime_at\n        FROM rb_content_block cb\n        LEFT JOIN rb_puzzle p ON p.id = cb.puzzle_id\n        LEFT JOIN rb_round r ON r.id = cb.round_id\n        WHERE COALESCE(p.game_id, r.game_id) = $1\n            AND cb.visibility_cond != 'default'\n            AND (\n                (cb.puzzle_id IS NOT NULL AND EXISTS (\n                    SELECT 1 FROM rb_team_puzzle tp\n                    JOIN rb_puzzle_effective_release release\n                        ON release.puzzle_id = tp.puzzle_id\n                    WHERE tp.team_id = $2 AND tp.puzzle_id = cb.puzzle_id\n                        AND tp.state >= 0 AND release.release_at <= NOW()\n                ))\n                OR (cb.round_id IS NOT NULL AND EXISTS (\n                    SELECT 1 FROM rb_team_puzzle tp\n                    JOIN rb_puzzle owner_puzzle ON owner_puzzle.id = tp.puzzle_id\n                    JOIN rb_puzzle_effective_release release\n                        ON release.puzzle_id = tp.puzzle_id\n                    WHERE tp.team_id = $2 AND owner_puzzle.round_id = cb.round_id\n                        AND tp.state >= 0 AND release.release_at <= NOW()\n                ))\n            )\n        ORDER BY cb.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "cdn_backend",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "cdn_object_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "cdn_relative_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "cdn_sha256",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "cdn_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 12,
+        "name": "visibility_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c33df0c6ce56e2489c6aa7a4f891af4b8efd7c13b5cbadc2098e47ed8dbce533"
+}

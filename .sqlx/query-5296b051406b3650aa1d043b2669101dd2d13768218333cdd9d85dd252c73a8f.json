@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.growth, gf.state\n        FROM rb_currency c\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE c.id = $1 AND c.game_id = $2\n        FOR UPDATE OF c, gf;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "growth",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5296b051406b3650aa1d043b2669101dd2d13768218333cdd9d85dd252c73a8f"
+}

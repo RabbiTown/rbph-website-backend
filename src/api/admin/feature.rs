@@ -49,6 +49,7 @@ fn parse_feature(value: &str) -> Option<GameFeature> {
         "direct_message" => Some(GameFeature::DirectMessage),
         "puzzle_ticket" => Some(GameFeature::PuzzleTicket),
         "leaderboard" => Some(GameFeature::Leaderboard),
+        "currency" => Some(GameFeature::Currency),
         _ => None,
     }
 }

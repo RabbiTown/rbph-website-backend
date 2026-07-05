@@ -13,6 +13,7 @@ pub enum GameFeature {
     DirectMessage,
     PuzzleTicket,
     Leaderboard,
+    Currency,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -26,11 +27,12 @@ pub enum GameFeatureState {
 }
 
 impl GameFeature {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::TeamFormation,
         Self::DirectMessage,
         Self::PuzzleTicket,
         Self::Leaderboard,
+        Self::Currency,
     ];
 
     pub const fn value(self) -> i16 {
@@ -39,6 +41,7 @@ impl GameFeature {
             Self::DirectMessage => 1,
             Self::PuzzleTicket => 2,
             Self::Leaderboard => 3,
+            Self::Currency => 4,
         }
     }
 
@@ -48,6 +51,7 @@ impl GameFeature {
                 GameFeatureState::Open
             }
             Self::Leaderboard => GameFeatureState::Live,
+            Self::Currency => GameFeatureState::Closed,
         }
     }
 
@@ -60,6 +64,7 @@ impl GameFeature {
                 GameFeatureState::Open,
             ],
             Self::Leaderboard => vec![GameFeatureState::Live, GameFeatureState::Locked],
+            Self::Currency => vec![GameFeatureState::Closed, GameFeatureState::Open],
         }
     }
 
@@ -72,6 +77,8 @@ impl GameFeature {
             (Self::DirectMessage | Self::PuzzleTicket, GameFeatureState::Open) => Some(2),
             (Self::Leaderboard, GameFeatureState::Live) => Some(0),
             (Self::Leaderboard, GameFeatureState::Locked) => Some(1),
+            (Self::Currency, GameFeatureState::Closed) => Some(0),
+            (Self::Currency, GameFeatureState::Open) => Some(1),
             _ => None,
         }
     }
@@ -85,6 +92,8 @@ impl GameFeature {
             (Self::DirectMessage | Self::PuzzleTicket, 2) => Some(GameFeatureState::Open),
             (Self::Leaderboard, 0) => Some(GameFeatureState::Live),
             (Self::Leaderboard, 1) => Some(GameFeatureState::Locked),
+            (Self::Currency, 0) => Some(GameFeatureState::Closed),
+            (Self::Currency, 1) => Some(GameFeatureState::Open),
             _ => None,
         }
     }
@@ -284,6 +293,57 @@ async fn lock_leaderboard_tx(
     Ok(())
 }
 
+pub async fn settle_currency_growth_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    game_id: i32,
+    currency_id: Option<i32>,
+    effective_at: OffsetDateTime,
+) -> Result<(), RbInternalError> {
+    sqlx::query!(
+        r#"UPDATE rb_team_currency tc
+        SET amount = GREATEST(
+                0::NUMERIC,
+                LEAST(
+                    tc.amount::NUMERIC
+                        + GREATEST(
+                            FLOOR(EXTRACT(EPOCH FROM ($3 - tc.utime_at)) / 60),
+                            0::NUMERIC
+                        ) * (c.growth + tc.growth)::NUMERIC,
+                    c.max_amount::NUMERIC
+                )
+            )::BIGINT,
+            utime_at = GREATEST(tc.utime_at, $3)
+        FROM rb_currency c
+        WHERE tc.currency_id = c.id
+            AND c.game_id = $1
+            AND ($2::INT IS NULL OR c.id = $2);"#,
+        game_id,
+        currency_id,
+        effective_at
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn enable_currency_growth_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    game_id: i32,
+    effective_at: OffsetDateTime,
+) -> Result<(), RbInternalError> {
+    sqlx::query!(
+        "UPDATE rb_team_currency tc
+        SET utime_at = GREATEST(tc.utime_at, $2)
+        FROM rb_currency c
+        WHERE tc.currency_id = c.id AND c.game_id = $1;",
+        game_id,
+        effective_at
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn set_state_tx(
     tx: &mut Transaction<'_, Postgres>,
     game_id: i32,
@@ -335,6 +395,18 @@ async fn set_state_tx(
                 .await?;
             }
             _ => return Err("Invalid leaderboard state".into()),
+        }
+    }
+
+    if old != target && matches!(change.feature, GameFeature::Currency) {
+        match change.state {
+            GameFeatureState::Closed => {
+                settle_currency_growth_tx(tx, game_id, None, effective_at).await?;
+            }
+            GameFeatureState::Open => {
+                enable_currency_growth_tx(tx, game_id, effective_at).await?;
+            }
+            _ => return Err("Invalid currency state".into()),
         }
     }
 
@@ -452,6 +524,14 @@ mod tests {
         assert!(!valid_changes(&[FeatureChangeData {
             feature: GameFeature::Leaderboard,
             state: GameFeatureState::Open,
+        }]));
+        assert!(valid_changes(&[FeatureChangeData {
+            feature: GameFeature::Currency,
+            state: GameFeatureState::Open,
+        }]));
+        assert!(!valid_changes(&[FeatureChangeData {
+            feature: GameFeature::Currency,
+            state: GameFeatureState::Live,
         }]));
         assert!(!valid_changes(&[
             FeatureChangeData {

@@ -218,6 +218,15 @@ pub async fn create_currency(
 ) -> Result<Option<RbCurrencyAdminData>, RbInternalError> {
     let mut tx = pool.begin().await?;
 
+    sqlx::query_scalar!(
+        "SELECT state FROM rb_game_feature
+        WHERE game_id = $1 AND feature_type = 4
+        FOR UPDATE;",
+        game_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
     let Some(currency) = sqlx::query_as!(
         RbCurrencyAdminData,
         "INSERT INTO rb_currency (cname, slug, growth, init_amount, init_hidden, prec, max_amount, game_id)
@@ -243,8 +252,12 @@ pub async fn create_currency(
 
     sqlx::query!(
         "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
-        SELECT id, $2, $3, $4 FROM rb_team
-        WHERE game_id = $1
+        SELECT t.id, $2, $3, $4 FROM rb_team t
+        WHERE t.game_id = $1
+            AND EXISTS (
+                SELECT 1 FROM rb_submission s
+                WHERE s.team_id = t.id AND s.saction = 3
+            )
         ON CONFLICT (team_id, currency_id) DO NOTHING;",
         game_id,
         currency.id,
@@ -264,6 +277,33 @@ pub async fn update_currency(
     currency_id: i32,
     data: &RbCurrencyUpdateData,
 ) -> Result<Option<RbCurrencyAdminData>, RbInternalError> {
+    let mut tx = pool.begin().await?;
+    let current = sqlx::query!(
+        "SELECT c.growth, gf.state
+        FROM rb_currency c
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
+        WHERE c.id = $1 AND c.game_id = $2
+        FOR UPDATE OF c, gf;",
+        currency_id,
+        game_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    if current.growth != data.growth && current.state == 1 {
+        db::feature::settle_currency_growth_tx(
+            &mut tx,
+            game_id,
+            Some(currency_id),
+            time::OffsetDateTime::now_utc(),
+        )
+        .await?;
+    }
+
     let result = sqlx::query_as!(
         RbCurrencyAdminData,
         "UPDATE rb_currency
@@ -286,9 +326,10 @@ pub async fn update_currency(
         data.prec,
         data.max_amount
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(result)
 }
 

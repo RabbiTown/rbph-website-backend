@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT state FROM rb_game_feature\n        WHERE game_id = $1 AND feature_type = 4\n        FOR UPDATE;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "79c51dcaa04ed67a4ded56f2f41394bcaa96286fb48b88f3ede7132e8121488c"
+}

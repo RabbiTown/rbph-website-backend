@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden, utime_at)\n                SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount,\n                    c.init_hidden AS hidden, $2\n                FROM rb_team t\n                JOIN rb_currency c ON c.game_id = t.game_id\n                WHERE t.id = $1\n                ON CONFLICT (team_id, currency_id) DO NOTHING;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ca7270c0b613d0f6c31913a328cd4ae8cdc8fbef2a3be512718ae2ea4348ae56"
+}

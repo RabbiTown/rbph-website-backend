@@ -863,6 +863,7 @@ pub async fn submit_answer(
     }
     let submit_row = submit_row.unwrap();
     let submit_id = submit_row.id;
+    let submit_ctime_at = submit_row.ctime_at;
 
     let puzzle_info = sqlx::query!(
         "SELECT id, game_id, round_id, title
@@ -1037,6 +1038,20 @@ pub async fn submit_answer(
             }
         }
         RbJudgeAction::StartGame => {
+            let currency_feature = sqlx::query!(
+                "SELECT state, utime_at FROM rb_game_feature
+                WHERE game_id = $1 AND feature_type = 4
+                FOR UPDATE;",
+                puzzle_info.game_id
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            let currency_start_at = if currency_feature.state == 1 {
+                submit_ctime_at.max(currency_feature.utime_at)
+            } else {
+                submit_ctime_at
+            };
+
             let result = sqlx::query!(
                 "UPDATE rb_team SET is_locked = TRUE
                 WHERE id = $1 AND NOT is_locked;",
@@ -1073,20 +1088,22 @@ pub async fn submit_answer(
                 )
                 .await?;
 
-                sqlx::query!(
-                    "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
-                    SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount, c.init_hidden AS hidden
-                    FROM rb_team t
-                    JOIN rb_currency c ON c.game_id = t.game_id
-                    WHERE t.id = $1
-                    ON CONFLICT (team_id, currency_id) DO NOTHING;",
-                    team_id
-                )
-                .execute(&mut *tx)
-                .await?;
-
                 do_unlock = true;
             }
+
+            sqlx::query!(
+                "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden, utime_at)
+                SELECT t.id AS team_id, c.id AS currency_id, c.init_amount AS amount,
+                    c.init_hidden AS hidden, $2
+                FROM rb_team t
+                JOIN rb_currency c ON c.game_id = t.game_id
+                WHERE t.id = $1
+                ON CONFLICT (team_id, currency_id) DO NOTHING;",
+                team_id,
+                currency_start_at
+            )
+            .execute(&mut *tx)
+            .await?;
         }
         RbJudgeAction::Fail => {
             let info = sqlx::query!(

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_currency tc\n        SET utime_at = GREATEST(tc.utime_at, $2)\n        FROM rb_currency c\n        WHERE tc.currency_id = c.id AND c.game_id = $1;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "65cab06e9f9f03f045386eae1eff52a15de187f959c4be4a4af7552adbfa9e75"
+}

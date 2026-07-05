@@ -16,7 +16,7 @@ pub struct RbTeamPutData {
     pub game_id: i32,
 }
 
-async fn init_team_resources_tx(
+async fn init_team_puzzles_tx(
     tx: &mut Transaction<'_, Postgres>,
     team_id: i32,
     game_id: i32,
@@ -27,18 +27,6 @@ async fn init_team_resources_tx(
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id AND r.game_id = $2
         WHERE p.unlock_cond = 'default'
-        ON CONFLICT DO NOTHING;",
-        team_id,
-        game_id
-    )
-    .execute(&mut **tx)
-    .await?;
-
-    sqlx::query!(
-        "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
-        SELECT $1, c.id, c.init_amount, c.init_hidden
-        FROM rb_currency c
-        WHERE c.game_id = $2
         ON CONFLICT DO NOTHING;",
         team_id,
         game_id
@@ -329,7 +317,7 @@ pub async fn user_create(
         return Ok(TeamCreateResult::ToMany);
     }
 
-    init_team_resources_tx(&mut tx, team_id, data.game_id).await?;
+    init_team_puzzles_tx(&mut tx, team_id, data.game_id).await?;
 
     db::event_log::insert_tx(
         &mut tx,
@@ -619,14 +607,17 @@ async fn get_currency_info_impl(
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
                 c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
-                LEAST(
-                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
-                    c.max_amount::NUMERIC
-                )::BIGINT AS \"current_amount!\",
+                CASE WHEN gf.state = 1 THEN
+                    GREATEST(0::NUMERIC, LEAST(
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    ))::BIGINT
+                ELSE tc.amount END AS \"current_amount!\",
                 c.max_amount, tc.hidden, tc.utime_at
         FROM rb_currency c
         JOIN rb_team_currency tc ON tc.currency_id = c.id
-        WHERE tc.team_id = $1 AND ($2 OR NOT tc.hidden);",
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
+        WHERE tc.team_id = $1 AND ($2 OR (NOT tc.hidden AND gf.state = 1));",
         team_id,
         include_hidden
     )
@@ -661,13 +652,16 @@ async fn get_currency_info_one_impl(
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
                 c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
-                LEAST(
-                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
-                    c.max_amount::NUMERIC
-                )::BIGINT AS \"current_amount!\",
+                CASE WHEN gf.state = 1 THEN
+                    GREATEST(0::NUMERIC, LEAST(
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    ))::BIGINT
+                ELSE tc.amount END AS \"current_amount!\",
                 c.max_amount, tc.hidden, tc.utime_at
         FROM rb_currency c
         JOIN rb_team_currency tc ON tc.currency_id = c.id
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
         WHERE tc.team_id = $1 AND c.id = $2 AND ($3 OR NOT tc.hidden);",
         team_id,
         currency_id,
@@ -699,13 +693,16 @@ async fn get_currency_info_one_by_slug_impl(
         "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",
                 c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
-                LEAST(
-                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
-                    c.max_amount::NUMERIC
-                )::BIGINT AS \"current_amount!\",
+                CASE WHEN gf.state = 1 THEN
+                    GREATEST(0::NUMERIC, LEAST(
+                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    ))::BIGINT
+                ELSE tc.amount END AS \"current_amount!\",
                 c.max_amount, tc.hidden, tc.utime_at
         FROM rb_currency c
         JOIN rb_team_currency tc ON tc.currency_id = c.id
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
         WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3 AND ($4 OR NOT tc.hidden);",
         team_id,
         game_id,
@@ -763,14 +760,17 @@ async fn lock_currency_runtime(
             c.slug AS "slug!",
             c.cname AS "name!",
             c.prec AS "prec!",
-            LEAST(
-                tc.amount::NUMERIC
-                    + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
-                c.max_amount::NUMERIC
-            )::BIGINT AS "current_amount!",
+            CASE WHEN gf.state = 1 THEN
+                GREATEST(0::NUMERIC, LEAST(
+                    tc.amount::NUMERIC
+                        + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                    c.max_amount::NUMERIC
+                ))::BIGINT
+            ELSE tc.amount END AS "current_amount!",
             c.max_amount AS "max_amount!"
         FROM rb_team_currency tc
         JOIN rb_currency c ON tc.currency_id = c.id
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
         WHERE tc.team_id = $1 AND tc.currency_id = $2
         FOR UPDATE;"#,
         team_id,
@@ -796,14 +796,17 @@ async fn lock_currency_runtime_by_slug(
             c.slug AS "slug!",
             c.cname AS "name!",
             c.prec AS "prec!",
-            LEAST(
-                tc.amount::NUMERIC
-                    + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
-                c.max_amount::NUMERIC
-            )::BIGINT AS "current_amount!",
+            CASE WHEN gf.state = 1 THEN
+                GREATEST(0::NUMERIC, LEAST(
+                    tc.amount::NUMERIC
+                        + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                    c.max_amount::NUMERIC
+                ))::BIGINT
+            ELSE tc.amount END AS "current_amount!",
             c.max_amount AS "max_amount!"
         FROM rb_team_currency tc
         JOIN rb_currency c ON tc.currency_id = c.id
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
         WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3
         FOR UPDATE;"#,
         team_id,
@@ -1615,7 +1618,7 @@ pub async fn admin_create(
     )
     .execute(&mut *tx)
     .await?;
-    init_team_resources_tx(&mut tx, team_id, game_id).await?;
+    init_team_puzzles_tx(&mut tx, team_id, game_id).await?;
     tx.commit().await?;
     Ok(AdminTeamCreateResult::Ok(team_id))
 }

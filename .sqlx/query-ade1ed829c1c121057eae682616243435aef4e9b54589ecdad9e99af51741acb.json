@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, game_id, round_id, title\n        FROM rb_puzzle\n        WHERE id = $1;",
+  "query": "SELECT id, game_id, round_id, title, submit_requirements\n        FROM rb_puzzle\n        WHERE id = $1;",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "ordinal": 3,
         "name": "title",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
       }
     ],
     "parameters": {
@@ -33,8 +38,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "bde4fab2fffff27c9382e7cab5a8dc202d8345a665dec332dd42283b16833e3d"
+  "hash": "ade1ed829c1c121057eae682616243435aef4e9b54589ecdad9e99af51741acb"
 }

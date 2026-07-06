@@ -196,7 +196,31 @@ pub struct RbPuzzleShowData {
     pub ptype: RbPuzzleType,
     pub round: RbPuzzleShowRoundData,
     pub game_id: i32,
+    pub submission_enabled: bool,
+    pub submit_requirements: Vec<PuzzleSubmitRequirementShowData>,
     pub announcements: Vec<db::anmt::RbAnnouncementShowData>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PuzzleSubmitRequirement {
+    CurrencyMinimum { currency_id: i32, minimum: i64 },
+}
+
+#[derive(Serialize)]
+pub struct PuzzleSubmitRequirementShowData {
+    #[serde(rename = "type")]
+    pub requirement_type: &'static str,
+    pub currency_id: i32,
+    pub currency_name: String,
+    pub currency_prec: i32,
+    pub minimum: i64,
+}
+
+fn parse_submit_requirements(
+    value: serde_json::Value,
+) -> Result<Vec<PuzzleSubmitRequirement>, serde_json::Error> {
+    serde_json::from_value(value)
 }
 
 pub async fn get_puzzle_show(
@@ -204,7 +228,7 @@ pub async fn get_puzzle_show(
     puzzle_id: i32,
 ) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
     let result = sqlx::query!(
-        "SELECT p.id, p.slug, p.title, p.ptype,
+        "SELECT p.id, p.slug, p.title, p.ptype, p.judge, p.submit_requirements,
                 p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id
@@ -214,7 +238,35 @@ pub async fn get_puzzle_show(
     .fetch_optional(db_pool)
     .await?;
 
-    Ok(result.map(|x| RbPuzzleShowData {
+    let Some(x) = result else {
+        return Ok(None);
+    };
+    let requirements = parse_submit_requirements(x.submit_requirements).unwrap_or_default();
+    let mut requirement_show = Vec::with_capacity(requirements.len());
+    for requirement in requirements {
+        let PuzzleSubmitRequirement::CurrencyMinimum {
+            currency_id,
+            minimum,
+        } = requirement;
+        if let Some(currency) = sqlx::query!(
+            "SELECT cname, prec FROM rb_currency WHERE id = $1 AND game_id = $2",
+            currency_id,
+            x.game_id
+        )
+        .fetch_optional(db_pool)
+        .await?
+        {
+            requirement_show.push(PuzzleSubmitRequirementShowData {
+                requirement_type: "currency_minimum",
+                currency_id,
+                currency_name: currency.cname,
+                currency_prec: currency.prec,
+                minimum,
+            });
+        }
+    }
+
+    Ok(Some(RbPuzzleShowData {
         id: x.id,
         slug: x.slug,
         title: x.title,
@@ -225,6 +277,9 @@ pub async fn get_puzzle_show(
             title: x.round_title,
         },
         game_id: x.game_id,
+        submission_enabled: game::judge::value_to_judge(x.judge)
+            .is_ok_and(|rules| !rules.is_empty()),
+        submit_requirements: requirement_show,
         announcements: Vec::new(),
     }))
 }
@@ -235,7 +290,7 @@ pub async fn get_puzzle_show_str(
     puzzle_id: i32,
 ) -> Result<Option<String>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:show:v2");
+    let key = format!("puzzle:{puzzle_id}:show:v3");
 
     if let Some(cache) = conn.get(&key).await? {
         return Ok(Some(cache));
@@ -780,6 +835,44 @@ pub enum SubmitAnswerResult {
     NotFound,
 }
 
+async fn submit_requirements_met(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    team_id: i32,
+    game_id: i32,
+    requirements: &[PuzzleSubmitRequirement],
+) -> Result<bool, RbInternalError> {
+    for requirement in requirements {
+        let PuzzleSubmitRequirement::CurrencyMinimum {
+            currency_id,
+            minimum,
+        } = requirement;
+        let current = sqlx::query_scalar!(
+            r#"SELECT CASE WHEN gf.state = 1 THEN
+                    GREATEST(0::NUMERIC, LEAST(
+                        tc.amount::NUMERIC
+                            + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60)
+                                * (c.growth + tc.growth)::NUMERIC,
+                        c.max_amount::NUMERIC
+                    ))::BIGINT
+                ELSE tc.amount END AS "current_amount!"
+            FROM rb_team_currency tc
+            JOIN rb_currency c ON c.id = tc.currency_id
+            JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
+            WHERE tc.team_id = $1 AND tc.currency_id = $2 AND c.game_id = $3
+            FOR UPDATE OF tc"#,
+            team_id,
+            currency_id,
+            game_id
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        if current.is_none_or(|amount| amount < *minimum) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 #[derive(Deserialize)]
 struct PenaltyRule {
     #[serde(rename = "type")]
@@ -847,6 +940,29 @@ pub async fn submit_answer(
         return Ok(SubmitAnswerResult::Locked);
     }
 
+    let puzzle_info = sqlx::query!(
+        "SELECT id, game_id, round_id, title, submit_requirements
+        FROM rb_puzzle
+        WHERE id = $1;",
+        puzzle_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let judge = get_judge_rules(&app.db, puzzle_id).await?;
+    let Some(rules) = judge else {
+        return Ok(SubmitAnswerResult::NotFound);
+    };
+    if rules.is_empty() {
+        return Ok(SubmitAnswerResult::Locked);
+    }
+    let Ok(requirements) = parse_submit_requirements(puzzle_info.submit_requirements.clone())
+    else {
+        return Ok(SubmitAnswerResult::Locked);
+    };
+    if !submit_requirements_met(&mut tx, team_id, puzzle_info.game_id, &requirements).await? {
+        return Ok(SubmitAnswerResult::Locked);
+    }
+
     let submit_row = sqlx::query_as!(
         BackendSubmissionShowData,
         r#"INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer)
@@ -870,20 +986,6 @@ pub async fn submit_answer(
     let submit_id = submit_row.id;
     let submit_ctime_at = submit_row.ctime_at;
 
-    let puzzle_info = sqlx::query!(
-        "SELECT id, game_id, round_id, title
-        FROM rb_puzzle
-        WHERE id = $1;",
-        puzzle_id
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    let judge = get_judge_rules(&app.db, puzzle_id).await?;
-    if judge.is_none() {
-        return Ok(SubmitAnswerResult::NotFound);
-    }
-
-    let rules = judge.unwrap();
     let norm_answer_for_rules = norm_answer.clone();
     let norm_answer_for_custom = norm_answer.clone();
 
@@ -2127,6 +2229,7 @@ pub struct RbPuzzleAdminData {
     pub ptype: i16,
     pub judge: serde_json::Value,
     pub penalty: serde_json::Value,
+    pub submit_requirements: serde_json::Value,
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
     pub release_phase_id: Option<i32>,
@@ -2154,6 +2257,8 @@ pub struct RbPuzzleCreateData {
     pub judge: serde_json::Value,
     #[serde(default = "default_penalty")]
     pub penalty: serde_json::Value,
+    #[serde(default = "default_submit_requirements")]
+    pub submit_requirements: serde_json::Value,
     pub max_submit: Option<i32>,
     pub unlock_cond: String,
     pub release_phase_id: Option<i32>,
@@ -2178,6 +2283,7 @@ pub struct RbPuzzleUpdateData {
     pub ptype: Option<i16>,
     pub judge: Option<serde_json::Value>,
     pub penalty: Option<serde_json::Value>,
+    pub submit_requirements: Option<serde_json::Value>,
     #[serde(
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
@@ -2196,10 +2302,14 @@ pub struct RbPuzzleUpdateData {
 }
 
 fn default_judge() -> serde_json::Value {
-    serde_json::json!({})
+    serde_json::json!([])
 }
 
 fn default_penalty() -> serde_json::Value {
+    serde_json::json!([])
+}
+
+fn default_submit_requirements() -> serde_json::Value {
     serde_json::json!([])
 }
 
@@ -2215,7 +2325,7 @@ pub async fn admin_list(
         sqlx::query_as!(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
@@ -2230,7 +2340,7 @@ pub async fn admin_list(
         sqlx::query_as!(
             RbPuzzleAdminData,
             "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
@@ -2251,7 +2361,7 @@ pub async fn admin_get(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at
         FROM rb_puzzle p
@@ -2328,11 +2438,11 @@ pub async fn admin_create(
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
         "INSERT INTO rb_puzzle (
-            slug, sort, title, ptype, judge, penalty,
+            slug, sort, title, ptype, judge, penalty, submit_requirements,
             max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,
             ticket_enabled, ticket_cooldown
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9,
+        SELECT $2, $3, $4, $5, $6, $7, $14, $8, $9,
             CASE WHEN $11 THEN NULL ELSE $10::INT END,
             CASE WHEN $11 THEN NOW() ELSE NULL END,
             r.id, $12, $13
@@ -2346,7 +2456,7 @@ pub async fn admin_create(
                     AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)
             ))
         RETURNING id, game_id,
-            slug, sort, title, ptype, judge, penalty,
+            slug, sort, title, ptype, judge, penalty, submit_requirements,
             max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,
             ticket_enabled, ticket_cooldown, ctime_at;",
         data.round_id,
@@ -2361,7 +2471,8 @@ pub async fn admin_create(
         data.release_phase_id,
         data.release_immediately,
         data.ticket_enabled,
-        data.ticket_cooldown
+        data.ticket_cooldown,
+        data.submit_requirements
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -2416,6 +2527,7 @@ pub async fn admin_update(
             ptype = COALESCE($6, p.ptype),
             judge = COALESCE($7, p.judge),
             penalty = COALESCE($8, p.penalty),
+            submit_requirements = COALESCE($18, p.submit_requirements),
             max_submit = CASE WHEN $9 THEN $10 ELSE p.max_submit END,
             unlock_cond = COALESCE($11, p.unlock_cond),
             release_phase_id = CASE
@@ -2450,7 +2562,7 @@ pub async fn admin_update(
             ))
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,
+            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,
             p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         puzzle_id,
@@ -2469,7 +2581,8 @@ pub async fn admin_update(
         release_immediately,
         data.round_id,
         data.ticket_enabled,
-        data.ticket_cooldown
+        data.ticket_cooldown,
+        data.submit_requirements
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -2510,7 +2623,7 @@ pub async fn admin_batch_update_release_phase(
                     )
             ))
         RETURNING p.id, p.game_id, p.slug, p.sort, p.title, p.ptype,
-            p.judge, p.penalty, p.max_submit, p.unlock_cond,
+            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond,
             p.release_phase_id, p.immediate_release_at, p.round_id,
             p.ticket_enabled, p.ticket_cooldown, p.ctime_at;",
         game_id,

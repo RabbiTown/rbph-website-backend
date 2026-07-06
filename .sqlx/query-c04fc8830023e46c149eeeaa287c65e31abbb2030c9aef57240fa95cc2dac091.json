@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cname, prec FROM rb_currency WHERE id = $1 AND game_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "prec",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c04fc8830023e46c149eeeaa287c65e31abbb2030c9aef57240fa95cc2dac091"
+}

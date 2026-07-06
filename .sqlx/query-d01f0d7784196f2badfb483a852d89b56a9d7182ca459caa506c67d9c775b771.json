@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,\n            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE p.id = $1;",
   "describe": {
     "columns": [
       {
@@ -45,41 +45,46 @@
       },
       {
         "ordinal": 8,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
         "name": "max_submit",
         "type_info": "Int4"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "unlock_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "release_phase_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "immediate_release_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ticket_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -98,6 +103,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       true,
@@ -108,5 +114,5 @@
       false
     ]
   },
-  "hash": "9bc8abba607fa85aadb8ceabc2c25106e28604bce71f575eeb9a43c50ca8387b"
+  "hash": "d01f0d7784196f2badfb483a852d89b56a9d7182ca459caa506c67d9c775b771"
 }

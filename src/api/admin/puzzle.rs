@@ -10,7 +10,9 @@ use crate::{
     AppState,
     db::{
         self,
-        puzzle::{RbPuzzleAdminData, RbPuzzleCreateData, RbPuzzleUpdateData},
+        puzzle::{
+            PuzzleSubmitRequirement, RbPuzzleAdminData, RbPuzzleCreateData, RbPuzzleUpdateData,
+        },
     },
     error::{RbError, RbInternalError},
     expr,
@@ -172,6 +174,7 @@ fn validate_create(data: &RbPuzzleCreateData) -> bool {
         && validate_json_shape(data)
         && validate_judge_action(&data.judge)
         && data.penalty.is_array()
+        && data.submit_requirements.is_array()
         && !(data.release_immediately && data.release_phase_id.is_some())
 }
 
@@ -213,6 +216,12 @@ fn validate_update(data: &RbPuzzleUpdateData) -> bool {
 
     if let Some(penalty) = &data.penalty
         && !penalty.is_array()
+    {
+        return false;
+    }
+
+    if let Some(requirements) = &data.submit_requirements
+        && !requirements.is_array()
     {
         return false;
     }
@@ -273,11 +282,37 @@ async fn validate_penalty_currency(
     Ok(true)
 }
 
+async fn validate_submit_requirements(
+    app: &AppState,
+    game_id: i32,
+    value: &serde_json::Value,
+) -> Result<bool, RbInternalError> {
+    let requirements: Vec<PuzzleSubmitRequirement> = match serde_json::from_value(value.clone()) {
+        Ok(requirements) => requirements,
+        Err(_) => return Ok(false),
+    };
+    let mut currencies = HashSet::new();
+    for requirement in requirements {
+        let PuzzleSubmitRequirement::CurrencyMinimum {
+            currency_id,
+            minimum,
+        } = requirement;
+        if currency_id <= 0
+            || minimum <= 0
+            || !currencies.insert(currency_id)
+            || !db::game::currency_belongs_to_game(&app.db, game_id, currency_id).await?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 async fn invalidate_puzzle_cache(app: &AppState, game_id: i32, puzzle_id: i32) {
     db::puzzle::invalidate_admin_cache(game_id, puzzle_id);
 
     if let Ok(mut conn) = app.kv.get().await {
-        let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v2")).await;
+        let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v3")).await;
     }
 }
 
@@ -331,6 +366,9 @@ async fn append(
     };
 
     if !validate_penalty_currency(&app, game_id, &req.penalty).await? {
+        return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+    }
+    if !validate_submit_requirements(&app, game_id, &req.submit_requirements).await? {
         return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
     }
 
@@ -420,7 +458,7 @@ async fn edit(
             .http_err();
     };
 
-    if req.penalty.is_some() || req.round_id.is_some() {
+    if req.penalty.is_some() || req.submit_requirements.is_some() || req.round_id.is_some() {
         let game_id = if let Some(round_id) = req.round_id {
             let game_id = db::round::get_round_game(&app.db, round_id).await?;
             let Some(game_id) = game_id else {
@@ -435,6 +473,13 @@ async fn edit(
         let penalty = req.penalty.as_ref().unwrap_or(&previous_data.penalty);
 
         if !validate_penalty_currency(&app, game_id, penalty).await? {
+            return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
+        }
+        let requirements = req
+            .submit_requirements
+            .as_ref()
+            .unwrap_or(&previous_data.submit_requirements);
+        if !validate_submit_requirements(&app, game_id, requirements).await? {
             return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
         }
     }
@@ -588,6 +633,14 @@ mod tests {
         assert!(!validate_update(&RbPuzzleUpdateData {
             release_phase_id: Some(None),
             release_immediately: Some(true),
+            ..Default::default()
+        }));
+        assert!(validate_update(&RbPuzzleUpdateData {
+            submit_requirements: Some(serde_json::json!([])),
+            ..Default::default()
+        }));
+        assert!(!validate_update(&RbPuzzleUpdateData {
+            submit_requirements: Some(serde_json::json!({})),
             ..Default::default()
         }));
     }

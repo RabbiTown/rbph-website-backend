@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_puzzle (\n            slug, sort, title, ptype, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,\n            ticket_enabled, ticket_cooldown\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9,\n            CASE WHEN $11 THEN NULL ELSE $10::INT END,\n            CASE WHEN $11 THEN NOW() ELSE NULL END,\n            r.id, $12, $13\n        FROM rb_round r\n        WHERE r.id = $1\n            AND NOT ($11 AND $10::INT IS NOT NULL)\n            AND ($10::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_release_phase rp\n                WHERE rp.id = $10::INT AND rp.game_id = r.game_id\n                    AND rp.release_at > NOW()\n                    AND NOT EXISTS (SELECT 1 FROM rb_release_event re WHERE re.phase_id = rp.id)\n            ))\n        RETURNING id, game_id,\n            slug, sort, title, ptype, judge, penalty,\n            max_submit, unlock_cond, release_phase_id, immediate_release_at, round_id,\n            ticket_enabled, ticket_cooldown, ctime_at;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,\n            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -45,59 +45,52 @@
       },
       {
         "ordinal": 8,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
         "name": "max_submit",
         "type_info": "Int4"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "unlock_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "release_phase_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "immediate_release_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ticket_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4",
-        "Varchar",
-        "Int4",
-        "Varchar",
-        "Int2",
-        "Jsonb",
-        "Jsonb",
-        "Int4",
-        "Text",
-        "Int4",
-        "Bool",
-        "Bool",
         "Int4"
       ]
     },
@@ -105,6 +98,7 @@
       false,
       false,
       true,
+      false,
       false,
       false,
       false,
@@ -120,5 +114,5 @@
       false
     ]
   },
-  "hash": "a7af833d0d7bf05a9642ca164634450d97fbdf7a378e3c08e1c4ab5b0eb1a59d"
+  "hash": "c38a86e5d5d79bbee212463b1b628276b7c616b8f8e3fbf16ca078e0a98457e4"
 }

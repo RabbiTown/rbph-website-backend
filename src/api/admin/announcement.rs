@@ -98,7 +98,7 @@ fn notify_change(app: &AppState, game_id: Option<i32>) {
 async fn invalidate_puzzle_cache(app: &AppState, puzzle_ids: &[i32]) {
     if let Ok(mut conn) = app.kv.get().await {
         for puzzle_id in puzzle_ids {
-            let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v2")).await;
+            let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v3")).await;
         }
     }
 }

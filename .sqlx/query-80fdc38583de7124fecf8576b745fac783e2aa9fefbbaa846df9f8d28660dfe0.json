@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, p.slug, p.title, p.ptype,\n                p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id\n        WHERE p.id = $1;",
+  "query": "SELECT p.id, p.slug, p.title, p.ptype, p.judge, p.submit_requirements,\n                p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id\n        WHERE p.id = $1;",
   "describe": {
     "columns": [
       {
@@ -25,21 +25,31 @@
       },
       {
         "ordinal": 4,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 5,
+        "ordinal": 7,
         "name": "round_slug",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 6,
+        "ordinal": 8,
         "name": "round_title",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 7,
+        "ordinal": 9,
         "name": "game_id",
         "type_info": "Int4"
       }
@@ -55,10 +65,12 @@
       false,
       false,
       false,
+      false,
+      false,
       true,
       false,
       false
     ]
   },
-  "hash": "0a6a49bbc08f78ebabe6c8dabc79b8816591b38b4955e6b0e40eb20d6768d283"
+  "hash": "80fdc38583de7124fecf8576b745fac783e2aa9fefbbaa846df9f8d28660dfe0"
 }

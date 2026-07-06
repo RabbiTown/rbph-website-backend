@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,\n            p.judge, p.penalty, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        ORDER BY r.game_id, r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "query": "SELECT p.id, r.game_id, p.slug, p.sort, p.title, p.ptype,\n            p.judge, p.penalty, p.submit_requirements, p.max_submit, p.unlock_cond, p.release_phase_id,\n            p.immediate_release_at, p.round_id,\n            p.ticket_enabled, p.ticket_cooldown, p.ctime_at\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        ORDER BY r.game_id, r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
   "describe": {
     "columns": [
       {
@@ -45,41 +45,46 @@
       },
       {
         "ordinal": 8,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
         "name": "max_submit",
         "type_info": "Int4"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "unlock_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "release_phase_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "immediate_release_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "round_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ticket_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ticket_cooldown",
         "type_info": "Int4"
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -96,6 +101,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       true,
@@ -106,5 +112,5 @@
       false
     ]
   },
-  "hash": "cebb4c33e7b64a56111ee7ef0054e35279fb95f53fc76485fc666bb60d6a71e4"
+  "hash": "29b28b3180e6fd39f926dd99c63b6f52ef73f36e787299a395917a9187118c77"
 }

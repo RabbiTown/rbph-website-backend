@@ -7,6 +7,26 @@ use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError};
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BackendScope {
+    Global,
+    Team { team_id: i32 },
+    Puzzle { puzzle_id: i32 },
+    TeamPuzzle { team_id: i32, puzzle_id: i32 },
+}
+
+impl BackendScope {
+    pub fn parts(&self) -> (i16, Option<i32>, Option<i32>) {
+        match *self {
+            Self::Global => (0, None, None),
+            Self::Team { team_id } => (1, Some(team_id), None),
+            Self::Puzzle { puzzle_id } => (2, None, Some(puzzle_id)),
+            Self::TeamPuzzle { team_id, puzzle_id } => (3, Some(team_id), Some(puzzle_id)),
+        }
+    }
+}
+
 #[derive(Clone, FromRow, Serialize)]
 pub struct PuzzleBackend {
     pub puzzle_id: i32,
@@ -38,7 +58,7 @@ static EXPORT_CONST_FUNCTION_PATTERN: Lazy<Regex> = Lazy::new(|| {
         .expect("valid export const function regex")
 });
 
-fn is_valid_backend_function_name(name: &str) -> bool {
+pub fn is_valid_backend_function_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -105,6 +125,9 @@ impl PuzzleBackend {
 
 #[derive(Clone, FromRow, Serialize)]
 pub struct PuzzleBackendKvEntry {
+    pub scope_type: i16,
+    pub team_id: Option<i32>,
+    pub puzzle_id: Option<i32>,
     pub key: String,
     pub value: Value,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
@@ -118,17 +141,11 @@ pub struct PuzzleStoreDocUser {
 }
 
 #[derive(Clone, Serialize)]
-pub struct PuzzleStoreDocTeam {
-    pub id: i32,
-    pub name: String,
-}
-
-#[derive(Clone, Serialize)]
 pub struct PuzzleStoreDoc {
     pub id: i64,
+    pub scope: BackendScope,
     pub collection: String,
-    pub team: Option<PuzzleStoreDocTeam>,
-    pub user: Option<PuzzleStoreDocUser>,
+    pub created_by: Option<PuzzleStoreDocUser>,
     pub value: Value,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -180,11 +197,12 @@ pub struct PuzzleStoreListOptions {
 
 struct StoreDocRow {
     id: i64,
-    collection: String,
+    scope_type: i16,
     team_id: Option<i32>,
-    team_name: Option<String>,
-    user_id: Option<i32>,
-    user_nickname: Option<String>,
+    puzzle_id: Option<i32>,
+    collection: String,
+    created_by: Option<i32>,
+    created_by_nickname: Option<String>,
     value: Value,
     ctime_at: OffsetDateTime,
     utime_at: OffsetDateTime,
@@ -193,14 +211,23 @@ struct StoreDocRow {
 fn store_doc_from_row(row: StoreDocRow) -> PuzzleStoreDoc {
     PuzzleStoreDoc {
         id: row.id,
+        scope: match row.scope_type {
+            1 => BackendScope::Team {
+                team_id: row.team_id.unwrap_or_default(),
+            },
+            2 => BackendScope::Puzzle {
+                puzzle_id: row.puzzle_id.unwrap_or_default(),
+            },
+            3 => BackendScope::TeamPuzzle {
+                team_id: row.team_id.unwrap_or_default(),
+                puzzle_id: row.puzzle_id.unwrap_or_default(),
+            },
+            _ => BackendScope::Global,
+        },
         collection: row.collection,
-        team: row
-            .team_id
-            .zip(row.team_name)
-            .map(|(id, name)| PuzzleStoreDocTeam { id, name }),
-        user: row
-            .user_id
-            .zip(row.user_nickname)
+        created_by: row
+            .created_by
+            .zip(row.created_by_nickname)
             .map(|(id, nickname)| PuzzleStoreDocUser { id, nickname }),
         value: row.value,
         ctime_at: row.ctime_at,
@@ -323,18 +350,79 @@ pub async fn delete_backend(db_pool: &DbPool, puzzle_id: i32) -> Result<bool, Rb
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn ensure_scope_in_game(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
+) -> Result<bool, RbInternalError> {
+    let valid = match scope {
+        BackendScope::Global => true,
+        BackendScope::Team { team_id } => sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT 1 FROM rb_team WHERE id = $1 AND game_id = $2) AS \"exists!\"",
+            team_id,
+            game_id
+        )
+        .fetch_one(db_pool)
+        .await?,
+        BackendScope::Puzzle { puzzle_id } => sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT 1 FROM rb_puzzle WHERE id = $1 AND game_id = $2) AS \"exists!\"",
+            puzzle_id,
+            game_id
+        )
+        .fetch_one(db_pool)
+        .await?,
+        BackendScope::TeamPuzzle { team_id, puzzle_id } => {
+            sqlx::query_scalar!(
+                "SELECT EXISTS (
+                    SELECT 1 FROM rb_team t
+                    JOIN rb_puzzle p ON p.game_id = t.game_id
+                    WHERE t.id = $1 AND p.id = $2 AND t.game_id = $3
+                ) AS \"exists!\"",
+                team_id,
+                puzzle_id,
+                game_id
+            )
+            .fetch_one(db_pool)
+            .await?
+        }
+    };
+
+    Ok(valid)
+}
+
+async fn require_scope_in_game(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
+) -> Result<(), RbInternalError> {
+    if ensure_scope_in_game(db_pool, game_id, scope).await? {
+        Ok(())
+    } else {
+        Err(RbInternalError::Other(
+            "backend scope does not belong to current game".to_string(),
+        ))
+    }
+}
+
 pub async fn get_kv(
     db_pool: &DbPool,
-    puzzle_id: i32,
-    team_id: Option<i32>,
+    game_id: i32,
+    scope: BackendScope,
     key: &str,
 ) -> Result<Option<Value>, RbInternalError> {
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
     let row = sqlx::query!(
         r#"SELECT value FROM rb_puzzle_kv
-        WHERE puzzle_id = $1 AND key = $2 AND team_id IS NOT DISTINCT FROM $3"#,
+        WHERE game_id = $1 AND scope_type = $2
+            AND team_id IS NOT DISTINCT FROM $3
+            AND puzzle_id IS NOT DISTINCT FROM $4
+            AND key = $5"#,
+        game_id,
+        scope_type,
+        team_id,
         puzzle_id,
-        key,
-        team_id
+        key
     )
     .fetch_optional(db_pool)
     .await?;
@@ -344,56 +432,51 @@ pub async fn get_kv(
 
 pub async fn set_kv(
     db_pool: &DbPool,
-    puzzle_id: i32,
-    team_id: Option<i32>,
+    game_id: i32,
+    scope: BackendScope,
     key: &str,
     value: &Value,
 ) -> Result<Value, RbInternalError> {
-    let value = if team_id.is_some() {
-        sqlx::query_scalar!(
-            r#"INSERT INTO rb_puzzle_kv (puzzle_id, team_id, key, value)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (puzzle_id, team_id, key) WHERE team_id IS NOT NULL
-            DO UPDATE SET value = EXCLUDED.value, utime_at = CURRENT_TIMESTAMP
-            RETURNING value"#,
-            puzzle_id,
-            team_id,
-            key,
-            value
-        )
-        .fetch_one(db_pool)
-        .await?
-    } else {
-        sqlx::query_scalar!(
-            r#"INSERT INTO rb_puzzle_kv (puzzle_id, team_id, key, value)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (puzzle_id, key) WHERE team_id IS NULL
-            DO UPDATE SET value = EXCLUDED.value, utime_at = CURRENT_TIMESTAMP
-            RETURNING value"#,
-            puzzle_id,
-            team_id,
-            key,
-            value
-        )
-        .fetch_one(db_pool)
-        .await?
-    };
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
+    let value = sqlx::query_scalar!(
+        r#"INSERT INTO rb_puzzle_kv (game_id, scope_type, team_id, puzzle_id, key, value)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)
+        DO UPDATE SET value = EXCLUDED.value, utime_at = CURRENT_TIMESTAMP
+        RETURNING value"#,
+        game_id,
+        scope_type,
+        team_id,
+        puzzle_id,
+        key,
+        value
+    )
+    .fetch_one(db_pool)
+    .await?;
 
     Ok(value)
 }
 
 pub async fn delete_kv(
     db_pool: &DbPool,
-    puzzle_id: i32,
-    team_id: Option<i32>,
+    game_id: i32,
+    scope: BackendScope,
     key: &str,
 ) -> Result<bool, RbInternalError> {
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
     let result = sqlx::query!(
         r#"DELETE FROM rb_puzzle_kv
-        WHERE puzzle_id = $1 AND key = $2 AND team_id IS NOT DISTINCT FROM $3"#,
+        WHERE game_id = $1 AND scope_type = $2
+            AND team_id IS NOT DISTINCT FROM $3
+            AND puzzle_id IS NOT DISTINCT FROM $4
+            AND key = $5"#,
+        game_id,
+        scope_type,
+        team_id,
         puzzle_id,
-        key,
-        team_id
+        key
     )
     .execute(db_pool)
     .await?;
@@ -403,40 +486,30 @@ pub async fn delete_kv(
 
 pub async fn list_kv(
     db_pool: &DbPool,
-    puzzle_id: i32,
-    team_id: Option<i32>,
+    game_id: i32,
+    scope: BackendScope,
     prefix: Option<&str>,
 ) -> Result<Vec<PuzzleBackendKvEntry>, RbInternalError> {
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
     let pattern = prefix.map(|value| format!("{value}%"));
-    let rows = if let Some(pattern) = pattern.as_deref() {
-        sqlx::query_as!(
-            PuzzleBackendKvEntry,
-            r#"SELECT key, value, utime_at
-            FROM rb_puzzle_kv
-            WHERE puzzle_id = $1
-                AND team_id IS NOT DISTINCT FROM $2
-                AND key LIKE $3
-            ORDER BY key"#,
-            puzzle_id,
-            team_id,
-            pattern
-        )
-        .fetch_all(db_pool)
-        .await?
-    } else {
-        sqlx::query_as!(
-            PuzzleBackendKvEntry,
-            r#"SELECT key, value, utime_at
-            FROM rb_puzzle_kv
-            WHERE puzzle_id = $1
-                AND team_id IS NOT DISTINCT FROM $2
-            ORDER BY key"#,
-            puzzle_id,
-            team_id
-        )
-        .fetch_all(db_pool)
-        .await?
-    };
+    let rows = sqlx::query_as!(
+        PuzzleBackendKvEntry,
+        r#"SELECT scope_type, team_id, puzzle_id, key, value, utime_at
+        FROM rb_puzzle_kv
+        WHERE game_id = $1 AND scope_type = $2
+            AND team_id IS NOT DISTINCT FROM $3
+            AND puzzle_id IS NOT DISTINCT FROM $4
+            AND ($5::TEXT IS NULL OR key LIKE $5)
+        ORDER BY key"#,
+        game_id,
+        scope_type,
+        team_id,
+        puzzle_id,
+        pattern
+    )
+    .fetch_all(db_pool)
+    .await?;
 
     Ok(rows)
 }
@@ -456,26 +529,45 @@ pub async fn clear_puzzle_team_kv(
     Ok(result.rows_affected())
 }
 
-pub async fn insert_store_doc(
+pub async fn clear_puzzle_team_store(
     db_pool: &DbPool,
     puzzle_id: i32,
+) -> Result<u64, RbInternalError> {
+    let result = sqlx::query!(
+        r#"DELETE FROM rb_puzzle_store_doc
+        WHERE puzzle_id = $1 AND team_id IS NOT NULL"#,
+        puzzle_id
+    )
+    .execute(db_pool)
+    .await?;
+
+    Ok(result.rows_affected())
+}
+
+pub async fn insert_store_doc(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
     collection: &str,
-    team_id: Option<i32>,
-    user_id: Option<i32>,
+    created_by: i32,
     value: &Value,
     indexes: &[PuzzleStoreIndexEntry],
 ) -> Result<PuzzleStoreDoc, RbInternalError> {
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
     let mut tx = db_pool.begin().await?;
 
     let row = sqlx::query!(
         r#"INSERT INTO rb_puzzle_store_doc
-            (puzzle_id, collection, team_id, user_id, value)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, collection, team_id, user_id, value, ctime_at, utime_at"#,
+            (game_id, scope_type, team_id, puzzle_id, collection, created_by, value)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, scope_type, team_id, puzzle_id, collection, created_by, value, ctime_at, utime_at"#,
+        game_id,
+        scope_type,
+        team_id,
         puzzle_id,
         collection,
-        team_id,
-        user_id,
+        created_by,
         value
     )
     .fetch_one(&mut *tx)
@@ -486,10 +578,10 @@ pub async fn insert_store_doc(
             PuzzleStoreIndexValue::Text(value) => {
                 sqlx::query!(
                     r#"INSERT INTO rb_puzzle_store_index
-                        (doc_id, puzzle_id, collection, key, value_text)
+                        (doc_id, game_id, collection, key, value_text)
                     VALUES ($1, $2, $3, $4, $5)"#,
                     row.id,
-                    puzzle_id,
+                    game_id,
                     collection,
                     &index.key,
                     value
@@ -500,10 +592,10 @@ pub async fn insert_store_doc(
             PuzzleStoreIndexValue::Number(value) => {
                 sqlx::query!(
                     r#"INSERT INTO rb_puzzle_store_index
-                        (doc_id, puzzle_id, collection, key, value_number)
+                        (doc_id, game_id, collection, key, value_number)
                     VALUES ($1, $2, $3, $4, $5)"#,
                     row.id,
-                    puzzle_id,
+                    game_id,
                     collection,
                     &index.key,
                     value
@@ -514,10 +606,10 @@ pub async fn insert_store_doc(
             PuzzleStoreIndexValue::Bool(value) => {
                 sqlx::query!(
                     r#"INSERT INTO rb_puzzle_store_index
-                        (doc_id, puzzle_id, collection, key, value_bool)
+                        (doc_id, game_id, collection, key, value_bool)
                     VALUES ($1, $2, $3, $4, $5)"#,
                     row.id,
-                    puzzle_id,
+                    game_id,
                     collection,
                     &index.key,
                     value
@@ -528,32 +620,21 @@ pub async fn insert_store_doc(
         }
     }
 
-    let team = if let Some(team_id) = team_id {
-        sqlx::query!("SELECT name FROM rb_team WHERE id = $1", team_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .map(|row| row.name)
-    } else {
-        None
-    };
-    let user = if let Some(user_id) = user_id {
-        sqlx::query!("SELECT nickname FROM rb_user WHERE id = $1", user_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .map(|row| row.nickname)
-    } else {
-        None
-    };
+    let user = sqlx::query!("SELECT nickname FROM rb_user WHERE id = $1", row.created_by)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(|row| row.nickname);
 
     tx.commit().await?;
 
     Ok(store_doc_from_row(StoreDocRow {
         id: row.id,
-        collection: row.collection,
+        scope_type: row.scope_type,
         team_id: row.team_id,
-        team_name: team,
-        user_id: row.user_id,
-        user_nickname: user,
+        puzzle_id: row.puzzle_id,
+        collection: row.collection,
+        created_by: row.created_by,
+        created_by_nickname: user,
         value: row.value,
         ctime_at: row.ctime_at,
         utime_at: row.utime_at,
@@ -562,17 +643,25 @@ pub async fn insert_store_doc(
 
 pub async fn get_store_doc(
     db_pool: &DbPool,
-    puzzle_id: i32,
+    game_id: i32,
+    scope: BackendScope,
     collection: &str,
     doc_id: i64,
 ) -> Result<Option<PuzzleStoreDoc>, RbInternalError> {
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
     let row = sqlx::query!(
-        r#"SELECT d.id, d.collection, d.team_id, t.name AS team_name,
-            d.user_id, u.nickname AS user_nickname, d.value, d.ctime_at, d.utime_at
+        r#"SELECT d.id, d.scope_type, d.team_id, d.puzzle_id, d.collection,
+            d.created_by, u.nickname AS "created_by_nickname?", d.value, d.ctime_at, d.utime_at
         FROM rb_puzzle_store_doc d
-        LEFT JOIN rb_team t ON t.id = d.team_id
-        LEFT JOIN rb_user u ON u.id = d.user_id
-        WHERE d.puzzle_id = $1 AND d.collection = $2 AND d.id = $3"#,
+        LEFT JOIN rb_user u ON u.id = d.created_by
+        WHERE d.game_id = $1 AND d.scope_type = $2
+            AND d.team_id IS NOT DISTINCT FROM $3
+            AND d.puzzle_id IS NOT DISTINCT FROM $4
+            AND d.collection = $5 AND d.id = $6"#,
+        game_id,
+        scope_type,
+        team_id,
         puzzle_id,
         collection,
         doc_id
@@ -583,11 +672,12 @@ pub async fn get_store_doc(
     Ok(row.map(|row| {
         store_doc_from_row(StoreDocRow {
             id: row.id,
-            collection: row.collection,
+            scope_type: row.scope_type,
             team_id: row.team_id,
-            team_name: Some(row.team_name),
-            user_id: row.user_id,
-            user_nickname: Some(row.user_nickname),
+            puzzle_id: row.puzzle_id,
+            collection: row.collection,
+            created_by: row.created_by,
+            created_by_nickname: row.created_by_nickname,
             value: row.value,
             ctime_at: row.ctime_at,
             utime_at: row.utime_at,
@@ -597,10 +687,13 @@ pub async fn get_store_doc(
 
 pub async fn list_store_docs(
     db_pool: &DbPool,
-    puzzle_id: i32,
+    game_id: i32,
+    scope: BackendScope,
     collection: &str,
     options: &PuzzleStoreListOptions,
 ) -> Result<Vec<PuzzleStoreDoc>, RbInternalError> {
+    require_scope_in_game(db_pool, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
     let text_keys: Vec<String> = options
         .filters
         .text
@@ -641,43 +734,48 @@ pub async fn list_store_docs(
     let limit = options.limit.clamp(1, 100);
 
     let rows = sqlx::query!(
-        r#"SELECT d.id, d.collection, d.team_id, t.name AS "team_name?",
-            d.user_id, u.nickname AS "user_nickname?", d.value, d.ctime_at, d.utime_at
+        r#"SELECT d.id, d.scope_type, d.team_id, d.puzzle_id, d.collection,
+            d.created_by, u.nickname AS "created_by_nickname?", d.value, d.ctime_at, d.utime_at
         FROM rb_puzzle_store_doc d
-        LEFT JOIN rb_team t ON t.id = d.team_id
-        LEFT JOIN rb_user u ON u.id = d.user_id
-        WHERE d.puzzle_id = $1
-            AND d.collection = $2
+        LEFT JOIN rb_user u ON u.id = d.created_by
+        WHERE d.game_id = $1
+            AND d.scope_type = $2
+            AND d.team_id IS NOT DISTINCT FROM $3
+            AND d.puzzle_id IS NOT DISTINCT FROM $4
+            AND d.collection = $5
             AND (
-                $3::BIGINT IS NULL
-                OR ($12::BOOLEAN AND d.id < $3)
-                OR (NOT $12::BOOLEAN AND d.id > $3)
+                $6::BIGINT IS NULL
+                OR ($15::BOOLEAN AND d.id < $6)
+                OR (NOT $15::BOOLEAN AND d.id > $6)
             )
             AND (
-                $4::BIGINT = 0
+                $7::BIGINT = 0
                 OR (
                     SELECT COUNT(DISTINCT i.key)
                     FROM rb_puzzle_store_index i
                     WHERE i.doc_id = d.id
-                        AND i.puzzle_id = d.puzzle_id
+                        AND i.game_id = d.game_id
                         AND i.collection = d.collection
                         AND (
                             (i.key, i.value_text) IN (
-                                SELECT * FROM UNNEST($5::TEXT[], $6::TEXT[])
+                                SELECT * FROM UNNEST($8::TEXT[], $9::TEXT[])
                             )
                             OR (i.key, i.value_number) IN (
-                                SELECT * FROM UNNEST($7::TEXT[], $8::DOUBLE PRECISION[])
+                                SELECT * FROM UNNEST($10::TEXT[], $11::DOUBLE PRECISION[])
                             )
                             OR (i.key, i.value_bool) IN (
-                                SELECT * FROM UNNEST($9::TEXT[], $10::BOOLEAN[])
+                                SELECT * FROM UNNEST($12::TEXT[], $13::BOOLEAN[])
                             )
                         )
-                ) = $4
+                ) = $7
             )
         ORDER BY
-            CASE WHEN $12::BOOLEAN THEN d.id END DESC,
-            CASE WHEN NOT $12::BOOLEAN THEN d.id END ASC
-        LIMIT $11"#,
+            CASE WHEN $15::BOOLEAN THEN d.id END DESC,
+            CASE WHEN NOT $15::BOOLEAN THEN d.id END ASC
+        LIMIT $14"#,
+        game_id,
+        scope_type,
+        team_id,
         puzzle_id,
         collection,
         options.cursor,
@@ -699,11 +797,12 @@ pub async fn list_store_docs(
         .map(|row| {
             store_doc_from_row(StoreDocRow {
                 id: row.id,
-                collection: row.collection,
+                scope_type: row.scope_type,
                 team_id: row.team_id,
-                team_name: row.team_name,
-                user_id: row.user_id,
-                user_nickname: row.user_nickname,
+                puzzle_id: row.puzzle_id,
+                collection: row.collection,
+                created_by: row.created_by,
+                created_by_nickname: row.created_by_nickname,
                 value: row.value,
                 ctime_at: row.ctime_at,
                 utime_at: row.utime_at,

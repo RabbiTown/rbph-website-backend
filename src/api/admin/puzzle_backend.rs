@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState,
-    db::{self, puzzle_backend::PuzzleBackendInput},
+    db::{
+        self,
+        puzzle_backend::{BackendScope, PuzzleBackendInput},
+    },
     error::RbError,
 };
 
@@ -118,15 +121,7 @@ async fn update_backend_functions(
 
     let mut functions = Vec::new();
     for name in &req.functions {
-        if name.trim().is_empty() || name.len() > 64 {
-            return RbError::bad_req(-2).http_err();
-        }
-        if !name.chars().enumerate().all(|(index, c)| {
-            c == '_'
-                || c.is_ascii_alphanumeric()
-                || c == '-'
-                || index == 0 && c.is_ascii_alphabetic()
-        }) {
+        if !db::puzzle_backend::is_valid_backend_function_name(name) {
             return RbError::bad_req(-2).http_err();
         }
         if !functions.iter().any(|item| item == name) {
@@ -164,13 +159,22 @@ async fn list_kv(
         return RbError::not_found().http_err();
     }
 
-    let entries = db::puzzle_backend::list_kv(
-        &app.db,
-        path.puzzle_id,
-        query.team_id,
-        query.prefix.as_deref(),
-    )
-    .await?;
+    let Some(puzzle) = db::puzzle::admin_get(&app.db, path.puzzle_id).await? else {
+        return RbError::not_found().http_err();
+    };
+    let scope = if let Some(team_id) = query.team_id {
+        BackendScope::TeamPuzzle {
+            team_id,
+            puzzle_id: path.puzzle_id,
+        }
+    } else {
+        BackendScope::Puzzle {
+            puzzle_id: path.puzzle_id,
+        }
+    };
+    let entries =
+        db::puzzle_backend::list_kv(&app.db, puzzle.game_id, scope, query.prefix.as_deref())
+            .await?;
 
     Ok(HttpResponse::Ok().json(PuzzleBackendKvResponse { code: 0, entries }))
 }
@@ -183,8 +187,20 @@ async fn delete_kv(
     if !puzzle_exists(&app, path.puzzle_id).await? {
         return RbError::not_found().http_err();
     }
-    let deleted =
-        db::puzzle_backend::delete_kv(&app.db, path.puzzle_id, query.team_id, &path.key).await?;
+    let Some(puzzle) = db::puzzle::admin_get(&app.db, path.puzzle_id).await? else {
+        return RbError::not_found().http_err();
+    };
+    let scope = if let Some(team_id) = query.team_id {
+        BackendScope::TeamPuzzle {
+            team_id,
+            puzzle_id: path.puzzle_id,
+        }
+    } else {
+        BackendScope::Puzzle {
+            puzzle_id: path.puzzle_id,
+        }
+    };
+    let deleted = db::puzzle_backend::delete_kv(&app.db, puzzle.game_id, scope, &path.key).await?;
 
     Ok(HttpResponse::Ok().json(PuzzleBackendDeleteResponse { code: 0, deleted }))
 }

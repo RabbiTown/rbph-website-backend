@@ -1,27 +1,27 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_puzzle_store_doc\n            (puzzle_id, collection, team_id, user_id, value)\n        VALUES ($1, $2, $3, $4, $5)\n        RETURNING id, collection, team_id, user_id, value, ctime_at, utime_at",
+  "query": "SELECT scope_type, team_id, puzzle_id, key, value, utime_at\n        FROM rb_puzzle_kv\n        WHERE game_id = $1 AND scope_type = $2\n            AND team_id IS NOT DISTINCT FROM $3\n            AND puzzle_id IS NOT DISTINCT FROM $4\n            AND ($5::TEXT IS NULL OR key LIKE $5)\n        ORDER BY key",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
-        "type_info": "Int8"
+        "name": "scope_type",
+        "type_info": "Int2"
       },
       {
         "ordinal": 1,
-        "name": "collection",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 2,
         "name": "team_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 3,
-        "name": "user_id",
+        "ordinal": 2,
+        "name": "puzzle_id",
         "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "key",
+        "type_info": "Text"
       },
       {
         "ordinal": 4,
@@ -30,11 +30,6 @@
       },
       {
         "ordinal": 5,
-        "name": "ctime_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 6,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -42,14 +37,13 @@
     "parameters": {
       "Left": [
         "Int4",
-        "Text",
+        "Int2",
         "Int4",
         "Int4",
-        "Jsonb"
+        "Text"
       ]
     },
     "nullable": [
-      false,
       false,
       true,
       true,
@@ -58,5 +52,5 @@
       false
     ]
   },
-  "hash": "93707471d0a6b2ff920c97def48627aa0be7262a3570527ad1afa1fb3ff9a33f"
+  "hash": "a0d72727bc3f1c06f7da7ecd85854f344beb714a50dab7bd236230f5f5bb9667"
 }

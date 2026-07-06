@@ -49,6 +49,12 @@ struct UpdateRequest {
     blocks: Vec<UpdateBlockRequest>,
 }
 
+#[derive(Deserialize)]
+struct BatchUploadRequest {
+    game_id: i32,
+    puzzle_ids: Vec<i32>,
+}
+
 #[derive(Serialize)]
 struct ListResponse {
     code: i32,
@@ -66,6 +72,20 @@ struct OkResponse {
     code: i32,
 }
 
+#[derive(Serialize)]
+struct CdnStatusResponse {
+    code: i32,
+    available: bool,
+}
+
+#[derive(Serialize)]
+struct BatchUploadResponse {
+    code: i32,
+    puzzle_count: usize,
+    block_count: usize,
+    skipped_empty: usize,
+}
+
 struct PreparedArtifact {
     backend: String,
     object_key: String,
@@ -76,8 +96,7 @@ struct PreparedArtifact {
 
 struct PreparedBlockUpdate<'a> {
     request: &'a UpdateBlockRequest,
-    update_artifact: bool,
-    artifact: Option<PreparedArtifact>,
+    clear_artifact: bool,
 }
 
 fn valid_content_type(value: i16) -> bool {
@@ -117,6 +136,15 @@ async fn upload_content_artifact(
     })
 }
 
+fn content_cdn_backend(app: &AppState) -> Result<&str, RbError> {
+    app.settings
+        .storage
+        .content_cdn_backend
+        .as_deref()
+        .filter(|backend| app.storage.supports_public_url(backend))
+        .ok_or_else(|| RbError::bad_req(-2).msg("Content CDN is not configured"))
+}
+
 async fn delete_content_artifact(
     app: &AppState,
     artifact: &db::content::ContentBlockArtifactDelete,
@@ -138,6 +166,69 @@ async fn delete_content_artifact(
             error
         );
     }
+}
+
+fn prepared_artifact_delete(
+    artifact: &PreparedArtifact,
+) -> db::content::ContentBlockArtifactDelete {
+    db::content::ContentBlockArtifactDelete {
+        backend: artifact.backend.clone(),
+        object_key: artifact.object_key.clone(),
+        relative_path: artifact.relative_path.clone(),
+    }
+}
+
+async fn persist_content_artifacts(
+    app: &AppState,
+    prepared: &[(RbContentBlockAdminData, PreparedArtifact)],
+) -> Result<Vec<RbContentBlockAdminData>> {
+    let uploaded = prepared
+        .iter()
+        .map(|(_, artifact)| prepared_artifact_delete(artifact))
+        .collect::<Vec<_>>();
+    let stale = prepared
+        .iter()
+        .filter_map(|(block, _)| block.artifact_delete())
+        .collect::<Vec<_>>();
+    let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
+    let update_result = async {
+        let mut updated = Vec::with_capacity(prepared.len());
+        for (block, artifact) in prepared {
+            let Some(block) = db::content::admin_set_artifact(
+                &mut tx,
+                block.id,
+                db::content::ContentBlockArtifact {
+                    backend: &artifact.backend,
+                    object_key: &artifact.object_key,
+                    relative_path: &artifact.relative_path,
+                    sha256: &artifact.sha256,
+                    size: artifact.size,
+                },
+            )
+            .await?
+            else {
+                return Err(RbError::not_found().code(-1).into());
+            };
+            updated.push(block);
+        }
+        tx.commit()
+            .await
+            .map_err(RbInternalError::from)
+            .map_err(actix_web::Error::from)?;
+        Ok::<_, actix_web::Error>(updated)
+    }
+    .await;
+
+    let Ok(updated) = update_result else {
+        for artifact in &uploaded {
+            delete_content_artifact(app, artifact).await;
+        }
+        return update_result;
+    };
+    for artifact in &stale {
+        delete_content_artifact(app, artifact).await;
+    }
+    Ok(updated)
 }
 
 async fn list_owner(
@@ -206,62 +297,25 @@ async fn update_owner(
         return RbError::bad_req(-2).http_err();
     }
 
-    let content_cdn_backend = app
-        .settings
-        .storage
-        .content_cdn_backend
-        .as_deref()
-        .filter(|backend| app.storage.supports_public_url(backend));
-    let mut uploaded = Vec::new();
     let mut stale = Vec::new();
     let mut prepared = Vec::with_capacity(request.blocks.len());
     for block in &request.blocks {
         let current = current_by_id
             .get(&block.id)
             .ok_or_else(RbError::not_found)?;
-        let content_changed =
-            current.content != block.content || current.content_type != block.content_type;
-        let artifact = if content_changed {
-            if let Some(old) = current.artifact_delete() {
-                stale.push(old);
-            }
-            if let Some(backend) = content_cdn_backend
-                && !block.content.is_empty()
-            {
-                let artifact = upload_content_artifact(app, backend, &block.content).await?;
-                uploaded.push(db::content::ContentBlockArtifactDelete {
-                    backend: artifact.backend.clone(),
-                    object_key: artifact.object_key.clone(),
-                    relative_path: artifact.relative_path.clone(),
-                });
-                Some(artifact)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let content_changed = current.content != block.content;
+        if content_changed && let Some(old) = current.artifact_delete() {
+            stale.push(old);
+        }
         prepared.push(PreparedBlockUpdate {
             request: block,
-            update_artifact: content_changed,
-            artifact,
+            clear_artifact: content_changed,
         });
     }
 
     let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
     let update_result = async {
         for block in &prepared {
-            let artifact =
-                block
-                    .artifact
-                    .as_ref()
-                    .map(|artifact| db::content::ContentBlockArtifact {
-                        backend: &artifact.backend,
-                        object_key: &artifact.object_key,
-                        relative_path: &artifact.relative_path,
-                        sha256: &artifact.sha256,
-                        size: artifact.size,
-                    });
             if db::content::admin_update(
                 &mut tx,
                 block.request.id,
@@ -270,8 +324,8 @@ async fn update_owner(
                     content: &block.request.content,
                     content_type: block.request.content_type,
                     visibility_cond: &block.request.visibility_cond,
-                    update_artifact: block.update_artifact,
-                    artifact,
+                    update_artifact: block.clear_artifact,
+                    artifact: None,
                 },
             )
             .await?
@@ -287,12 +341,7 @@ async fn update_owner(
         Ok::<(), actix_web::Error>(())
     }
     .await;
-    if let Err(error) = update_result {
-        for artifact in &uploaded {
-            delete_content_artifact(app, artifact).await;
-        }
-        return Err(error);
-    }
+    update_result?;
     for artifact in &stale {
         delete_content_artifact(app, artifact).await;
     }
@@ -377,6 +426,96 @@ async fn clear_unlocks(
     Ok(HttpResponse::Ok().json(OkResponse { code: 0 }))
 }
 
+async fn upload_block(
+    path: web::Path<BlockPath>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let backend = content_cdn_backend(&app)?;
+    let Some(block) = db::content::admin_get(&app.db, path.block_id).await? else {
+        return RbError::not_found().code(-1).http_err();
+    };
+    if block.content.is_empty() {
+        return RbError::bad_req(-3)
+            .msg("Empty content blocks cannot be uploaded")
+            .http_err();
+    }
+
+    let artifact = upload_content_artifact(&app, backend, &block.content).await?;
+    let mut updated = persist_content_artifacts(&app, &[(block, artifact)]).await?;
+    let block = updated.pop().ok_or_else(RbError::not_found)?;
+    Ok(HttpResponse::Ok().json(BlockResponse { code: 0, block }))
+}
+
+async fn remove_upload(
+    path: web::Path<BlockPath>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let Some(current) = db::content::admin_get(&app.db, path.block_id).await? else {
+        return RbError::not_found().code(-1).http_err();
+    };
+    let artifact = current.artifact_delete();
+    let Some(block) = db::content::admin_clear_artifact(&app.db, path.block_id).await? else {
+        return RbError::not_found().code(-1).http_err();
+    };
+    if let Some(artifact) = &artifact {
+        delete_content_artifact(&app, artifact).await;
+    }
+    Ok(HttpResponse::Ok().json(BlockResponse { code: 0, block }))
+}
+
+async fn cdn_status(app: web::Data<AppState>) -> HttpResponse {
+    HttpResponse::Ok().json(CdnStatusResponse {
+        code: 0,
+        available: content_cdn_backend(&app).is_ok(),
+    })
+}
+
+async fn batch_upload(
+    req: web::Json<BatchUploadRequest>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let puzzle_ids = req.puzzle_ids.iter().copied().collect::<HashSet<_>>();
+    if req.game_id <= 0
+        || puzzle_ids.is_empty()
+        || puzzle_ids.len() > 500
+        || puzzle_ids.iter().any(|id| *id <= 0)
+    {
+        return RbError::bad_req(-2).http_err();
+    }
+    let mut puzzle_ids = puzzle_ids.into_iter().collect::<Vec<_>>();
+    puzzle_ids.sort_unstable();
+    if !db::content::admin_puzzles_exist(&app.db, req.game_id, &puzzle_ids).await? {
+        return RbError::bad_req(-2).http_err();
+    }
+    let backend = content_cdn_backend(&app)?;
+    let blocks = db::content::admin_list_for_puzzles(&app.db, req.game_id, &puzzle_ids).await?;
+    let skipped_empty = blocks
+        .iter()
+        .filter(|block| block.content.is_empty())
+        .count();
+    let mut prepared = Vec::with_capacity(blocks.len() - skipped_empty);
+    for block in blocks.into_iter().filter(|block| !block.content.is_empty()) {
+        match upload_content_artifact(&app, backend, &block.content).await {
+            Ok(artifact) => prepared.push((block, artifact)),
+            Err(error) => {
+                for (_, artifact) in &prepared {
+                    delete_content_artifact(&app, &prepared_artifact_delete(artifact)).await;
+                }
+                return Err(error.into());
+            }
+        }
+    }
+
+    let block_count = prepared.len();
+    persist_content_artifacts(&app, &prepared).await?;
+    Ok(HttpResponse::Ok().json(BatchUploadResponse {
+        code: 0,
+        puzzle_count: puzzle_ids.len(),
+        block_count,
+        skipped_empty,
+    }))
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("puzzles/{owner_id}/content-blocks")
@@ -392,9 +531,13 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("", web::patch().to(round_update))
             .route("/order", web::put().to(round_reorder)),
     )
+    .route("content-blocks/cdn-status", web::get().to(cdn_status))
+    .route("content-blocks/batch-cdn", web::post().to(batch_upload))
     .service(
         web::scope("content-blocks/{block_id}")
             .route("", web::delete().to(delete))
+            .route("/cdn", web::post().to(upload_block))
+            .route("/cdn", web::delete().to(remove_upload))
             .route("/unlocks", web::delete().to(clear_unlocks)),
     );
 }

@@ -114,6 +114,43 @@ pub async fn admin_get(
     .await?)
 }
 
+pub async fn admin_list_for_puzzles(
+    pool: &DbPool,
+    game_id: i32,
+    puzzle_ids: &[i32],
+) -> Result<Vec<RbContentBlockAdminData>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbContentBlockAdminData,
+        "SELECT cb.id, cb.puzzle_id, cb.round_id, cb.sort, cb.name, cb.content,
+            cb.content_type, cb.cdn_backend, cb.cdn_object_key, cb.cdn_relative_path,
+            cb.cdn_sha256, cb.cdn_size, cb.visibility_cond, cb.ctime_at, cb.utime_at
+        FROM rb_content_block cb
+        JOIN rb_puzzle p ON p.id = cb.puzzle_id
+        WHERE p.game_id = $1 AND p.id = ANY($2)
+        ORDER BY p.id, cb.sort, cb.id",
+        game_id,
+        puzzle_ids
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn admin_puzzles_exist(
+    pool: &DbPool,
+    game_id: i32,
+    puzzle_ids: &[i32],
+) -> Result<bool, RbInternalError> {
+    let count = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM rb_puzzle WHERE game_id = $1 AND id = ANY($2)",
+        game_id,
+        puzzle_ids
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(0);
+    Ok(count == puzzle_ids.len() as i64)
+}
+
 pub async fn admin_create(
     pool: &DbPool,
     puzzle_id: Option<i32>,
@@ -200,6 +237,50 @@ pub async fn admin_update(
         .await?;
     }
     Ok(result)
+}
+
+pub async fn admin_set_artifact(
+    tx: &mut Transaction<'_, Postgres>,
+    id: i32,
+    artifact: ContentBlockArtifact<'_>,
+) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbContentBlockAdminData,
+        "UPDATE rb_content_block
+        SET cdn_backend = $2, cdn_object_key = $3, cdn_relative_path = $4,
+            cdn_sha256 = $5, cdn_size = $6, utime_at = NOW()
+        WHERE id = $1
+        RETURNING id, puzzle_id, round_id, sort, name, content, content_type,
+            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,
+            visibility_cond, ctime_at, utime_at",
+        id,
+        artifact.backend,
+        artifact.object_key,
+        artifact.relative_path,
+        artifact.sha256,
+        artifact.size,
+    )
+    .fetch_optional(&mut **tx)
+    .await?)
+}
+
+pub async fn admin_clear_artifact(
+    pool: &DbPool,
+    id: i32,
+) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbContentBlockAdminData,
+        "UPDATE rb_content_block
+        SET cdn_backend = NULL, cdn_object_key = NULL, cdn_relative_path = NULL,
+            cdn_sha256 = NULL, cdn_size = NULL, utime_at = NOW()
+        WHERE id = $1
+        RETURNING id, puzzle_id, round_id, sort, name, content, content_type,
+            cdn_backend, cdn_object_key, cdn_relative_path, cdn_sha256, cdn_size,
+            visibility_cond, ctime_at, utime_at",
+        id
+    )
+    .fetch_optional(pool)
+    .await?)
 }
 
 pub async fn admin_delete(pool: &DbPool, id: i32) -> Result<bool, RbInternalError> {

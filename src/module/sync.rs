@@ -127,6 +127,15 @@ impl SyncHub {
         );
     }
 
+    pub fn notify_system_status_updated(&self) {
+        let users = self
+            .users
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        self.push_users(&users, SyncMessageType::SystemStatusUpdated, ());
+    }
+
     pub async fn notify_puzzle_submitted(
         &self,
         db_pool: &DbPool,
@@ -581,6 +590,9 @@ pub struct WsEnvelope<T: Serialize> {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 pub enum SyncMessageType {
+    // 0 - system
+    SystemStatusUpdated = 1,
+
     // 100 - game
     GameNewAnnouncement = 101,
     GameReleaseUpdated = 102,

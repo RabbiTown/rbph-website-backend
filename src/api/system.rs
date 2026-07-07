@@ -9,7 +9,8 @@ struct SystemStatusResponse {
     registration_open: bool,
     require_email_verification: bool,
     maintenance_enabled: bool,
-    maintenance_message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maintenance_message: Option<String>,
 }
 
 async fn status(app: web::Data<AppState>) -> Result<HttpResponse> {
@@ -19,7 +20,9 @@ async fn status(app: web::Data<AppState>) -> Result<HttpResponse> {
         registration_open: settings.registration_open,
         require_email_verification: settings.require_email_verification,
         maintenance_enabled: settings.maintenance_enabled,
-        maintenance_message: settings.maintenance_message.clone(),
+        maintenance_message: settings
+            .maintenance_enabled
+            .then(|| settings.maintenance_message.clone()),
     }))
 }
 

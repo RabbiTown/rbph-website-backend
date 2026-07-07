@@ -94,6 +94,11 @@ async fn update(
     *app.system_settings.write().await = settings.clone();
     app.sync_hub
         .enforce_connection_limit(settings.max_websocket_connections as usize);
+    if previous.maintenance_enabled != settings.maintenance_enabled
+        || previous.maintenance_message != settings.maintenance_message
+    {
+        app.sync_hub.notify_system_status_updated();
+    }
 
     db::event_log::insert_pool(
         &app.db,

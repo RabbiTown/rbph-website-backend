@@ -483,6 +483,7 @@ pub enum AdminUserUpdateResult {
     Ok,
     NotFound,
     EmailConflict,
+    EmailForbidden,
     SelfRole,
     RoleForbidden,
 }
@@ -502,21 +503,26 @@ pub async fn admin_update(
     data: AdminUserUpdateData<'_>,
 ) -> Result<AdminUserUpdateResult, RbInternalError> {
     let mut tx = pool.begin().await?;
-    let current_role = sqlx::query_scalar!(
-        "SELECT urole FROM rb_user WHERE id = $1 FOR UPDATE",
+    let current = sqlx::query!(
+        "SELECT email, urole FROM rb_user WHERE id = $1 FOR UPDATE",
         user_id
     )
     .fetch_optional(&mut *tx)
     .await?;
-    let Some(current_role) = current_role else {
+    let Some(current) = current else {
         return Ok(AdminUserUpdateResult::NotFound);
     };
-    let current_role = RbUserRole::from(current_role);
+    let current_role = RbUserRole::from(current.urole);
     if actor_id == user_id && current_role != data.role {
         return Ok(AdminUserUpdateResult::SelfRole);
     }
     if !actor_role.can_change_role(Some(current_role), data.role) {
         return Ok(AdminUserUpdateResult::RoleForbidden);
+    }
+    if !current.email.eq_ignore_ascii_case(data.email)
+        && !actor_role.can_manage_credentials(current_role)
+    {
+        return Ok(AdminUserUpdateResult::EmailForbidden);
     }
     let updated = sqlx::query_scalar!(
         "UPDATE rb_user SET email = $2, nickname = $3, bio = $4, urole = $5

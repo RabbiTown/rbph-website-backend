@@ -38,6 +38,7 @@ struct UserWriteRequest {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum UserAdminResult {
+    EmailForbidden = -7,
     RoleForbidden = -6,
     SelfRole = -4,
     Conflict = -3,
@@ -214,6 +215,11 @@ async fn update(
         }
         db::user::AdminUserUpdateResult::SelfRole => {
             return RbError::conflict(UserAdminResult::SelfRole.into()).http_err();
+        }
+        db::user::AdminUserUpdateResult::EmailForbidden => {
+            return RbError::forbid()
+                .code(UserAdminResult::EmailForbidden.into())
+                .http_err();
         }
         db::user::AdminUserUpdateResult::RoleForbidden => {
             return RbError::forbid()

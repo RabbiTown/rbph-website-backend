@@ -1,52 +1,20 @@
-mod api;
-mod asset;
-mod config;
-mod db;
-mod error;
-mod expr;
-mod extractor;
-mod game;
-mod health;
-mod middleware;
-mod model;
-mod module;
-mod serde_helpers;
-
 use std::{sync::Arc, time::Duration};
 
 use actix_session::{SessionMiddleware, storage::RedisSessionStore};
 use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
-use sqlx::PgPool;
+use rbph_website_backend::{
+    AppState, api, asset, config, db, health,
+    middleware::maintenance::MaintenanceMiddleware,
+    module::{self, captcha::CaptchaService, email::EmailService, sync::SyncHub},
+};
 use tokio::{
     sync::{Notify, RwLock},
     time,
 };
 
-use crate::{
-    config::Settings,
-    middleware::maintenance::MaintenanceMiddleware,
-    module::{captcha::CaptchaService, email::EmailService, sync::SyncHub},
-};
-
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
-pub type DbPool = PgPool;
-pub type KvPool = deadpool_redis::Pool;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: DbPool,
-    pub kv: KvPool,
-    pub settings: Settings,
-    pub system_settings: Arc<RwLock<db::system_settings::SystemSettings>>,
-    pub sync_hub: Arc<SyncHub>,
-    pub release_schedule_changed: Arc<Notify>,
-    pub captcha: Option<Arc<CaptchaService>>,
-    pub email: Option<Arc<EmailService>>,
-    pub storage: module::storage::StorageManager,
-}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {

@@ -1,7 +1,9 @@
 use std::cell::RefCell;
 
 use boa_engine::{
-    Context, JsError, JsNativeError, JsString, JsValue, Module, NativeFunction, Source, js_string,
+    Context, JsError, JsNativeError, JsString, JsValue, Module, NativeFunction, Source,
+    builtins::promise::PromiseState,
+    js_string,
     object::{JsObject, ObjectInitializer},
     property::Attribute,
 };
@@ -1707,6 +1709,80 @@ pub fn register_ctx(
     Ok(())
 }
 
+fn resolve_promise_value(
+    value: JsValue,
+    context: &mut Context,
+) -> Result<JsValue, RbInternalError> {
+    let Some(promise) = value.as_promise() else {
+        return Ok(value);
+    };
+
+    context
+        .run_jobs()
+        .map_err(|e| internal_err(e.to_string()))?;
+    match promise.state() {
+        PromiseState::Fulfilled(value) => Ok(value.clone()),
+        PromiseState::Rejected(reason) => {
+            Err(internal_err(format!("api rejected: {}", reason.display())))
+        }
+        PromiseState::Pending => Err(internal_err("api promise is still pending")),
+    }
+}
+
+fn execute_backend_function<T>(
+    app: AppState,
+    backend: crate::db::puzzle_backend::PuzzleBackend,
+    function_name: String,
+    runtime: RuntimeContext,
+    build_args: impl FnOnce(&mut Context) -> Result<Vec<JsValue>, RbInternalError>,
+    convert_result: impl FnOnce(JsValue, &mut Context) -> Result<T, RbInternalError>,
+) -> Result<T, RbInternalError> {
+    RUNTIME_CONTEXT.with(|slot| {
+        *slot.borrow_mut() = Some(runtime);
+    });
+    let _guard = RuntimeContextGuard;
+
+    let mut context = Context::default();
+    configure_runtime_limits(&mut context);
+    register_ctx(
+        &mut context,
+        RuntimeServices {
+            app: app.clone(),
+            asset_runtime: AssetRuntime {
+                db: app.db.clone(),
+                storage: app.storage.clone(),
+                max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+            },
+        },
+    )?;
+
+    let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
+        .map_err(|e| internal_err(e.to_string()))?;
+    let promise = module.load_link_evaluate(&mut context);
+    context
+        .run_jobs()
+        .map_err(|e| internal_err(e.to_string()))?;
+    if let Some(err) = promise.state().as_rejected() {
+        return Err(internal_err(format!("module rejected: {}", err.display())));
+    }
+
+    let namespace = module.namespace(&mut context);
+    let value = namespace
+        .get(js_string!(function_name.as_str()), &mut context)
+        .map_err(|e| internal_err(e.to_string()))?;
+    let function = value
+        .as_function()
+        .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
+
+    let args = build_args(&mut context)?;
+    let result = function
+        .call(&JsValue::undefined(), &args, &mut context)
+        .map_err(|e| internal_err(e.to_string()))?;
+    let result = resolve_promise_value(result, &mut context)?;
+
+    convert_result(result, &mut context)
+}
+
 pub async fn execute_api(
     app: &AppState,
     backend: crate::db::puzzle_backend::PuzzleBackend,
@@ -1715,66 +1791,14 @@ pub async fn execute_api(
 ) -> Result<Value, RbInternalError> {
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
-        RUNTIME_CONTEXT.with(|slot| {
-            *slot.borrow_mut() = Some(runtime);
-        });
-        let _guard = RuntimeContextGuard;
-
-        let mut context = Context::default();
-        configure_runtime_limits(&mut context);
-        register_ctx(
-            &mut context,
-            RuntimeServices {
-                app: app.clone(),
-                asset_runtime: AssetRuntime {
-                    db: app.db.clone(),
-                    storage: app.storage.clone(),
-                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
-                },
-            },
-        )?;
-
-        let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let promise = module.load_link_evaluate(&mut context);
-        context
-            .run_jobs()
-            .map_err(|e| internal_err(e.to_string()))?;
-        if let Some(err) = promise.state().as_rejected() {
-            return Err(internal_err(format!("module rejected: {}", err.display())));
-        }
-
-        let namespace = module.namespace(&mut context);
-        let value = namespace
-            .get(js_string!(api_name.as_str()), &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let function = value
-            .as_function()
-            .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
-
-        let ctx_arg = build_ctx_arg(&mut context)?;
-        let result = function
-            .call(&JsValue::undefined(), &[ctx_arg], &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let result = if let Some(promise) = result.as_promise() {
-            context
-                .run_jobs()
-                .map_err(|e| internal_err(e.to_string()))?;
-            match promise.state() {
-                boa_engine::builtins::promise::PromiseState::Fulfilled(value) => value.clone(),
-                boa_engine::builtins::promise::PromiseState::Rejected(reason) => {
-                    return Err(internal_err(format!("api rejected: {}", reason.display())));
-                }
-                boa_engine::builtins::promise::PromiseState::Pending => {
-                    return Err(internal_err("api promise is still pending"));
-                }
-            }
-        } else {
-            result
-        };
-        let json = js_to_json(&result, &mut context)?;
-
-        Ok::<_, RbInternalError>(json)
+        execute_backend_function(
+            app,
+            backend,
+            api_name,
+            runtime,
+            |context| Ok(vec![build_ctx_arg(context)?]),
+            |result, context| js_to_json(&result, context),
+        )
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?
@@ -1788,86 +1812,39 @@ pub async fn execute_judge(
 ) -> Result<Option<crate::game::judge::JudgeBackendOutput>, RbInternalError> {
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
-        RUNTIME_CONTEXT.with(|slot| {
-            *slot.borrow_mut() = Some(RuntimeContext {
-                game_id: runtime.game_id,
-                method: "JUDGE".to_string(),
-                puzzle_id: runtime.puzzle_id,
-                team_id: runtime.team_id,
-                user_id: runtime.user_id,
-                api_name: function_name.clone(),
-                query: Value::Null,
-                body: Value::Null,
-                puzzle_title: runtime.puzzle_title.clone(),
-                user_nickname: runtime.user_nickname.clone(),
-                team_name: runtime.team_name.clone(),
-            });
-        });
-        let _guard = RuntimeContextGuard;
+        let runtime_context = RuntimeContext {
+            game_id: runtime.game_id,
+            method: "JUDGE".to_string(),
+            puzzle_id: runtime.puzzle_id,
+            team_id: runtime.team_id,
+            user_id: runtime.user_id,
+            api_name: function_name.clone(),
+            query: Value::Null,
+            body: Value::Null,
+            puzzle_title: runtime.puzzle_title.clone(),
+            user_nickname: runtime.user_nickname.clone(),
+            team_name: runtime.team_name.clone(),
+        };
+        execute_backend_function(
+            app,
+            backend,
+            function_name,
+            runtime_context,
+            |context| Ok(vec![build_judge_ctx_arg(context, &runtime)?]),
+            |result, context| {
+                let Some(json) = js_to_json_optional(&result, context)? else {
+                    return Ok(None);
+                };
+                let output: crate::game::judge::JudgeBackendOutput =
+                    serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
 
-        let mut context = Context::default();
-        configure_runtime_limits(&mut context);
-        register_ctx(
-            &mut context,
-            RuntimeServices {
-                app: app.clone(),
-                asset_runtime: AssetRuntime {
-                    db: app.db.clone(),
-                    storage: app.storage.clone(),
-                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
-                },
+                if output.ignored.is_some() && output.action.is_none() {
+                    return Err(internal_err("judge output ignored requires action"));
+                }
+
+                Ok(Some(output))
             },
-        )?;
-
-        let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let promise = module.load_link_evaluate(&mut context);
-        context
-            .run_jobs()
-            .map_err(|e| internal_err(e.to_string()))?;
-        if let Some(err) = promise.state().as_rejected() {
-            return Err(internal_err(format!("module rejected: {}", err.display())));
-        }
-
-        let namespace = module.namespace(&mut context);
-        let value = namespace
-            .get(js_string!(function_name.as_str()), &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let function = value
-            .as_function()
-            .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
-
-        let ctx_arg = build_judge_ctx_arg(&mut context, &runtime)?;
-        let result = function
-            .call(&JsValue::undefined(), &[ctx_arg], &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let result = if let Some(promise) = result.as_promise() {
-            context
-                .run_jobs()
-                .map_err(|e| internal_err(e.to_string()))?;
-            match promise.state() {
-                boa_engine::builtins::promise::PromiseState::Fulfilled(value) => value.clone(),
-                boa_engine::builtins::promise::PromiseState::Rejected(reason) => {
-                    return Err(internal_err(format!("api rejected: {}", reason.display())));
-                }
-                boa_engine::builtins::promise::PromiseState::Pending => {
-                    return Err(internal_err("api promise is still pending"));
-                }
-            }
-        } else {
-            result
-        };
-        let Some(json) = js_to_json_optional(&result, &mut context)? else {
-            return Ok::<_, RbInternalError>(None);
-        };
-        let output: crate::game::judge::JudgeBackendOutput =
-            serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
-
-        if output.ignored.is_some() && output.action.is_none() {
-            return Err(internal_err("judge output ignored requires action"));
-        }
-
-        Ok::<_, RbInternalError>(Some(output))
+        )
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?
@@ -1881,75 +1858,34 @@ pub async fn execute_hint_purchase(
 ) -> Result<(), RbInternalError> {
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
-        RUNTIME_CONTEXT.with(|slot| {
-            *slot.borrow_mut() = Some(RuntimeContext {
-                game_id: runtime.game_id,
-                method: "HINT_PURCHASE".to_string(),
-                puzzle_id: runtime.puzzle_id,
-                team_id: runtime.team_id,
-                user_id: runtime.user_id,
-                api_name: function_name.clone(),
-                query: Value::Null,
-                body: Value::Null,
-                puzzle_title: runtime.puzzle_title.clone(),
-                user_nickname: runtime.user_nickname.clone(),
-                team_name: runtime.team_name.clone(),
-            });
-        });
-        let _guard = RuntimeContextGuard;
-
-        let mut context = Context::default();
-        configure_runtime_limits(&mut context);
-        register_ctx(
-            &mut context,
-            RuntimeServices {
-                app: app.clone(),
-                asset_runtime: AssetRuntime {
-                    db: app.db.clone(),
-                    storage: app.storage.clone(),
-                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
-                },
+        let runtime_context = RuntimeContext {
+            game_id: runtime.game_id,
+            method: "HINT_PURCHASE".to_string(),
+            puzzle_id: runtime.puzzle_id,
+            team_id: runtime.team_id,
+            user_id: runtime.user_id,
+            api_name: function_name.clone(),
+            query: Value::Null,
+            body: Value::Null,
+            puzzle_title: runtime.puzzle_title.clone(),
+            user_nickname: runtime.user_nickname.clone(),
+            team_name: runtime.team_name.clone(),
+        };
+        let ctx_function_name = function_name.clone();
+        execute_backend_function(
+            app,
+            backend,
+            function_name,
+            runtime_context,
+            |context| {
+                Ok(vec![build_hint_purchase_ctx_arg(
+                    context,
+                    &runtime,
+                    &ctx_function_name,
+                )?])
             },
-        )?;
-
-        let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let promise = module.load_link_evaluate(&mut context);
-        context
-            .run_jobs()
-            .map_err(|e| internal_err(e.to_string()))?;
-        if let Some(err) = promise.state().as_rejected() {
-            return Err(internal_err(format!("module rejected: {}", err.display())));
-        }
-
-        let namespace = module.namespace(&mut context);
-        let value = namespace
-            .get(js_string!(function_name.as_str()), &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        let function = value
-            .as_function()
-            .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
-
-        let ctx_arg = build_hint_purchase_ctx_arg(&mut context, &runtime, &function_name)?;
-        let result = function
-            .call(&JsValue::undefined(), &[ctx_arg], &mut context)
-            .map_err(|e| internal_err(e.to_string()))?;
-        if let Some(promise) = result.as_promise() {
-            context
-                .run_jobs()
-                .map_err(|e| internal_err(e.to_string()))?;
-            match promise.state() {
-                boa_engine::builtins::promise::PromiseState::Fulfilled(_) => {}
-                boa_engine::builtins::promise::PromiseState::Rejected(reason) => {
-                    return Err(internal_err(format!("api rejected: {}", reason.display())));
-                }
-                boa_engine::builtins::promise::PromiseState::Pending => {
-                    return Err(internal_err("api promise is still pending"));
-                }
-            }
-        }
-
-        Ok::<_, RbInternalError>(())
+            |_, _| Ok(()),
+        )
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?

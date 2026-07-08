@@ -266,10 +266,6 @@ fn block_on_db<T>(
         return handle.block_on(future);
     }
 
-    if let Ok(handle) = Handle::try_current() {
-        return tokio::task::block_in_place(|| handle.block_on(future));
-    }
-
     futures::executor::block_on(future)
 }
 
@@ -2205,11 +2201,6 @@ pub async fn execute_judge_conn(
         .execute(&mut *conn)
         .await?;
 
-    JUDGE_CONN.with(|slot| {
-        *slot.borrow_mut() = Some(conn as *mut PgConnection);
-    });
-    let _guard = JudgeConnGuard;
-
     let runtime_context = RuntimeContext {
         game_id: runtime.game_id,
         method: "JUDGE".to_string(),
@@ -2227,29 +2218,39 @@ pub async fn execute_judge_conn(
     };
 
     let handle = Handle::current();
-    let result = tokio::task::block_in_place(|| {
-        let _handle_guard = set_tokio_handle(handle);
-        execute_backend_function(
-            app.clone(),
-            backend,
-            function_name,
-            runtime_context,
-            |context| Ok(vec![build_judge_ctx_arg(context, &runtime)?]),
-            |result, context| {
-                let Some(json) = js_to_json_optional(&result, context)? else {
-                    return Ok(None);
-                };
-                let output: crate::game::judge::JudgeBackendOutput =
-                    serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
+    let result = std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                JUDGE_CONN.with(|slot| {
+                    *slot.borrow_mut() = Some(conn as *mut PgConnection);
+                });
+                let _conn_guard = JudgeConnGuard;
+                let _handle_guard = set_tokio_handle(handle);
+                execute_backend_function(
+                    app.clone(),
+                    backend,
+                    function_name,
+                    runtime_context,
+                    |context| Ok(vec![build_judge_ctx_arg(context, &runtime)?]),
+                    |result, context| {
+                        let Some(json) = js_to_json_optional(&result, context)? else {
+                            return Ok(None);
+                        };
+                        let output: crate::game::judge::JudgeBackendOutput =
+                            serde_json::from_value(json)
+                                .map_err(|e| internal_err(e.to_string()))?;
 
-                if output.ignored.is_some() && output.action.is_none() {
-                    return Err(internal_err("judge output ignored requires action"));
-                }
+                        if output.ignored.is_some() && output.action.is_none() {
+                            return Err(internal_err("judge output ignored requires action"));
+                        }
 
-                Ok(Some(output))
-            },
-        )
-    });
+                        Ok(Some(output))
+                    },
+                )
+            })
+            .join()
+            .map_err(|_| internal_err("judge function panicked"))
+    })?;
 
     if result.is_ok() {
         sqlx::query!("SET LOCAL statement_timeout = DEFAULT;")

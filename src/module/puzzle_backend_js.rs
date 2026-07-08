@@ -12,6 +12,7 @@ use boa_engine::{
 };
 use serde_json::{Map, Value};
 use sqlx::PgConnection;
+use tokio::runtime::Handle;
 
 use crate::{
     AppState, DbPool,
@@ -88,6 +89,7 @@ const JUDGE_LOOP_ITERATION_LIMIT: u64 = 50_000;
 thread_local! {
     static RUNTIME_CONTEXT: RefCell<Option<RuntimeContext>> = const { RefCell::new(None) };
     static JUDGE_CONN: RefCell<Option<*mut PgConnection>> = const { RefCell::new(None) };
+    static TOKIO_HANDLE: RefCell<Option<Handle>> = const { RefCell::new(None) };
 }
 
 struct RuntimeContextGuard;
@@ -108,6 +110,23 @@ impl Drop for JudgeConnGuard {
             *slot.borrow_mut() = None;
         });
     }
+}
+
+struct TokioHandleGuard;
+
+impl Drop for TokioHandleGuard {
+    fn drop(&mut self) {
+        TOKIO_HANDLE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+fn set_tokio_handle(handle: Handle) -> TokioHandleGuard {
+    TOKIO_HANDLE.with(|slot| {
+        *slot.borrow_mut() = Some(handle);
+    });
+    TokioHandleGuard
 }
 
 fn with_runtime_context<T>(f: impl FnOnce(&RuntimeContext) -> T) -> Result<T, RbInternalError> {
@@ -242,13 +261,22 @@ fn optional_reason_arg(value: Option<&JsValue>, message: &str) -> Result<Option<
 fn block_on_db<T>(
     future: impl std::future::Future<Output = Result<T, RbInternalError>>,
 ) -> Result<T, RbInternalError> {
+    let handle = TOKIO_HANDLE.with(|slot| slot.borrow().clone());
+    if let Some(handle) = handle {
+        return handle.block_on(future);
+    }
+
+    if let Ok(handle) = Handle::try_current() {
+        return tokio::task::block_in_place(|| handle.block_on(future));
+    }
+
     futures::executor::block_on(future)
 }
 
 fn block_on_io<T>(
     future: impl std::future::Future<Output = Result<T, RbInternalError>>,
 ) -> Result<T, RbInternalError> {
-    futures::executor::block_on(future)
+    block_on_db(future)
 }
 
 fn js_asset_path_arg(value: Option<JsString>, message: &str) -> Result<String, JsError> {
@@ -2097,7 +2125,9 @@ pub async fn execute_api(
     runtime: RuntimeContext,
 ) -> Result<Value, RbInternalError> {
     let app = app.clone();
+    let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
+        let _handle_guard = set_tokio_handle(handle);
         execute_backend_function(
             app,
             backend,
@@ -2118,7 +2148,9 @@ pub async fn execute_judge(
     runtime: JudgeRuntimeContext,
 ) -> Result<Option<crate::game::judge::JudgeBackendOutput>, RbInternalError> {
     let app = app.clone();
+    let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
+        let _handle_guard = set_tokio_handle(handle);
         let runtime_context = RuntimeContext {
             game_id: runtime.game_id,
             method: "JUDGE".to_string(),
@@ -2194,26 +2226,30 @@ pub async fn execute_judge_conn(
         timeout: JUDGE_EXECUTION_TIMEOUT,
     };
 
-    let result = execute_backend_function(
-        app.clone(),
-        backend,
-        function_name,
-        runtime_context,
-        |context| Ok(vec![build_judge_ctx_arg(context, &runtime)?]),
-        |result, context| {
-            let Some(json) = js_to_json_optional(&result, context)? else {
-                return Ok(None);
-            };
-            let output: crate::game::judge::JudgeBackendOutput =
-                serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
+    let handle = Handle::current();
+    let result = tokio::task::block_in_place(|| {
+        let _handle_guard = set_tokio_handle(handle);
+        execute_backend_function(
+            app.clone(),
+            backend,
+            function_name,
+            runtime_context,
+            |context| Ok(vec![build_judge_ctx_arg(context, &runtime)?]),
+            |result, context| {
+                let Some(json) = js_to_json_optional(&result, context)? else {
+                    return Ok(None);
+                };
+                let output: crate::game::judge::JudgeBackendOutput =
+                    serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
 
-            if output.ignored.is_some() && output.action.is_none() {
-                return Err(internal_err("judge output ignored requires action"));
-            }
+                if output.ignored.is_some() && output.action.is_none() {
+                    return Err(internal_err("judge output ignored requires action"));
+                }
 
-            Ok(Some(output))
-        },
-    );
+                Ok(Some(output))
+            },
+        )
+    });
 
     if result.is_ok() {
         sqlx::query!("SET LOCAL statement_timeout = DEFAULT;")
@@ -2234,7 +2270,9 @@ pub async fn execute_hint_purchase(
     runtime: HintPurchaseRuntimeContext,
 ) -> Result<(), RbInternalError> {
     let app = app.clone();
+    let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
+        let _handle_guard = set_tokio_handle(handle);
         let runtime_context = RuntimeContext {
             game_id: runtime.game_id,
             method: "HINT_PURCHASE".to_string(),

@@ -8,7 +8,7 @@ use deadpool_redis::redis::{AsyncCommands, RedisError};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::prelude::FromRow;
+use sqlx::{PgConnection, prelude::FromRow};
 use time::OffsetDateTime;
 
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
     extractor::auth::AuthUser,
     game::{
         self,
-        judge::{JudgeResult, JudgeRule, judge_by_rules, normalize_answer},
+        judge::{JudgeResult, JudgeRule, normalize_answer},
     },
     model::game::{
         RbContentType, RbJudgeAction, RbPuzzlePenaltyType, RbPuzzleType, RbTeamPuzzleState,
@@ -617,8 +617,9 @@ pub async fn solve_backend_puzzle(
     }
 
     if solved {
-        db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
-        db::ticket::close_puzzle_tickets_on_solve(&mut tx, team_id, puzzle_id, user_id).await?;
+        db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
+        db::ticket::close_puzzle_tickets_on_solve_conn(&mut tx, team_id, puzzle_id, user_id)
+            .await?;
     }
 
     tx.commit().await?;
@@ -835,8 +836,8 @@ pub enum SubmitAnswerResult {
     NotFound,
 }
 
-async fn submit_requirements_met(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn submit_requirements_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     game_id: i32,
     requirements: &[PuzzleSubmitRequirement],
@@ -864,7 +865,7 @@ async fn submit_requirements_met(
             currency_id,
             game_id
         )
-        .fetch_optional(&mut **tx)
+        .fetch_optional(&mut *conn)
         .await?;
         if current.is_none_or(|amount| amount < *minimum) {
             return Ok(false);
@@ -959,7 +960,7 @@ pub async fn submit_answer(
     else {
         return Ok(SubmitAnswerResult::Locked);
     };
-    if !submit_requirements_met(&mut tx, team_id, puzzle_info.game_id, &requirements).await? {
+    if !submit_requirements_conn(&mut tx, team_id, puzzle_info.game_id, &requirements).await? {
         return Ok(SubmitAnswerResult::Locked);
     }
 
@@ -986,53 +987,81 @@ pub async fn submit_answer(
     let submit_id = submit_row.id;
     let submit_ctime_at = submit_row.ctime_at;
 
-    let norm_answer_for_rules = norm_answer.clone();
-    let norm_answer_for_custom = norm_answer.clone();
+    let mut result = JudgeResult {
+        action: RbJudgeAction::Fail,
+        result: None,
+        answer: None,
+        ignored: false,
+        triggers: Vec::new(),
+    };
+    for rule in rules.iter() {
+        match rule.rtype.as_deref() {
+            Some("exact") => {
+                if let Some(expected) = &rule.text
+                    && expected == &norm_answer
+                {
+                    result = JudgeResult {
+                        action: rule.action.clone().into(),
+                        result: rule.result.clone(),
+                        answer: rule.answer.clone(),
+                        ignored: false,
+                        triggers: rule.triggers.clone(),
+                    };
+                    break;
+                }
+            }
+            Some("custom") => {
+                let backend_name = rule.function.clone().ok_or_else(|| {
+                    RbInternalError::Other("custom judge function is missing".to_string())
+                })?;
+                let backend = db::puzzle_backend::get_backend(&app.db, puzzle_id)
+                    .await?
+                    .ok_or(RbInternalError::Other("backend not found".to_string()))?;
+                let puzzle_info = get_puzzle_judge_info(&app.db, puzzle_id)
+                    .await?
+                    .ok_or(RbInternalError::Other("puzzle not found".to_string()))?;
+                let user_info = db::user::get_display_by_id(&app.db, user.uid).await?;
+                let team_info = db::team::get_by_id_show(&app.db, team_id).await?;
+                let team_info =
+                    team_info.ok_or(RbInternalError::Other("team not found".to_string()))?;
 
-    let result = judge_by_rules(&rules, &norm_answer_for_rules, move |rule| {
-        let app = app.clone();
-        let submit_row = submit_row.clone();
-        let backend_name = rule.function.clone();
-        let norm_answer = norm_answer_for_custom.clone();
-        async move {
-            let backend_name = backend_name.ok_or_else(|| {
-                RbInternalError::Other("custom judge function is missing".to_string())
-            })?;
-            let backend = db::puzzle_backend::get_backend(&app.db, puzzle_id)
+                if let Some(output) = crate::module::puzzle_backend_js::execute_judge_conn(
+                    app,
+                    &mut tx,
+                    backend,
+                    backend_name,
+                    crate::module::puzzle_backend_js::JudgeRuntimeContext {
+                        puzzle_id: puzzle_info.id,
+                        game_id: puzzle_info.game_id,
+                        puzzle_title: puzzle_info.title,
+                        team_id,
+                        team_name: team_info.name,
+                        user_id: user.uid,
+                        user_nickname: user_info.nickname,
+                        user_answer: answer.to_string(),
+                        norm_answer: norm_answer.clone(),
+                        submission: submit_row.clone(),
+                    },
+                )
                 .await?
-                .ok_or(RbInternalError::Other("backend not found".to_string()))?;
-            let puzzle_info = get_puzzle_judge_info(&app.db, puzzle_id)
-                .await?
-                .ok_or(RbInternalError::Other("puzzle not found".to_string()))?;
-            let user_info = db::user::get_display_by_id(&app.db, user.uid).await?;
-            let team_info = db::team::get_by_id_show(&app.db, team_id).await?;
-            let submit_row = submit_row.clone();
-            let team_info =
-                team_info.ok_or(RbInternalError::Other("team not found".to_string()))?;
-
-            let output = crate::module::puzzle_backend_js::execute_judge(
-                &app,
-                backend,
-                backend_name,
-                crate::module::puzzle_backend_js::JudgeRuntimeContext {
-                    puzzle_id: puzzle_info.id,
-                    game_id: puzzle_info.game_id,
-                    puzzle_title: puzzle_info.title,
-                    team_id,
-                    team_name: team_info.name,
-                    user_id: user.uid,
-                    user_nickname: user_info.nickname,
-                    user_answer: answer.to_string(),
-                    norm_answer,
-                    submission: submit_row,
-                },
-            )
-            .await?;
-
-            Ok(output)
+                {
+                    result = output.into();
+                    break;
+                }
+            }
+            Some("all") => {
+                result = JudgeResult {
+                    action: rule.action.clone().into(),
+                    result: rule.result.clone(),
+                    answer: rule.answer.clone(),
+                    ignored: false,
+                    triggers: rule.triggers.clone(),
+                };
+                break;
+            }
+            _ => {}
         }
-    })
-    .await?;
+    }
 
     if result
         .triggers
@@ -1075,11 +1104,11 @@ pub async fn submit_answer(
         .execute(&mut *tx)
         .await?;
         if inserted_triggers.rows_affected() > 0 {
-            db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
+            db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
         }
     }
 
-    db::event_log::insert_tx(
+    db::event_log::insert_conn(
         &mut tx,
         db::event_log::EventLogInput {
             event_type: "submission.judged",
@@ -1144,10 +1173,10 @@ pub async fn submit_answer(
             }
 
             if update.rows_affected() > 0 {
-                db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
+                db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
                 solved = true;
                 do_unlock = true;
-                db::event_log::insert_tx(
+                db::event_log::insert_conn(
                     &mut tx,
                     db::event_log::EventLogInput {
                         event_type: "puzzle.solved",
@@ -1173,8 +1202,10 @@ pub async fn submit_answer(
                     },
                 )
                 .await?;
-                db::ticket::close_puzzle_tickets_on_solve(&mut tx, team_id, puzzle_id, user.uid)
-                    .await?;
+                db::ticket::close_puzzle_tickets_on_solve_conn(
+                    &mut tx, team_id, puzzle_id, user.uid,
+                )
+                .await?;
             }
         }
         RbJudgeAction::StartGame => {
@@ -1201,8 +1232,8 @@ pub async fn submit_answer(
             .await?;
 
             if result.rows_affected() > 0 {
-                db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
-                db::event_log::insert_tx(
+                db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
+                db::event_log::insert_conn(
                     &mut tx,
                     db::event_log::EventLogInput {
                         event_type: "game.started",
@@ -1320,7 +1351,7 @@ pub async fn submit_answer(
                                     amount: penalty_row.amount,
                                 };
                                 currency_updated = true;
-                                db::event_log::insert_tx(
+                                db::event_log::insert_conn(
                                     &mut tx,
                                     db::event_log::EventLogInput {
                                         event_type: "currency.penalty",
@@ -2173,7 +2204,7 @@ pub async fn purchase_hint(
     .fetch_one(&mut *tx)
     .await?;
 
-    db::event_log::insert_tx(
+    db::event_log::insert_conn(
         &mut tx,
         db::event_log::EventLogInput {
             event_type: "hint.purchased",
@@ -2375,8 +2406,8 @@ pub async fn admin_get(
     Ok(result)
 }
 
-async fn clear_immediate_release_events_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn clear_immediate_release_events_conn(
+    conn: &mut PgConnection,
     puzzle_ids: &[i32],
 ) -> Result<(), RbInternalError> {
     sqlx::query!(
@@ -2386,13 +2417,13 @@ async fn clear_immediate_release_events_tx(
             AND rep.puzzle_id = ANY($1);",
         puzzle_ids
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-async fn create_immediate_release_event_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn create_immediate_release_event_conn(
+    conn: &mut PgConnection,
     game_id: i32,
     puzzle_ids: &[i32],
     occurred_at: OffsetDateTime,
@@ -2403,7 +2434,7 @@ async fn create_immediate_release_event_tx(
         game_id,
         occurred_at
     )
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *conn)
     .await?;
     sqlx::query!(
         "INSERT INTO rb_release_event_puzzle (event_id, puzzle_id)
@@ -2413,7 +2444,7 @@ async fn create_immediate_release_event_tx(
         game_id,
         puzzle_ids
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     sqlx::query!(
         "INSERT INTO rb_release_event_puzzle_team (event_id, puzzle_id, team_id)
@@ -2425,7 +2456,7 @@ async fn create_immediate_release_event_tx(
         game_id,
         puzzle_ids
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
@@ -2490,7 +2521,7 @@ pub async fn admin_create(
     if let Some(puzzle) = &result
         && let Some(released_at) = puzzle.immediate_release_at
     {
-        create_immediate_release_event_tx(&mut tx, puzzle.game_id, &[puzzle.id], released_at)
+        create_immediate_release_event_conn(&mut tx, puzzle.game_id, &[puzzle.id], released_at)
             .await?;
     }
     tx.commit().await?;
@@ -2513,7 +2544,7 @@ pub async fn admin_update(
 
     let mut tx = pool.begin().await?;
     if release_is_set {
-        clear_immediate_release_events_tx(&mut tx, &[puzzle_id]).await?;
+        clear_immediate_release_events_conn(&mut tx, &[puzzle_id]).await?;
     }
     let result = sqlx::query_as!(
         RbPuzzleAdminData,
@@ -2590,7 +2621,7 @@ pub async fn admin_update(
         && release_immediately
         && let Some(released_at) = puzzle.immediate_release_at
     {
-        create_immediate_release_event_tx(&mut tx, puzzle.game_id, &[puzzle.id], released_at)
+        create_immediate_release_event_conn(&mut tx, puzzle.game_id, &[puzzle.id], released_at)
             .await?;
     }
     tx.commit().await?;
@@ -2605,7 +2636,7 @@ pub async fn admin_batch_update_release_phase(
     release_immediately: bool,
 ) -> Result<Option<Vec<RbPuzzleAdminData>>, RbInternalError> {
     let mut tx = pool.begin().await?;
-    clear_immediate_release_events_tx(&mut tx, puzzle_ids).await?;
+    clear_immediate_release_events_conn(&mut tx, puzzle_ids).await?;
     let puzzles = sqlx::query_as!(
         RbPuzzleAdminData,
         "UPDATE rb_puzzle p
@@ -2643,7 +2674,7 @@ pub async fn admin_batch_update_release_phase(
             .first()
             .and_then(|puzzle| puzzle.immediate_release_at)
     {
-        create_immediate_release_event_tx(&mut tx, game_id, puzzle_ids, released_at).await?;
+        create_immediate_release_event_conn(&mut tx, game_id, puzzle_ids, released_at).await?;
     }
 
     tx.commit().await?;

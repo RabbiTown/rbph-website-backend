@@ -52,7 +52,7 @@ pub async fn ensure_root(pool: &DbPool) -> Result<bool, RbInternalError> {
     .execute(&mut *tx)
     .await?;
 
-    event_log::insert_tx(
+    event_log::insert_conn(
         &mut tx,
         EventLogInput {
             event_type: "system.root_bootstrap",

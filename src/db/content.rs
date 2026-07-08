@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::{FromRow, PgConnection, Postgres, Transaction};
+use sqlx::{FromRow, PgConnection};
 use time::OffsetDateTime;
 
 use crate::{
@@ -180,8 +180,8 @@ pub async fn admin_create(
     .await?)
 }
 
-pub async fn admin_update(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn admin_update_conn(
+    conn: &mut PgConnection,
     id: i32,
     data: ContentBlockUpdate<'_>,
 ) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
@@ -189,7 +189,7 @@ pub async fn admin_update(
         "SELECT visibility_cond FROM rb_content_block WHERE id = $1",
         id
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?;
     let result = sqlx::query_as!(
         RbContentBlockAdminData,
@@ -219,7 +219,7 @@ pub async fn admin_update(
         data.artifact.as_ref().map(|artifact| artifact.sha256),
         data.artifact.as_ref().map(|artifact| artifact.size),
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?;
     if result.is_some() && previous_condition.as_deref() != Some(data.visibility_cond) {
         sqlx::query!(
@@ -233,14 +233,14 @@ pub async fn admin_update(
             )",
             id
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(result)
 }
 
-pub async fn admin_set_artifact(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn admin_set_artifact_conn(
+    conn: &mut PgConnection,
     id: i32,
     artifact: ContentBlockArtifact<'_>,
 ) -> Result<Option<RbContentBlockAdminData>, RbInternalError> {
@@ -260,7 +260,7 @@ pub async fn admin_set_artifact(
         artifact.sha256,
         artifact.size,
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?)
 }
 
@@ -349,15 +349,15 @@ pub async fn admin_clear_unlocks(pool: &DbPool, id: i32) -> Result<u64, RbIntern
     Ok(deleted.len() as u64)
 }
 
-pub async fn mark_team_dirty_tx(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn mark_team_dirty_conn(
+    conn: &mut PgConnection,
     team_id: i32,
 ) -> Result<(), RbInternalError> {
     sqlx::query!(
         "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = $1",
         team_id
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
@@ -395,7 +395,7 @@ impl PuzzleStates for TeamContentStates {
     }
 }
 
-async fn team_states(
+async fn team_states_conn(
     conn: &mut PgConnection,
     team_id: i32,
     game_id: i32,
@@ -533,7 +533,7 @@ async fn refresh_team_unlocks_if_dirty(
         .filter(|block| !unlocked.contains(&block.id))
         .collect::<Vec<_>>();
     if !pending.is_empty() {
-        let states = team_states(&mut tx, team_id, game_id, team.is_locked).await?;
+        let states = team_states_conn(&mut tx, team_id, game_id, team.is_locked).await?;
         for block in pending {
             let allowed = expr::compile_gate_expr(&block.visibility_cond)
                 .ok()

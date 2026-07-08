@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::FromRow;
+use sqlx::{FromRow, PgConnection};
 use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError};
@@ -355,6 +355,15 @@ pub async fn ensure_scope_in_game(
     game_id: i32,
     scope: BackendScope,
 ) -> Result<bool, RbInternalError> {
+    let mut conn = db_pool.acquire().await?;
+    ensure_scope_in_game_conn(&mut conn, game_id, scope).await
+}
+
+pub async fn ensure_scope_in_game_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+) -> Result<bool, RbInternalError> {
     let valid = match scope {
         BackendScope::Global => true,
         BackendScope::Team { team_id } => sqlx::query_scalar!(
@@ -362,14 +371,14 @@ pub async fn ensure_scope_in_game(
             team_id,
             game_id
         )
-        .fetch_one(db_pool)
+        .fetch_one(&mut *conn)
         .await?,
         BackendScope::Puzzle { puzzle_id } => sqlx::query_scalar!(
             "SELECT EXISTS (SELECT 1 FROM rb_puzzle WHERE id = $1 AND game_id = $2) AS \"exists!\"",
             puzzle_id,
             game_id
         )
-        .fetch_one(db_pool)
+        .fetch_one(&mut *conn)
         .await?,
         BackendScope::TeamPuzzle { team_id, puzzle_id } => {
             sqlx::query_scalar!(
@@ -382,7 +391,7 @@ pub async fn ensure_scope_in_game(
                 puzzle_id,
                 game_id
             )
-            .fetch_one(db_pool)
+            .fetch_one(&mut *conn)
             .await?
         }
     };
@@ -404,13 +413,37 @@ async fn require_scope_in_game(
     }
 }
 
+async fn require_scope_in_game_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+) -> Result<(), RbInternalError> {
+    if ensure_scope_in_game_conn(conn, game_id, scope).await? {
+        Ok(())
+    } else {
+        Err(RbInternalError::Other(
+            "backend scope does not belong to current game".to_string(),
+        ))
+    }
+}
+
 pub async fn get_kv(
     db_pool: &DbPool,
     game_id: i32,
     scope: BackendScope,
     key: &str,
 ) -> Result<Option<Value>, RbInternalError> {
-    require_scope_in_game(db_pool, game_id, scope).await?;
+    let mut conn = db_pool.acquire().await?;
+    get_kv_conn(&mut conn, game_id, scope, key).await
+}
+
+pub async fn get_kv_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+) -> Result<Option<Value>, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let row = sqlx::query!(
         r#"SELECT value FROM rb_puzzle_kv
@@ -424,7 +457,7 @@ pub async fn get_kv(
         puzzle_id,
         key
     )
-    .fetch_optional(db_pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(row.map(|row| row.value))
@@ -437,7 +470,18 @@ pub async fn set_kv(
     key: &str,
     value: &Value,
 ) -> Result<Value, RbInternalError> {
-    require_scope_in_game(db_pool, game_id, scope).await?;
+    let mut conn = db_pool.acquire().await?;
+    set_kv_conn(&mut conn, game_id, scope, key, value).await
+}
+
+pub async fn set_kv_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    value: &Value,
+) -> Result<Value, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let value = sqlx::query_scalar!(
         r#"INSERT INTO rb_puzzle_kv (game_id, scope_type, team_id, puzzle_id, key, value)
@@ -452,7 +496,7 @@ pub async fn set_kv(
         key,
         value
     )
-    .fetch_one(db_pool)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(value)
@@ -464,7 +508,17 @@ pub async fn delete_kv(
     scope: BackendScope,
     key: &str,
 ) -> Result<bool, RbInternalError> {
-    require_scope_in_game(db_pool, game_id, scope).await?;
+    let mut conn = db_pool.acquire().await?;
+    delete_kv_conn(&mut conn, game_id, scope, key).await
+}
+
+pub async fn delete_kv_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+) -> Result<bool, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let result = sqlx::query!(
         r#"DELETE FROM rb_puzzle_kv
@@ -478,7 +532,7 @@ pub async fn delete_kv(
         puzzle_id,
         key
     )
-    .execute(db_pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(result.rows_affected() > 0)
@@ -553,9 +607,26 @@ pub async fn insert_store_doc(
     value: &Value,
     indexes: &[PuzzleStoreIndexEntry],
 ) -> Result<PuzzleStoreDoc, RbInternalError> {
-    require_scope_in_game(db_pool, game_id, scope).await?;
-    let (scope_type, team_id, puzzle_id) = scope.parts();
     let mut tx = db_pool.begin().await?;
+    let doc = insert_store_doc_conn(
+        &mut tx, game_id, scope, collection, created_by, value, indexes,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(doc)
+}
+
+pub async fn insert_store_doc_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    collection: &str,
+    created_by: i32,
+    value: &Value,
+    indexes: &[PuzzleStoreIndexEntry],
+) -> Result<PuzzleStoreDoc, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
 
     let row = sqlx::query!(
         r#"INSERT INTO rb_puzzle_store_doc
@@ -570,7 +641,7 @@ pub async fn insert_store_doc(
         created_by,
         value
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     for index in indexes {
@@ -586,7 +657,7 @@ pub async fn insert_store_doc(
                     &index.key,
                     value
                 )
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
             }
             PuzzleStoreIndexValue::Number(value) => {
@@ -600,7 +671,7 @@ pub async fn insert_store_doc(
                     &index.key,
                     value
                 )
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
             }
             PuzzleStoreIndexValue::Bool(value) => {
@@ -614,18 +685,16 @@ pub async fn insert_store_doc(
                     &index.key,
                     value
                 )
-                .execute(&mut *tx)
+                .execute(&mut *conn)
                 .await?;
             }
         }
     }
 
     let user = sqlx::query!("SELECT nickname FROM rb_user WHERE id = $1", row.created_by)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut *conn)
         .await?
         .map(|row| row.nickname);
-
-    tx.commit().await?;
 
     Ok(store_doc_from_row(StoreDocRow {
         id: row.id,
@@ -648,7 +717,18 @@ pub async fn get_store_doc(
     collection: &str,
     doc_id: i64,
 ) -> Result<Option<PuzzleStoreDoc>, RbInternalError> {
-    require_scope_in_game(db_pool, game_id, scope).await?;
+    let mut conn = db_pool.acquire().await?;
+    get_store_doc_conn(&mut conn, game_id, scope, collection, doc_id).await
+}
+
+pub async fn get_store_doc_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    collection: &str,
+    doc_id: i64,
+) -> Result<Option<PuzzleStoreDoc>, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let row = sqlx::query!(
         r#"SELECT d.id, d.scope_type, d.team_id, d.puzzle_id, d.collection,
@@ -666,7 +746,7 @@ pub async fn get_store_doc(
         collection,
         doc_id
     )
-    .fetch_optional(db_pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(row.map(|row| {
@@ -692,7 +772,18 @@ pub async fn list_store_docs(
     collection: &str,
     options: &PuzzleStoreListOptions,
 ) -> Result<Vec<PuzzleStoreDoc>, RbInternalError> {
-    require_scope_in_game(db_pool, game_id, scope).await?;
+    let mut conn = db_pool.acquire().await?;
+    list_store_docs_conn(&mut conn, game_id, scope, collection, options).await
+}
+
+pub async fn list_store_docs_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    collection: &str,
+    options: &PuzzleStoreListOptions,
+) -> Result<Vec<PuzzleStoreDoc>, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let text_keys: Vec<String> = options
         .filters
@@ -789,7 +880,7 @@ pub async fn list_store_docs(
         limit,
         options.descending
     )
-    .fetch_all(db_pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows

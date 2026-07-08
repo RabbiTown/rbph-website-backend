@@ -16,10 +16,10 @@ pub fn normalize_answer(s: &str) -> String {
 pub struct JudgeRule {
     #[serde(rename = "type")]
     pub rtype: Option<String>,
-    text: Option<String>,
-    action: Option<String>,
-    result: Option<String>,
-    answer: Option<String>,
+    pub text: Option<String>,
+    pub action: Option<String>,
+    pub result: Option<String>,
+    pub answer: Option<String>,
     pub function: Option<String>,
     #[serde(default)]
     pub triggers: Vec<String>,

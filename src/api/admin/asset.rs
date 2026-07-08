@@ -319,8 +319,8 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
 
     let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
     let result = async {
-        let group = db::asset::create_group(
-            &mut *tx,
+        let group = db::asset::create_group_conn(
+            &mut tx,
             db::asset::CreateAssetGroupData {
                 game_id,
                 puzzle_id,
@@ -338,8 +338,8 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
         let mut db_files = Vec::with_capacity(stored_files.len());
         for file in &stored_files {
             db_files.push(
-                db::asset::create_file(
-                    &mut *tx,
+                db::asset::create_file_conn(
+                    &mut tx,
                     group.id,
                     &file.relative_path,
                     &file.mime_type,

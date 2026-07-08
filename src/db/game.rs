@@ -295,7 +295,7 @@ pub async fn update_currency(
     };
 
     if current.growth != data.growth && current.state == 1 {
-        db::feature::settle_currency_growth_tx(
+        db::feature::settle_currency_growth_conn(
             &mut tx,
             game_id,
             Some(currency_id),
@@ -371,7 +371,7 @@ pub async fn create(pool: &DbPool, data: &RbGameCreateData) -> Result<RbGame, Rb
     .fetch_one(&mut *tx)
     .await?;
 
-    db::feature::initialize_game_tx(&mut tx, game_id).await?;
+    db::feature::initialize_game_conn(&mut tx, game_id).await?;
 
     tx.commit().await?;
 

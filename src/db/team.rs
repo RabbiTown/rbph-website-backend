@@ -2,7 +2,7 @@ use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_repr::Serialize_repr;
-use sqlx::{Postgres, QueryBuilder, Transaction};
+use sqlx::{PgConnection, QueryBuilder};
 use time::OffsetDateTime;
 use validator::Validate;
 
@@ -16,8 +16,8 @@ pub struct RbTeamPutData {
     pub game_id: i32,
 }
 
-async fn init_team_puzzles_tx(
-    tx: &mut Transaction<'_, Postgres>,
+async fn init_team_puzzles_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     game_id: i32,
 ) -> Result<(), RbInternalError> {
@@ -31,7 +31,7 @@ async fn init_team_puzzles_tx(
         team_id,
         game_id
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())
@@ -239,7 +239,7 @@ pub async fn join(
     .await?;
 
     if result.rows_affected() > 0 {
-        db::event_log::insert_tx(
+        db::event_log::insert_conn(
             &mut tx,
             db::event_log::EventLogInput {
                 event_type: "team.member.joined",
@@ -317,9 +317,9 @@ pub async fn user_create(
         return Ok(TeamCreateResult::ToMany);
     }
 
-    init_team_puzzles_tx(&mut tx, team_id, data.game_id).await?;
+    init_team_puzzles_conn(&mut tx, team_id, data.game_id).await?;
 
-    db::event_log::insert_tx(
+    db::event_log::insert_conn(
         &mut tx,
         db::event_log::EventLogInput {
             event_type: "team.created",
@@ -404,7 +404,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
     .await?;
 
     if let Some(game_id) = result {
-        db::event_log::insert_tx(
+        db::event_log::insert_conn(
             &mut tx,
             db::event_log::EventLogInput {
                 event_type: "team.disbanded",
@@ -597,8 +597,8 @@ pub struct RbCurrencyShowData {
     utime_at: OffsetDateTime,
 }
 
-async fn get_currency_info_impl(
-    db_pool: &DbPool,
+async fn get_currency_info_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     include_hidden: bool,
 ) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
@@ -621,7 +621,7 @@ async fn get_currency_info_impl(
         team_id,
         include_hidden
     )
-    .fetch_all(db_pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(result)
@@ -631,18 +631,27 @@ pub async fn get_currency_info(
     db_pool: &DbPool,
     team_id: i32,
 ) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
-    get_currency_info_impl(db_pool, team_id, false).await
+    let mut conn = db_pool.acquire().await?;
+    get_currency_info_conn(&mut conn, team_id, false).await
 }
 
 pub async fn get_currency_info_all(
     db_pool: &DbPool,
     team_id: i32,
 ) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
-    get_currency_info_impl(db_pool, team_id, true).await
+    let mut conn = db_pool.acquire().await?;
+    get_currency_info_all_conn(&mut conn, team_id).await
 }
 
-async fn get_currency_info_one_impl(
-    db_pool: &DbPool,
+pub async fn get_currency_info_all_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+) -> Result<Vec<RbCurrencyShowData>, RbInternalError> {
+    get_currency_info_conn(conn, team_id, true).await
+}
+
+async fn get_currency_info_one_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     currency_id: i32,
     include_hidden: bool,
@@ -667,7 +676,7 @@ async fn get_currency_info_one_impl(
         currency_id,
         include_hidden
     )
-    .fetch_optional(db_pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(result)
@@ -678,11 +687,20 @@ pub async fn get_currency_info_one_all(
     team_id: i32,
     currency_id: i32,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
-    get_currency_info_one_impl(db_pool, team_id, currency_id, true).await
+    let mut conn = db_pool.acquire().await?;
+    get_currency_info_one_all_conn(&mut conn, team_id, currency_id).await
 }
 
-async fn get_currency_info_one_by_slug_impl(
-    db_pool: &DbPool,
+pub async fn get_currency_info_one_all_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    currency_id: i32,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    get_currency_info_one_conn(conn, team_id, currency_id, true).await
+}
+
+async fn get_currency_info_one_by_slug_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     game_id: i32,
     slug: &str,
@@ -709,7 +727,7 @@ async fn get_currency_info_one_by_slug_impl(
         slug,
         include_hidden
     )
-    .fetch_optional(db_pool)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(result)
@@ -721,7 +739,17 @@ pub async fn get_currency_info_one_by_slug_all(
     game_id: i32,
     slug: &str,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
-    get_currency_info_one_by_slug_impl(db_pool, team_id, game_id, slug, true).await
+    let mut conn = db_pool.acquire().await?;
+    get_currency_info_one_by_slug_all_conn(&mut conn, team_id, game_id, slug).await
+}
+
+pub async fn get_currency_info_one_by_slug_all_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    get_currency_info_one_by_slug_conn(conn, team_id, game_id, slug, true).await
 }
 
 #[derive(sqlx::FromRow)]
@@ -735,20 +763,22 @@ struct CurrencyRuntimeRow {
     max_amount: i64,
 }
 
+#[derive(Clone, Copy)]
 pub struct UpdateCurrencyOptions {
     pub amount: Option<i64>,
     pub growth: Option<i64>,
     pub hidden: Option<bool>,
 }
 
+#[derive(Clone, Copy)]
 pub struct CurrencyEventContext<'a> {
     pub puzzle_id: Option<i32>,
     pub puzzle_title: Option<&'a str>,
     pub reason: Option<&'a str>,
 }
 
-async fn lock_currency_runtime(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn lock_currency_runtime_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     currency_id: i32,
 ) -> Result<Option<CurrencyRuntimeRow>, RbInternalError> {
@@ -776,14 +806,14 @@ async fn lock_currency_runtime(
         team_id,
         currency_id
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(row)
 }
 
-async fn lock_currency_runtime_by_slug(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn lock_currency_runtime_by_slug_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     game_id: i32,
     slug: &str,
@@ -813,14 +843,14 @@ async fn lock_currency_runtime_by_slug(
         game_id,
         slug
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?;
 
     Ok(row)
 }
 
-async fn update_currency_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn apply_currency_update_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     row: &CurrencyRuntimeRow,
     options: &UpdateCurrencyOptions,
@@ -849,7 +879,7 @@ async fn update_currency_tx(
         next_amount,
         options.hidden
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
@@ -861,15 +891,9 @@ pub async fn update_currency(
     options: UpdateCurrencyOptions,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-
-    update_currency_tx(&mut tx, team_id, &row, &options).await?;
+    let result = update_currency_conn(&mut tx, team_id, currency_id, options).await?;
     tx.commit().await?;
-
-    get_currency_info_one_all(db_pool, team_id, currency_id).await
+    Ok(result)
 }
 
 pub async fn update_currency_by_slug(
@@ -880,16 +904,38 @@ pub async fn update_currency_by_slug(
     options: UpdateCurrencyOptions,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
-        tx.commit().await?;
+    let result = update_currency_by_slug_conn(&mut tx, team_id, game_id, slug, options).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub async fn update_currency_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    currency_id: i32,
+    options: UpdateCurrencyOptions,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    let Some(row) = lock_currency_runtime_conn(conn, team_id, currency_id).await? else {
         return Ok(None);
     };
 
-    update_currency_tx(&mut tx, team_id, &row, &options).await?;
-    let currency_id = row.id;
-    tx.commit().await?;
+    apply_currency_update_conn(conn, team_id, &row, &options).await?;
+    get_currency_info_one_all_conn(conn, team_id, currency_id).await
+}
 
-    get_currency_info_one_all(db_pool, team_id, currency_id).await
+pub async fn update_currency_by_slug_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+    options: UpdateCurrencyOptions,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    let Some(row) = lock_currency_runtime_by_slug_conn(conn, team_id, game_id, slug).await? else {
+        return Ok(None);
+    };
+
+    apply_currency_update_conn(conn, team_id, &row, &options).await?;
+    get_currency_info_one_all_conn(conn, team_id, row.id).await
 }
 
 pub async fn cost_currency(
@@ -900,63 +946,9 @@ pub async fn cost_currency(
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
-        tx.commit().await?;
-        return Ok(false);
-    };
-
-    let Some(next_amount) = row.current_amount.checked_add(delta) else {
-        tx.commit().await?;
-        return Ok(false);
-    };
-    if next_amount < 0 || next_amount > row.max_amount {
-        tx.commit().await?;
-        return Ok(false);
-    }
-
-    sqlx::query!(
-        r#"UPDATE rb_team_currency
-        SET amount = $3, utime_at = NOW()
-        WHERE team_id = $1 AND currency_id = $2;"#,
-        team_id,
-        currency_id,
-        next_amount
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    let after = next_amount;
-    let context = context.as_ref();
-    db::event_log::insert_tx(
-        &mut tx,
-        db::event_log::EventLogInput {
-            event_type: "currency.cost",
-            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
-            severity: i16::from(db::event_log::EventSeverity::Info),
-            game_id: Some(row.game_id),
-            team_id: Some(team_id),
-            currency_id: Some(row.id),
-            delta_amount: Some(after - row.current_amount),
-            data: db::event_log::CurrencyEventData {
-                id: row.id,
-                slug: row.slug,
-                name: row.name,
-                prec: row.prec,
-                before: row.current_amount,
-                after,
-            }
-            .json(
-                context.and_then(|context| context.reason),
-                context.and_then(|context| context.puzzle_id),
-                context.and_then(|context| context.puzzle_title),
-            ),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let result = cost_currency_conn(&mut tx, team_id, currency_id, delta, context).await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(result)
 }
 
 pub async fn cost_currency_by_slug(
@@ -968,40 +960,70 @@ pub async fn cost_currency_by_slug(
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
-        tx.commit().await?;
+    let result =
+        cost_currency_by_slug_conn(&mut tx, team_id, game_id, slug, delta, context).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub async fn cost_currency_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    currency_id: i32,
+    delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<bool, RbInternalError> {
+    let Some(row) = lock_currency_runtime_conn(conn, team_id, currency_id).await? else {
         return Ok(false);
     };
 
+    cost_currency_locked_conn(conn, team_id, &row, delta, context).await
+}
+
+pub async fn cost_currency_by_slug_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+    delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<bool, RbInternalError> {
+    let Some(row) = lock_currency_runtime_by_slug_conn(conn, team_id, game_id, slug).await? else {
+        return Ok(false);
+    };
+
+    cost_currency_locked_conn(conn, team_id, &row, delta, context).await
+}
+
+async fn cost_currency_locked_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    row: &CurrencyRuntimeRow,
+    delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<bool, RbInternalError> {
     let Some(next_amount) = row.current_amount.checked_add(delta) else {
-        tx.commit().await?;
         return Ok(false);
     };
     if next_amount < 0 || next_amount > row.max_amount {
-        tx.commit().await?;
         return Ok(false);
     }
 
     sqlx::query!(
-        r#"UPDATE rb_team_currency tc
-        SET amount = $4, utime_at = NOW()
-        FROM rb_currency c
-        WHERE tc.currency_id = c.id
-            AND tc.team_id = $1
-            AND c.game_id = $2
-            AND c.slug = $3;"#,
+        r#"UPDATE rb_team_currency
+        SET amount = $3, utime_at = NOW()
+        WHERE team_id = $1 AND currency_id = $2;"#,
         team_id,
-        game_id,
-        slug,
+        row.id,
         next_amount
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     let after = next_amount;
     let context = context.as_ref();
-    db::event_log::insert_tx(
-        &mut tx,
+    db::event_log::insert_conn(
+        conn,
         db::event_log::EventLogInput {
             event_type: "currency.cost",
             event_scope: i16::from(db::event_log::EventScope::TeamActivity),
@@ -1012,8 +1034,8 @@ pub async fn cost_currency_by_slug(
             delta_amount: Some(after - row.current_amount),
             data: db::event_log::CurrencyEventData {
                 id: row.id,
-                slug: row.slug,
-                name: row.name,
+                slug: row.slug.clone(),
+                name: row.name.clone(),
                 prec: row.prec,
                 before: row.current_amount,
                 after,
@@ -1028,7 +1050,6 @@ pub async fn cost_currency_by_slug(
     )
     .await?;
 
-    tx.commit().await?;
     Ok(true)
 }
 
@@ -1040,57 +1061,9 @@ pub async fn add_currency(
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<i64>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let Some(row) = lock_currency_runtime(&mut tx, team_id, currency_id).await? else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-
-    let next_amount = row.current_amount.saturating_add(delta);
-    let stored_amount = next_amount.clamp(0, row.max_amount);
-    let actual_growth = stored_amount - row.current_amount;
-
-    sqlx::query!(
-        r#"UPDATE rb_team_currency
-        SET amount = $3, utime_at = NOW()
-        WHERE team_id = $1 AND currency_id = $2;"#,
-        team_id,
-        currency_id,
-        stored_amount
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    let context = context.as_ref();
-    db::event_log::insert_tx(
-        &mut tx,
-        db::event_log::EventLogInput {
-            event_type: "currency.added",
-            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
-            severity: i16::from(db::event_log::EventSeverity::Info),
-            game_id: Some(row.game_id),
-            team_id: Some(team_id),
-            currency_id: Some(row.id),
-            delta_amount: Some(actual_growth),
-            data: db::event_log::CurrencyEventData {
-                id: row.id,
-                slug: row.slug,
-                name: row.name,
-                prec: row.prec,
-                before: row.current_amount,
-                after: stored_amount,
-            }
-            .json(
-                context.and_then(|context| context.reason),
-                context.and_then(|context| context.puzzle_id),
-                context.and_then(|context| context.puzzle_title),
-            ),
-            ..Default::default()
-        },
-    )
-    .await?;
-
+    let result = add_currency_conn(&mut tx, team_id, currency_id, delta, context).await?;
     tx.commit().await?;
-    Ok(Some(actual_growth))
+    Ok(result)
 }
 
 pub async fn add_currency_by_slug(
@@ -1102,34 +1075,65 @@ pub async fn add_currency_by_slug(
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<i64>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let Some(row) = lock_currency_runtime_by_slug(&mut tx, team_id, game_id, slug).await? else {
-        tx.commit().await?;
+    let result = add_currency_by_slug_conn(&mut tx, team_id, game_id, slug, delta, context).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub async fn add_currency_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    currency_id: i32,
+    delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<Option<i64>, RbInternalError> {
+    let Some(row) = lock_currency_runtime_conn(conn, team_id, currency_id).await? else {
         return Ok(None);
     };
 
+    add_currency_locked_conn(conn, team_id, &row, delta, context).await
+}
+
+pub async fn add_currency_by_slug_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    game_id: i32,
+    slug: &str,
+    delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<Option<i64>, RbInternalError> {
+    let Some(row) = lock_currency_runtime_by_slug_conn(conn, team_id, game_id, slug).await? else {
+        return Ok(None);
+    };
+
+    add_currency_locked_conn(conn, team_id, &row, delta, context).await
+}
+
+async fn add_currency_locked_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    row: &CurrencyRuntimeRow,
+    delta: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<Option<i64>, RbInternalError> {
     let next_amount = row.current_amount.saturating_add(delta);
     let stored_amount = next_amount.clamp(0, row.max_amount);
     let actual_growth = stored_amount - row.current_amount;
 
     sqlx::query!(
-        r#"UPDATE rb_team_currency tc
-        SET amount = $4, utime_at = NOW()
-        FROM rb_currency c
-        WHERE tc.currency_id = c.id
-            AND tc.team_id = $1
-            AND c.game_id = $2
-            AND c.slug = $3;"#,
+        r#"UPDATE rb_team_currency
+        SET amount = $3, utime_at = NOW()
+        WHERE team_id = $1 AND currency_id = $2;"#,
         team_id,
-        game_id,
-        slug,
+        row.id,
         stored_amount
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     let context = context.as_ref();
-    db::event_log::insert_tx(
-        &mut tx,
+    db::event_log::insert_conn(
+        conn,
         db::event_log::EventLogInput {
             event_type: "currency.added",
             event_scope: i16::from(db::event_log::EventScope::TeamActivity),
@@ -1140,8 +1144,8 @@ pub async fn add_currency_by_slug(
             delta_amount: Some(actual_growth),
             data: db::event_log::CurrencyEventData {
                 id: row.id,
-                slug: row.slug,
-                name: row.name,
+                slug: row.slug.clone(),
+                name: row.name.clone(),
                 prec: row.prec,
                 before: row.current_amount,
                 after: stored_amount,
@@ -1156,7 +1160,6 @@ pub async fn add_currency_by_slug(
     )
     .await?;
 
-    tx.commit().await?;
     Ok(Some(actual_growth))
 }
 
@@ -1618,7 +1621,7 @@ pub async fn admin_create(
     )
     .execute(&mut *tx)
     .await?;
-    init_team_puzzles_tx(&mut tx, team_id, game_id).await?;
+    init_team_puzzles_conn(&mut tx, team_id, game_id).await?;
     tx.commit().await?;
     Ok(AdminTeamCreateResult::Ok(team_id))
 }
@@ -1723,7 +1726,7 @@ pub async fn admin_update(
         .is_locked
         .is_some_and(|value| value != current.is_locked)
     {
-        db::content::mark_team_dirty_tx(&mut tx, team_id).await?;
+        db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
     }
     if let Some(features) = &data.features {
         for feature in features {
@@ -1746,7 +1749,7 @@ pub async fn admin_update(
             .as_deref()
             .map(str::trim)
             .filter(|reason| !reason.is_empty());
-        db::event_log::insert_tx(
+        db::event_log::insert_conn(
             &mut tx,
             db::event_log::EventLogInput {
                 event_type: "team.access_changed",

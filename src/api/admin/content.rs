@@ -194,7 +194,7 @@ async fn persist_content_artifacts(
     let update_result = async {
         let mut updated = Vec::with_capacity(prepared.len());
         for (block, artifact) in prepared {
-            let Some(block) = db::content::admin_set_artifact(
+            let Some(block) = db::content::admin_set_artifact_conn(
                 &mut tx,
                 block.id,
                 db::content::ContentBlockArtifact {
@@ -316,7 +316,7 @@ async fn update_owner(
     let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;
     let update_result = async {
         for block in &prepared {
-            if db::content::admin_update(
+            if db::content::admin_update_conn(
                 &mut tx,
                 block.request.id,
                 db::content::ContentBlockUpdate {

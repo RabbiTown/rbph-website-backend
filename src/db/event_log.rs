@@ -2,7 +2,7 @@ use num_enum::IntoPrimitive;
 use serde::Serialize;
 use serde_json::{Value, json};
 use serde_repr::Serialize_repr;
-use sqlx::{Postgres, Transaction};
+use sqlx::PgConnection;
 use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError};
@@ -73,8 +73,8 @@ pub async fn insert_pool(pool: &DbPool, event: EventLogInput) -> Result<i64, RbI
     Ok(id)
 }
 
-pub async fn insert_tx(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn insert_conn(
+    conn: &mut PgConnection,
     event: EventLogInput,
 ) -> Result<i64, RbInternalError> {
     let id = sqlx::query_scalar!(
@@ -100,7 +100,7 @@ pub async fn insert_tx(
         event.delta_amount,
         event.data
     )
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(id)

@@ -1,4 +1,7 @@
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    time::{Duration, Instant},
+};
 
 use boa_engine::{
     Context, JsError, JsNativeError, JsString, JsValue, Module, NativeFunction, Source,
@@ -8,6 +11,7 @@ use boa_engine::{
     property::Attribute,
 };
 use serde_json::{Map, Value};
+use sqlx::PgConnection;
 
 use crate::{
     AppState, DbPool,
@@ -29,6 +33,8 @@ pub struct RuntimeContext {
     pub puzzle_title: String,
     pub user_nickname: String,
     pub team_name: String,
+    pub started_at: Instant,
+    pub timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -75,9 +81,13 @@ pub struct AssetRuntime {
 }
 
 const DEFAULT_MAX_ASSET_READ_BYTES: u64 = 5 * 1024 * 1024;
+const DEFAULT_BACKEND_FUNCTION_TIMEOUT: Duration = Duration::from_secs(5);
+const JUDGE_EXECUTION_TIMEOUT: Duration = Duration::from_millis(500);
+const JUDGE_LOOP_ITERATION_LIMIT: u64 = 50_000;
 
 thread_local! {
     static RUNTIME_CONTEXT: RefCell<Option<RuntimeContext>> = const { RefCell::new(None) };
+    static JUDGE_CONN: RefCell<Option<*mut PgConnection>> = const { RefCell::new(None) };
 }
 
 struct RuntimeContextGuard;
@@ -85,6 +95,16 @@ struct RuntimeContextGuard;
 impl Drop for RuntimeContextGuard {
     fn drop(&mut self) {
         RUNTIME_CONTEXT.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+struct JudgeConnGuard;
+
+impl Drop for JudgeConnGuard {
+    fn drop(&mut self) {
+        JUDGE_CONN.with(|slot| {
             *slot.borrow_mut() = None;
         });
     }
@@ -99,6 +119,34 @@ fn with_runtime_context<T>(f: impl FnOnce(&RuntimeContext) -> T) -> Result<T, Rb
             ));
         };
         Ok(f(ctx))
+    })
+}
+
+fn with_judge_conn<T>(
+    f: impl FnOnce(&mut PgConnection) -> Result<T, RbInternalError>,
+) -> Option<Result<T, RbInternalError>> {
+    JUDGE_CONN.with(|slot| {
+        let ptr = *slot.borrow();
+        ptr.map(|ptr| {
+            // SAFETY: JUDGE_CONN is only set by execute_judge_conn while the borrowed
+            // PgConnection is alive, and Boa executes JS on the same thread synchronously.
+            let conn = unsafe { &mut *ptr };
+            f(conn)
+        })
+    })
+}
+
+fn in_transactional_judge() -> bool {
+    JUDGE_CONN.with(|slot| slot.borrow().is_some())
+}
+
+fn check_runtime_deadline() -> Result<(), RbInternalError> {
+    with_runtime_context(|ctx| ctx.started_at.elapsed() <= ctx.timeout).and_then(|ok| {
+        if ok {
+            Ok(())
+        } else {
+            Err(internal_err("backend function execution timed out"))
+        }
     })
 }
 
@@ -886,6 +934,26 @@ fn require_currency_team_in_game(db: &DbPool, team_id: i32, game_id: i32) -> Res
     }
 }
 
+fn require_currency_team_in_game_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    game_id: i32,
+) -> Result<(), JsError> {
+    let valid = block_on_db(puzzle_backend::ensure_scope_in_game_conn(
+        conn,
+        game_id,
+        puzzle_backend::BackendScope::Team { team_id },
+    ))
+    .map_err(|e| js_err(e.to_string()))?;
+    if valid {
+        Ok(())
+    } else {
+        Err(js_err(
+            "$game.currency team does not belong to current game",
+        ))
+    }
+}
+
 fn build_kv_object(
     context: &mut Context,
     db: DbPool,
@@ -907,12 +975,24 @@ fn build_kv_object(
                         )?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        let value = block_on_db(puzzle_backend::get_kv(
-                            &get_db,
-                            runtime.game_id,
-                            scope,
-                            &key,
-                        ))
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let value = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::get_kv_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::get_kv(
+                                &get_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                            ))
+                        }
                         .map_err(|e| js_err(e.to_string()))?
                         .unwrap_or(Value::Null);
                         json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
@@ -937,13 +1017,26 @@ fn build_kv_object(
                             js_to_json(&value, context).map_err(|e| js_err(e.to_string()))?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        let value = block_on_db(puzzle_backend::set_kv(
-                            &set_db,
-                            runtime.game_id,
-                            scope,
-                            &key,
-                            &value,
-                        ))
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let value = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::set_kv_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                &value,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::set_kv(
+                                &set_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                &value,
+                            ))
+                        }
                         .map_err(|e| js_err(e.to_string()))?;
                         json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
                     },
@@ -964,12 +1057,24 @@ fn build_kv_object(
                         )?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        let deleted = block_on_db(puzzle_backend::delete_kv(
-                            &delete_db,
-                            runtime.game_id,
-                            scope,
-                            &key,
-                        ))
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let deleted = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::delete_kv_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::delete_kv(
+                                &delete_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                            ))
+                        }
                         .map_err(|e| js_err(e.to_string()))?;
                         Ok(JsValue::from(deleted))
                     },
@@ -1040,15 +1145,31 @@ fn build_store_object(
                                             index_entries_from_value(&value, &insert_indexes)?;
                                         let runtime = with_runtime_context(|ctx| ctx.clone())
                                             .map_err(|e| js_err(e.to_string()))?;
-                                        let doc = block_on_db(puzzle_backend::insert_store_doc(
-                                            &insert_db,
-                                            runtime.game_id,
-                                            scope,
-                                            &insert_collection,
-                                            runtime.user_id,
-                                            &value,
-                                            &indexes,
-                                        ))
+                                        check_runtime_deadline()
+                                            .map_err(|e| js_err(e.to_string()))?;
+                                        let doc = if let Some(result) = with_judge_conn(|conn| {
+                                            block_on_db(puzzle_backend::insert_store_doc_conn(
+                                                conn,
+                                                runtime.game_id,
+                                                scope,
+                                                &insert_collection,
+                                                runtime.user_id,
+                                                &value,
+                                                &indexes,
+                                            ))
+                                        }) {
+                                            result
+                                        } else {
+                                            block_on_db(puzzle_backend::insert_store_doc(
+                                                &insert_db,
+                                                runtime.game_id,
+                                                scope,
+                                                &insert_collection,
+                                                runtime.user_id,
+                                                &value,
+                                                &indexes,
+                                            ))
+                                        }
                                         .map_err(|e| js_err(e.to_string()))?;
                                         let json = serde_json::to_value(doc)
                                             .map_err(|e| js_err(e.to_string()))?;
@@ -1074,13 +1195,27 @@ fn build_store_object(
                                             as i64;
                                         let runtime = with_runtime_context(|ctx| ctx.clone())
                                             .map_err(|e| js_err(e.to_string()))?;
-                                        let doc = block_on_db(puzzle_backend::get_store_doc(
-                                            &get_db,
-                                            runtime.game_id,
-                                            scope,
-                                            &get_collection,
-                                            doc_id,
-                                        ))
+                                        check_runtime_deadline()
+                                            .map_err(|e| js_err(e.to_string()))?;
+                                        let doc = if let Some(result) = with_judge_conn(|conn| {
+                                            block_on_db(puzzle_backend::get_store_doc_conn(
+                                                conn,
+                                                runtime.game_id,
+                                                scope,
+                                                &get_collection,
+                                                doc_id,
+                                            ))
+                                        }) {
+                                            result
+                                        } else {
+                                            block_on_db(puzzle_backend::get_store_doc(
+                                                &get_db,
+                                                runtime.game_id,
+                                                scope,
+                                                &get_collection,
+                                                doc_id,
+                                            ))
+                                        }
                                         .map_err(|e| js_err(e.to_string()))?;
                                         let json = serde_json::to_value(doc)
                                             .map_err(|e| js_err(e.to_string()))?;
@@ -1110,13 +1245,27 @@ fn build_store_object(
                                             list_options_from_value(&options, &list_indexes)?;
                                         let runtime = with_runtime_context(|ctx| ctx.clone())
                                             .map_err(|e| js_err(e.to_string()))?;
-                                        let docs = block_on_db(puzzle_backend::list_store_docs(
-                                            &list_db,
-                                            runtime.game_id,
-                                            scope,
-                                            &list_collection,
-                                            &options,
-                                        ))
+                                        check_runtime_deadline()
+                                            .map_err(|e| js_err(e.to_string()))?;
+                                        let docs = if let Some(result) = with_judge_conn(|conn| {
+                                            block_on_db(puzzle_backend::list_store_docs_conn(
+                                                conn,
+                                                runtime.game_id,
+                                                scope,
+                                                &list_collection,
+                                                &options,
+                                            ))
+                                        }) {
+                                            result
+                                        } else {
+                                            block_on_db(puzzle_backend::list_store_docs(
+                                                &list_db,
+                                                runtime.game_id,
+                                                scope,
+                                                &list_collection,
+                                                &options,
+                                            ))
+                                        }
                                         .map_err(|e| js_err(e.to_string()))?;
                                         let json = serde_json::to_value(docs)
                                             .map_err(|e| js_err(e.to_string()))?;
@@ -1157,9 +1306,7 @@ fn build_currency_object(
                         let (team_id, offset, check_team) = runtime_currency_team(selector, args)?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        if check_team {
-                            require_currency_team_in_game(&query_db, team_id, runtime.game_id)?;
-                        }
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
                         let currency_id = args
                             .get(offset)
                             .map(|value| {
@@ -1169,6 +1316,50 @@ fn build_currency_object(
                                 )
                             })
                             .transpose()?;
+                        if let Some(result) = with_judge_conn(|conn| {
+                            if check_team {
+                                require_currency_team_in_game_conn(conn, team_id, runtime.game_id)
+                                    .map_err(|e| internal_err(e.to_string()))?;
+                            }
+                            match &currency_id {
+                                Some(CurrencyRef::Id(currency_id)) => {
+                                    let row = block_on_db(
+                                        crate::db::team::get_currency_info_one_all_conn(
+                                            conn,
+                                            team_id,
+                                            *currency_id,
+                                        ),
+                                    )?;
+                                    serde_json::to_value(row)
+                                        .map_err(|e| internal_err(e.to_string()))
+                                }
+                                Some(CurrencyRef::Slug(slug)) => {
+                                    let row = block_on_db(
+                                        crate::db::team::get_currency_info_one_by_slug_all_conn(
+                                            conn,
+                                            team_id,
+                                            runtime.game_id,
+                                            slug,
+                                        ),
+                                    )?;
+                                    serde_json::to_value(row)
+                                        .map_err(|e| internal_err(e.to_string()))
+                                }
+                                None => {
+                                    let rows = block_on_db(
+                                        crate::db::team::get_currency_info_all_conn(conn, team_id),
+                                    )?;
+                                    serde_json::to_value(rows)
+                                        .map_err(|e| internal_err(e.to_string()))
+                                }
+                            }
+                        }) {
+                            let json = result.map_err(|e| js_err(e.to_string()))?;
+                            return json_to_js(&json, context).map_err(|e| js_err(e.to_string()));
+                        }
+                        if check_team {
+                            require_currency_team_in_game(&query_db, team_id, runtime.game_id)?;
+                        }
                         match currency_id {
                             Some(CurrencyRef::Id(currency_id)) => {
                                 let row = block_on_db(crate::db::team::get_currency_info_one_all(
@@ -1219,9 +1410,7 @@ fn build_currency_object(
                         let (team_id, offset, check_team) = runtime_currency_team(selector, args)?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        if check_team {
-                            require_currency_team_in_game(&cost_db, team_id, runtime.game_id)?;
-                        }
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
                         let currency_id = currency_ref_arg(
                             args.get(offset),
                             "currency.cost requires currency id or slug",
@@ -1245,6 +1434,38 @@ fn build_currency_object(
                             puzzle_title: Some(&runtime.puzzle_title),
                             reason: reason.as_deref(),
                         };
+                        if let Some(result) = with_judge_conn(|conn| {
+                            if check_team {
+                                require_currency_team_in_game_conn(conn, team_id, runtime.game_id)
+                                    .map_err(|e| internal_err(e.to_string()))?;
+                            }
+                            match &currency_id {
+                                CurrencyRef::Id(currency_id) => {
+                                    block_on_db(crate::db::team::cost_currency_conn(
+                                        conn,
+                                        team_id,
+                                        *currency_id,
+                                        -amount,
+                                        Some(context),
+                                    ))
+                                }
+                                CurrencyRef::Slug(slug) => {
+                                    block_on_db(crate::db::team::cost_currency_by_slug_conn(
+                                        conn,
+                                        team_id,
+                                        runtime.game_id,
+                                        slug,
+                                        -amount,
+                                        Some(context),
+                                    ))
+                                }
+                            }
+                        }) {
+                            return result.map(JsValue::from).map_err(|e| js_err(e.to_string()));
+                        }
+                        if check_team {
+                            require_currency_team_in_game(&cost_db, team_id, runtime.game_id)?;
+                        }
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
                                 block_on_db(crate::db::team::cost_currency(
@@ -1282,9 +1503,7 @@ fn build_currency_object(
                         let (team_id, offset, check_team) = runtime_currency_team(selector, args)?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        if check_team {
-                            require_currency_team_in_game(&add_db, team_id, runtime.game_id)?;
-                        }
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
                         let currency_id = currency_ref_arg(
                             args.get(offset),
                             "currency.add requires currency id or slug",
@@ -1308,6 +1527,43 @@ fn build_currency_object(
                             puzzle_title: Some(&runtime.puzzle_title),
                             reason: reason.as_deref(),
                         };
+                        if let Some(result) = with_judge_conn(|conn| {
+                            if check_team {
+                                require_currency_team_in_game_conn(conn, team_id, runtime.game_id)
+                                    .map_err(|e| internal_err(e.to_string()))?;
+                            }
+                            match &currency_id {
+                                CurrencyRef::Id(currency_id) => {
+                                    block_on_db(crate::db::team::add_currency_conn(
+                                        conn,
+                                        team_id,
+                                        *currency_id,
+                                        amount,
+                                        Some(context),
+                                    ))
+                                }
+                                CurrencyRef::Slug(slug) => {
+                                    block_on_db(crate::db::team::add_currency_by_slug_conn(
+                                        conn,
+                                        team_id,
+                                        runtime.game_id,
+                                        slug,
+                                        amount,
+                                        Some(context),
+                                    ))
+                                }
+                            }
+                        }) {
+                            return result
+                                .map(|updated| match updated {
+                                    Some(delta) => JsValue::from(delta),
+                                    None => JsValue::null(),
+                                })
+                                .map_err(|e| js_err(e.to_string()));
+                        }
+                        if check_team {
+                            require_currency_team_in_game(&add_db, team_id, runtime.game_id)?;
+                        }
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
                                 block_on_db(crate::db::team::add_currency(
@@ -1348,9 +1604,7 @@ fn build_currency_object(
                         let (team_id, offset, check_team) = runtime_currency_team(selector, args)?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
-                        if check_team {
-                            require_currency_team_in_game(&update_db, team_id, runtime.game_id)?;
-                        }
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
                         let currency_id = currency_ref_arg(
                             args.get(offset),
                             "currency.update requires currency id or slug",
@@ -1400,6 +1654,39 @@ fn build_currency_object(
                                     .transpose()?,
                             }
                         };
+                        if let Some(result) = with_judge_conn(|conn| {
+                            if check_team {
+                                require_currency_team_in_game_conn(conn, team_id, runtime.game_id)
+                                    .map_err(|e| internal_err(e.to_string()))?;
+                            }
+                            match &currency_id {
+                                CurrencyRef::Id(currency_id) => {
+                                    block_on_db(crate::db::team::update_currency_conn(
+                                        conn,
+                                        team_id,
+                                        *currency_id,
+                                        options,
+                                    ))
+                                }
+                                CurrencyRef::Slug(slug) => {
+                                    block_on_db(crate::db::team::update_currency_by_slug_conn(
+                                        conn,
+                                        team_id,
+                                        runtime.game_id,
+                                        slug,
+                                        options,
+                                    ))
+                                }
+                            }
+                        }) {
+                            let json =
+                                serde_json::to_value(result.map_err(|e| js_err(e.to_string()))?)
+                                    .map_err(|e| js_err(e.to_string()))?;
+                            return json_to_js(&json, context).map_err(|e| js_err(e.to_string()));
+                        }
+                        if check_team {
+                            require_currency_team_in_game(&update_db, team_id, runtime.game_id)?;
+                        }
                         let updated = match currency_id {
                             CurrencyRef::Id(currency_id) => {
                                 block_on_db(crate::db::team::update_currency(
@@ -1557,6 +1844,11 @@ fn build_submission_object(context: &mut Context, app: AppState) -> JsObject {
             unsafe {
                 NativeFunction::from_closure_with_captures(
                     move |_, args, _, context| {
+                        if in_transactional_judge() {
+                            return Err(js_err(
+                                "$this.submission.add is not available in judge functions",
+                            ));
+                        }
                         let input_value = args
                             .first()
                             .ok_or_else(|| js_err("$this.submission.add requires an object"))?;
@@ -1593,6 +1885,13 @@ fn configure_runtime_limits(context: &mut Context) {
     limits.set_recursion_limit(128);
     limits.set_stack_size_limit(1024 * 4);
     limits.set_backtrace_limit(16);
+}
+
+fn configure_judge_runtime_limits(context: &mut Context) {
+    configure_runtime_limits(context);
+    context
+        .runtime_limits_mut()
+        .set_loop_iteration_limit(JUDGE_LOOP_ITERATION_LIMIT);
 }
 
 pub fn register_ctx(
@@ -1665,6 +1964,9 @@ pub fn register_ctx(
             unsafe {
                 NativeFunction::from_closure_with_captures(
                     move |_, args, _, context| {
+                        if in_transactional_judge() {
+                            return Err(js_err("$this.solve is not available in judge functions"));
+                        }
                         let submission_value = args
                             .first()
                             .ok_or_else(|| js_err("$this.solve requires a submission"))?;
@@ -1743,7 +2045,12 @@ fn execute_backend_function<T>(
     let _guard = RuntimeContextGuard;
 
     let mut context = Context::default();
-    configure_runtime_limits(&mut context);
+    let is_judge = with_runtime_context(|ctx| ctx.method == "JUDGE")?;
+    if is_judge {
+        configure_judge_runtime_limits(&mut context);
+    } else {
+        configure_runtime_limits(&mut context);
+    }
     register_ctx(
         &mut context,
         RuntimeServices {
@@ -1824,6 +2131,8 @@ pub async fn execute_judge(
             puzzle_title: runtime.puzzle_title.clone(),
             user_nickname: runtime.user_nickname.clone(),
             team_name: runtime.team_name.clone(),
+            started_at: Instant::now(),
+            timeout: JUDGE_EXECUTION_TIMEOUT,
         };
         execute_backend_function(
             app,
@@ -1850,6 +2159,74 @@ pub async fn execute_judge(
     .map_err(|e| internal_err(e.to_string()))?
 }
 
+pub async fn execute_judge_conn(
+    app: &AppState,
+    conn: &mut PgConnection,
+    backend: crate::db::puzzle_backend::PuzzleBackend,
+    function_name: String,
+    runtime: JudgeRuntimeContext,
+) -> Result<Option<crate::game::judge::JudgeBackendOutput>, RbInternalError> {
+    sqlx::query!("SET LOCAL statement_timeout = '500ms';")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query!("SET LOCAL lock_timeout = '500ms';")
+        .execute(&mut *conn)
+        .await?;
+
+    JUDGE_CONN.with(|slot| {
+        *slot.borrow_mut() = Some(conn as *mut PgConnection);
+    });
+    let _guard = JudgeConnGuard;
+
+    let runtime_context = RuntimeContext {
+        game_id: runtime.game_id,
+        method: "JUDGE".to_string(),
+        puzzle_id: runtime.puzzle_id,
+        team_id: runtime.team_id,
+        user_id: runtime.user_id,
+        api_name: function_name.clone(),
+        query: Value::Null,
+        body: Value::Null,
+        puzzle_title: runtime.puzzle_title.clone(),
+        user_nickname: runtime.user_nickname.clone(),
+        team_name: runtime.team_name.clone(),
+        started_at: Instant::now(),
+        timeout: JUDGE_EXECUTION_TIMEOUT,
+    };
+
+    let result = execute_backend_function(
+        app.clone(),
+        backend,
+        function_name,
+        runtime_context,
+        |context| Ok(vec![build_judge_ctx_arg(context, &runtime)?]),
+        |result, context| {
+            let Some(json) = js_to_json_optional(&result, context)? else {
+                return Ok(None);
+            };
+            let output: crate::game::judge::JudgeBackendOutput =
+                serde_json::from_value(json).map_err(|e| internal_err(e.to_string()))?;
+
+            if output.ignored.is_some() && output.action.is_none() {
+                return Err(internal_err("judge output ignored requires action"));
+            }
+
+            Ok(Some(output))
+        },
+    );
+
+    if result.is_ok() {
+        sqlx::query!("SET LOCAL statement_timeout = DEFAULT;")
+            .execute(&mut *conn)
+            .await?;
+        sqlx::query!("SET LOCAL lock_timeout = DEFAULT;")
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    result
+}
+
 pub async fn execute_hint_purchase(
     app: &AppState,
     backend: crate::db::puzzle_backend::PuzzleBackend,
@@ -1870,6 +2247,8 @@ pub async fn execute_hint_purchase(
             puzzle_title: runtime.puzzle_title.clone(),
             user_nickname: runtime.user_nickname.clone(),
             team_name: runtime.team_name.clone(),
+            started_at: Instant::now(),
+            timeout: DEFAULT_BACKEND_FUNCTION_TIMEOUT,
         };
         let ctx_function_name = function_name.clone();
         execute_backend_function(

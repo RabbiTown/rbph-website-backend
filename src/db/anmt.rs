@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, prelude::FromRow};
+use sqlx::{PgConnection, prelude::FromRow};
 use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError, model::game::RbContentType};
@@ -91,14 +91,11 @@ struct AnnouncementPuzzleRow {
     is_round_puzzle: bool,
 }
 
-async fn load_puzzles<'e, E>(
-    executor: E,
+async fn load_puzzles_conn(
+    conn: &mut PgConnection,
     announcement_ids: &[i32],
     team_id: Option<i32>,
-) -> Result<HashMap<i32, Vec<AnnouncementPuzzleData>>, RbInternalError>
-where
-    E: sqlx::Executor<'e, Database = Postgres>,
-{
+) -> Result<HashMap<i32, Vec<AnnouncementPuzzleData>>, RbInternalError> {
     if announcement_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -119,7 +116,7 @@ where
             announcement_ids,
             team_id
         )
-        .fetch_all(executor)
+        .fetch_all(&mut *conn)
         .await?
     } else {
         sqlx::query_as!(
@@ -134,7 +131,7 @@ where
             ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
             announcement_ids
         )
-        .fetch_all(executor)
+        .fetch_all(&mut *conn)
         .await?
     };
 
@@ -155,13 +152,13 @@ where
     Ok(result)
 }
 
-async fn attach_show_puzzles(
-    pool: &DbPool,
+async fn attach_show_puzzles_conn(
+    conn: &mut PgConnection,
     rows: Vec<AnnouncementShowRow>,
     team_id: Option<i32>,
 ) -> Result<Vec<RbAnnouncementShowData>, RbInternalError> {
     let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
-    let mut puzzles = load_puzzles(pool, &ids, team_id).await?;
+    let mut puzzles = load_puzzles_conn(conn, &ids, team_id).await?;
     Ok(rows
         .into_iter()
         .map(|row| RbAnnouncementShowData {
@@ -177,12 +174,12 @@ async fn attach_show_puzzles(
         .collect())
 }
 
-async fn attach_admin_puzzles(
-    pool: &DbPool,
+async fn attach_admin_puzzles_conn(
+    conn: &mut PgConnection,
     rows: Vec<AdminAnnouncementRow>,
 ) -> Result<Vec<AdminAnnouncementData>, RbInternalError> {
     let ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
-    let mut puzzles = load_puzzles(pool, &ids, None).await?;
+    let mut puzzles = load_puzzles_conn(conn, &ids, None).await?;
     Ok(rows
         .into_iter()
         .map(|row| AdminAnnouncementData {
@@ -200,8 +197,8 @@ async fn attach_admin_puzzles(
         .collect())
 }
 
-async fn admin_get_in_tx(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+async fn admin_get_conn(
+    conn: &mut PgConnection,
     announcement_id: i32,
 ) -> Result<Option<AdminAnnouncementData>, RbInternalError> {
     let row = sqlx::query_as!(
@@ -212,13 +209,13 @@ async fn admin_get_in_tx(
         WHERE a.id = $1;",
         announcement_id
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?;
     let Some(row) = row else {
         return Ok(None);
     };
 
-    let mut puzzles = load_puzzles(&mut **tx, &[row.id], None).await?;
+    let mut puzzles = load_puzzles_conn(&mut *conn, &[row.id], None).await?;
     Ok(Some(AdminAnnouncementData {
         id: row.id,
         title: row.title,
@@ -237,6 +234,8 @@ pub async fn list_all_for_public(
     pool: &DbPool,
     game_id: i32,
 ) -> Result<Vec<RbAnnouncementShowData>, RbInternalError> {
+    let mut conn = pool.acquire().await?;
+
     let rows = sqlx::query_as!(
         AnnouncementShowRow,
         "SELECT a.id, a.title, a.content, a.content_type,
@@ -250,15 +249,17 @@ pub async fn list_all_for_public(
         ORDER BY a.is_pinned DESC, a.utime_at DESC;",
         game_id
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
-    attach_show_puzzles(pool, rows, None).await
+    attach_show_puzzles_conn(&mut conn, rows, None).await
 }
 
 pub async fn list_all_for_team(
     pool: &DbPool,
     team_id: i32,
 ) -> Result<Vec<RbAnnouncementShowData>, RbInternalError> {
+    let mut conn = pool.acquire().await?;
+
     let rows = sqlx::query_as!(
         AnnouncementShowRow,
         "SELECT a.id, a.title, a.content, a.content_type,
@@ -284,9 +285,9 @@ pub async fn list_all_for_team(
         ORDER BY a.is_pinned DESC, a.utime_at DESC;",
         team_id
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
-    attach_show_puzzles(pool, rows, Some(team_id)).await
+    attach_show_puzzles_conn(&mut conn, rows, Some(team_id)).await
 }
 
 pub async fn list_for_team_puzzle(
@@ -294,6 +295,8 @@ pub async fn list_for_team_puzzle(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Vec<RbAnnouncementShowData>, RbInternalError> {
+    let mut conn = pool.acquire().await?;
+
     let rows = sqlx::query_as!(
         AnnouncementShowRow,
         "SELECT a.id, a.title, a.content, a.content_type,
@@ -307,15 +310,17 @@ pub async fn list_for_team_puzzle(
         team_id,
         puzzle_id
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
-    attach_show_puzzles(pool, rows, Some(team_id)).await
+    attach_show_puzzles_conn(&mut conn, rows, Some(team_id)).await
 }
 
 pub async fn admin_list(
     pool: &DbPool,
     game_id: Option<i32>,
 ) -> Result<Vec<AdminAnnouncementData>, RbInternalError> {
+    let mut conn = pool.acquire().await?;
+
     let rows = sqlx::query_as!(
         AdminAnnouncementRow,
         "SELECT a.id, a.title, a.content, a.content_type, a.is_pinned, a.is_shown,
@@ -326,15 +331,17 @@ pub async fn admin_list(
         ORDER BY a.is_pinned DESC, a.utime_at DESC, a.id DESC;",
         game_id
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
-    attach_admin_puzzles(pool, rows).await
+    attach_admin_puzzles_conn(&mut conn, rows).await
 }
 
 pub async fn admin_get(
     pool: &DbPool,
     announcement_id: i32,
 ) -> Result<Option<AdminAnnouncementData>, RbInternalError> {
+    let mut conn = pool.acquire().await?;
+
     let row = sqlx::query_as!(
         AdminAnnouncementRow,
         "SELECT a.id, a.title, a.content, a.content_type, a.is_pinned, a.is_shown,
@@ -343,16 +350,16 @@ pub async fn admin_get(
         WHERE a.id = $1;",
         announcement_id
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     let Some(row) = row else {
         return Ok(None);
     };
-    Ok(attach_admin_puzzles(pool, vec![row]).await?.pop())
+    Ok(attach_admin_puzzles_conn(&mut conn, vec![row]).await?.pop())
 }
 
-async fn replace_puzzles(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn replace_puzzles_conn(
+    conn: &mut PgConnection,
     announcement_id: i32,
     puzzle_ids: &[i32],
 ) -> Result<(), RbInternalError> {
@@ -360,7 +367,7 @@ async fn replace_puzzles(
         "DELETE FROM rb_announcement_puzzle WHERE announcement_id = $1;",
         announcement_id
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     if !puzzle_ids.is_empty() {
         sqlx::query!(
@@ -369,7 +376,7 @@ async fn replace_puzzles(
             announcement_id,
             puzzle_ids
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(())
@@ -380,6 +387,7 @@ pub async fn admin_create(
     data: &AnnouncementWriteData,
 ) -> Result<AdminAnnouncementData, RbInternalError> {
     let mut tx = pool.begin().await?;
+
     let id = sqlx::query_scalar!(
         "INSERT INTO rb_announcement (
             title, content, content_type, is_pinned, is_shown, game_id
@@ -394,8 +402,8 @@ pub async fn admin_create(
     )
     .fetch_one(&mut *tx)
     .await?;
-    replace_puzzles(&mut tx, id, &data.puzzle_ids).await?;
-    let announcement = admin_get_in_tx(&mut tx, id)
+    replace_puzzles_conn(&mut tx, id, &data.puzzle_ids).await?;
+    let announcement = admin_get_conn(&mut tx, id)
         .await?
         .ok_or("Created announcement not found")?;
     tx.commit().await?;
@@ -408,6 +416,7 @@ pub async fn admin_update(
     data: &AnnouncementWriteData,
 ) -> Result<Option<AdminAnnouncementData>, RbInternalError> {
     let mut tx = pool.begin().await?;
+
     let updated = sqlx::query_scalar!(
         "UPDATE rb_announcement
         SET title = $2, content = $3, content_type = $4,
@@ -428,8 +437,8 @@ pub async fn admin_update(
         tx.commit().await?;
         return Ok(None);
     };
-    replace_puzzles(&mut tx, id, &data.puzzle_ids).await?;
-    let announcement = admin_get_in_tx(&mut tx, id).await?;
+    replace_puzzles_conn(&mut tx, id, &data.puzzle_ids).await?;
+    let announcement = admin_get_conn(&mut tx, id).await?;
     tx.commit().await?;
     Ok(announcement)
 }

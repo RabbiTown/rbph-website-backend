@@ -84,6 +84,8 @@ async fn call(
             puzzle_title: puzzle.title,
             user_nickname: user_info.nickname,
             team_name: team.name,
+            started_at: std::time::Instant::now(),
+            timeout: std::time::Duration::from_secs(5),
         },
     )
     .await;

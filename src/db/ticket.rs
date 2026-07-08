@@ -3,6 +3,7 @@ use num_enum::{FromPrimitive, IntoPrimitive};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_repr::Serialize_repr;
+use sqlx::PgConnection;
 use time::OffsetDateTime;
 
 use crate::{
@@ -1329,8 +1330,8 @@ pub struct SendMessageData {
     pub cost_amount: i64,
 }
 
-async fn insert_ticket_message(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn insert_ticket_message_conn(
+    conn: &mut PgConnection,
     ticket_id: i32,
     data: &SendMessageData,
 ) -> Result<i32, RbInternalError> {
@@ -1349,7 +1350,7 @@ async fn insert_ticket_message(
         data.cost_id.is_none(),
         ticket_id
     )
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     if matches!(data.sender_type, RbTicketSenderType::Host) {
@@ -1370,15 +1371,15 @@ async fn insert_ticket_message(
             data.sender_id,
             ticket_id,
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
 
     Ok(result)
 }
 
-async fn auto_assign_ticket_on_staff_message(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn auto_assign_ticket_on_staff_message_conn(
+    conn: &mut PgConnection,
     ticket_id: i32,
     data: &SendMessageData,
 ) -> Result<(), RbInternalError> {
@@ -1390,7 +1391,7 @@ async fn auto_assign_ticket_on_staff_message(
             ticket_id,
             data.sender_id,
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(())
@@ -1462,9 +1463,9 @@ pub async fn send_ticket_message(
         }
     }
 
-    auto_assign_ticket_on_staff_message(&mut tx, ticket_id, data).await?;
+    auto_assign_ticket_on_staff_message_conn(&mut tx, ticket_id, data).await?;
 
-    let result = insert_ticket_message(&mut tx, ticket_id, data).await?;
+    let result = insert_ticket_message_conn(&mut tx, ticket_id, data).await?;
 
     tx.commit().await?;
 
@@ -1544,8 +1545,8 @@ pub async fn close_ticket(
     let mut inserted_message_id = None;
     if updated {
         let message_id = if let Some(message) = message {
-            auto_assign_ticket_on_staff_message(&mut tx, ticket_id, message).await?;
-            Some(insert_ticket_message(&mut tx, ticket_id, message).await?)
+            auto_assign_ticket_on_staff_message_conn(&mut tx, ticket_id, message).await?;
+            Some(insert_ticket_message_conn(&mut tx, ticket_id, message).await?)
         } else {
             None
         };
@@ -1563,7 +1564,7 @@ pub async fn close_ticket(
         .execute(&mut *tx)
         .await?;
 
-        crate::db::event_log::insert_tx(
+        crate::db::event_log::insert_conn(
             &mut tx,
             crate::db::event_log::EventLogInput {
                 event_type: "ticket.closed",
@@ -1598,8 +1599,8 @@ pub async fn close_ticket(
     })
 }
 
-pub async fn close_puzzle_tickets_on_solve(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+pub async fn close_puzzle_tickets_on_solve_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     puzzle_id: i32,
     actor_id: i32,
@@ -1613,7 +1614,7 @@ pub async fn close_puzzle_tickets_on_solve(
         team_id,
         puzzle_id
     )
-    .fetch_all(&mut **tx)
+    .fetch_all(&mut *conn)
     .await?;
 
     for ticket_id in ticket_ids {
@@ -1625,7 +1626,7 @@ pub async fn close_puzzle_tickets_on_solve(
             actor_id,
             i16::from(RbTicketSenderType::Team)
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
 
@@ -1739,7 +1740,7 @@ pub async fn purchase_ticket_message(
         return Ok(PurchaseTicketMessageResult::Unavailable);
     }
 
-    crate::db::event_log::insert_tx(
+    crate::db::event_log::insert_conn(
         &mut tx,
         crate::db::event_log::EventLogInput {
             event_type: "ticket.message_purchased",
@@ -1898,7 +1899,7 @@ pub async fn open_puzzle_ticket(
     .fetch_one(&mut *tx)
     .await?;
 
-    let message_id = insert_ticket_message(&mut tx, ticket_id, message).await?;
+    let message_id = insert_ticket_message_conn(&mut tx, ticket_id, message).await?;
 
     sqlx::query!(
         "INSERT INTO rb_ticket_operation (ticket_id, action, actor, actor_type, message_id)
@@ -1912,7 +1913,7 @@ pub async fn open_puzzle_ticket(
     .execute(&mut *tx)
     .await?;
 
-    crate::db::event_log::insert_tx(
+    crate::db::event_log::insert_conn(
         &mut tx,
         crate::db::event_log::EventLogInput {
             event_type: "ticket.opened",

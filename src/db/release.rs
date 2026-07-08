@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
+use sqlx::PgConnection;
 use time::OffsetDateTime;
 
 use crate::{
@@ -204,8 +204,8 @@ pub async fn get_admin(
         .find(|phase| phase.id == phase_id))
 }
 
-async fn replace_changes(
-    tx: &mut Transaction<'_, Postgres>,
+async fn replace_changes_conn(
+    conn: &mut PgConnection,
     game_id: i32,
     phase_id: i32,
     changes: &[FeatureChangeData],
@@ -214,7 +214,7 @@ async fn replace_changes(
         "DELETE FROM rb_release_phase_feature_change WHERE phase_id = $1;",
         phase_id
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     for change in changes {
         sqlx::query!(
@@ -229,7 +229,7 @@ async fn replace_changes(
                 .encode_state(change.state)
                 .ok_or("Invalid game feature state")?
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(())
@@ -256,7 +256,7 @@ pub async fn create_admin(
     .fetch_optional(&mut *tx)
     .await?;
     if let Some(id) = id {
-        replace_changes(&mut tx, game_id, id, &data.feature_changes).await?;
+        replace_changes_conn(&mut tx, game_id, id, &data.feature_changes).await?;
     }
     tx.commit().await?;
     match id {
@@ -292,7 +292,7 @@ pub async fn update_admin(
     if updated.is_some()
         && let Some(changes) = &data.feature_changes
     {
-        replace_changes(&mut tx, game_id, phase_id, changes).await?;
+        replace_changes_conn(&mut tx, game_id, phase_id, changes).await?;
     }
     tx.commit().await?;
     match updated {

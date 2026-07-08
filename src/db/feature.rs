@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
+use sqlx::PgConnection;
 use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError};
@@ -142,8 +142,8 @@ pub fn valid_changes(changes: &[FeatureChangeData]) -> bool {
         })
 }
 
-pub async fn initialize_game_tx(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn initialize_game_conn(
+    conn: &mut PgConnection,
     game_id: i32,
 ) -> Result<(), RbInternalError> {
     for feature in GameFeature::ALL {
@@ -156,7 +156,7 @@ pub async fn initialize_game_tx(
                 .encode_state(feature.default_state())
                 .ok_or("Invalid default feature state")?
         )
-        .execute(&mut **tx)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(())
@@ -248,8 +248,8 @@ pub async fn player_states(
     Ok(result)
 }
 
-async fn lock_leaderboard_tx(
-    tx: &mut Transaction<'_, Postgres>,
+async fn lock_leaderboard_conn(
+    conn: &mut PgConnection,
     game_id: i32,
     phase_id: Option<i32>,
     locked_at: OffsetDateTime,
@@ -263,7 +263,7 @@ async fn lock_leaderboard_tx(
         phase_id,
         locked_at
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await?;
     if inserted.is_none() {
         return Ok(());
@@ -288,13 +288,13 @@ async fn lock_leaderboard_tx(
         ) ranked;",
         game_id
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-pub async fn settle_currency_growth_tx(
-    tx: &mut Transaction<'_, Postgres>,
+pub async fn settle_currency_growth_conn(
+    conn: &mut PgConnection,
     game_id: i32,
     currency_id: Option<i32>,
     effective_at: OffsetDateTime,
@@ -321,13 +321,13 @@ pub async fn settle_currency_growth_tx(
         currency_id,
         effective_at
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-async fn enable_currency_growth_tx(
-    tx: &mut Transaction<'_, Postgres>,
+async fn enable_currency_growth_conn(
+    conn: &mut PgConnection,
     game_id: i32,
     effective_at: OffsetDateTime,
 ) -> Result<(), RbInternalError> {
@@ -339,13 +339,13 @@ async fn enable_currency_growth_tx(
         game_id,
         effective_at
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-async fn set_state_tx(
-    tx: &mut Transaction<'_, Postgres>,
+async fn set_state_conn(
+    conn: &mut PgConnection,
     game_id: i32,
     change: &FeatureChangeData,
     phase_id: Option<i32>,
@@ -365,7 +365,7 @@ async fn set_state_tx(
             phase_id,
             change.feature.value()
         )
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *conn)
         .await?
     {
         return Ok(false);
@@ -378,20 +378,20 @@ async fn set_state_tx(
         game_id,
         change.feature.value()
     )
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     if matches!(change.feature, GameFeature::Leaderboard) {
         match change.state {
             GameFeatureState::Locked => {
-                lock_leaderboard_tx(tx, game_id, phase_id, effective_at).await?;
+                lock_leaderboard_conn(conn, game_id, phase_id, effective_at).await?;
             }
             GameFeatureState::Live => {
                 sqlx::query!(
                     "DELETE FROM rb_leaderboard_lock WHERE game_id = $1;",
                     game_id
                 )
-                .execute(&mut **tx)
+                .execute(&mut *conn)
                 .await?;
             }
             _ => return Err("Invalid leaderboard state".into()),
@@ -401,10 +401,10 @@ async fn set_state_tx(
     if old != target && matches!(change.feature, GameFeature::Currency) {
         match change.state {
             GameFeatureState::Closed => {
-                settle_currency_growth_tx(tx, game_id, None, effective_at).await?;
+                settle_currency_growth_conn(conn, game_id, None, effective_at).await?;
             }
             GameFeatureState::Open => {
-                enable_currency_growth_tx(tx, game_id, effective_at).await?;
+                enable_currency_growth_conn(conn, game_id, effective_at).await?;
             }
             _ => return Err("Invalid currency state".into()),
         }
@@ -420,7 +420,7 @@ async fn set_state_tx(
         phase_id,
         effective_at
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     sqlx::query!(
         "INSERT INTO rb_game_feature_history (
@@ -434,7 +434,7 @@ async fn set_state_tx(
         actor_id,
         effective_at
     )
-    .execute(&mut **tx)
+    .execute(&mut *conn)
     .await?;
     Ok(old != target || matches!(change.feature, GameFeature::Leaderboard))
 }
@@ -463,7 +463,7 @@ pub async fn apply_phase_changes(
                 .decode_state(row.target_state)
                 .ok_or("Invalid game feature state")?,
         };
-        let changed = set_state_tx(
+        let changed = set_state_conn(
             &mut tx,
             game_id,
             &change,
@@ -498,7 +498,7 @@ pub async fn set_manual_state(
     if !exists {
         return Ok(None);
     }
-    let changed = set_state_tx(
+    let changed = set_state_conn(
         &mut tx,
         game_id,
         change,

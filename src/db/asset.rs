@@ -1,5 +1,5 @@
 use serde::Serialize;
-use sqlx::prelude::FromRow;
+use sqlx::{PgConnection, prelude::FromRow};
 use time::OffsetDateTime;
 
 use sqlx::{Executor, Postgres};
@@ -260,13 +260,10 @@ pub async fn admin_file_path_exists(
     Ok(result.unwrap_or(false))
 }
 
-pub async fn create_group<'e, E>(
-    executor: E,
+pub async fn create_group_conn(
+    conn: &mut PgConnection,
     data: CreateAssetGroupData<'_>,
-) -> Result<RbAssetGroupAdminData, RbInternalError>
-where
-    E: Executor<'e, Database = Postgres>,
-{
+) -> Result<RbAssetGroupAdminData, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetGroupAdminData,
         "INSERT INTO rb_asset_group (
@@ -284,23 +281,20 @@ where
         data.size,
         data.sha256
     )
-    .fetch_one(executor)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(result)
 }
 
-pub async fn create_file<'e, E>(
-    executor: E,
+pub async fn create_file_conn(
+    conn: &mut PgConnection,
     group_id: i32,
     relative_path: &str,
     mime_type: &str,
     size: i64,
     sha256: &str,
-) -> Result<RbAssetFileAdminData, RbInternalError>
-where
-    E: Executor<'e, Database = Postgres>,
-{
+) -> Result<RbAssetFileAdminData, RbInternalError> {
     let result = sqlx::query_as!(
         RbAssetFileAdminData,
         "INSERT INTO rb_asset_file (
@@ -314,7 +308,7 @@ where
         size,
         sha256
     )
-    .fetch_one(executor)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(result)

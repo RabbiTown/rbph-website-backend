@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_puzzle_store_doc\n        WHERE puzzle_id = $1 AND team_id IS NOT NULL\n        RETURNING team_id AS \"team_id!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1932e70e3dcf67bfb10af2f564052ecd1ddca346e0c39767ea2f4de429516a66"
+}

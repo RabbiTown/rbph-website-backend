@@ -457,6 +457,7 @@ pub struct SubmitStateUpdate {
     pub state: Option<RbPuzzleTeamStateShowData>,
     pub currency: Vec<db::team::RbCurrencyShowData>,
     pub currency_penalty: Vec<CurrencyPenaltyShowData>,
+    pub content_changed: bool,
 }
 
 #[derive(Clone)]
@@ -1086,6 +1087,8 @@ pub async fn submit_answer(
     .execute(&mut *tx)
     .await?;
 
+    let mut content_changed = false;
+
     if !result.ignored
         && !matches!(result.action, RbJudgeAction::Error)
         && !result.triggers.is_empty()
@@ -1105,6 +1108,7 @@ pub async fn submit_answer(
         .await?;
         if inserted_triggers.rows_affected() > 0 {
             db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
+            content_changed = true;
         }
     }
 
@@ -1174,6 +1178,7 @@ pub async fn submit_answer(
 
             if update.rows_affected() > 0 {
                 db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
+                content_changed = true;
                 solved = true;
                 do_unlock = true;
                 db::event_log::insert_conn(
@@ -1233,6 +1238,7 @@ pub async fn submit_answer(
 
             if result.rows_affected() > 0 {
                 db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
+                content_changed = true;
                 db::event_log::insert_conn(
                     &mut tx,
                     db::event_log::EventLogInput {
@@ -1445,14 +1451,22 @@ pub async fn submit_answer(
     } else {
         vec![]
     };
+    content_changed = content_changed || !unlocks.is_empty();
+    let has_custom_judge = rules
+        .iter()
+        .any(|rule| matches!(rule.rtype.as_deref(), Some("custom")));
     let update = SubmitStateBox(Box::new(SubmitStateUpdate {
         state: get_puzzle_team_state(&app.db, team_id, puzzle_id).await?,
-        currency: if currency_updated || matches!(result.action, RbJudgeAction::StartGame) {
+        currency: if currency_updated
+            || matches!(result.action, RbJudgeAction::StartGame)
+            || has_custom_judge
+        {
             db::team::get_currency_info(&app.db, team_id).await?
         } else {
             vec![]
         },
         currency_penalty,
+        content_changed,
     }));
 
     Ok(SubmitAnswerResult::Ok {

@@ -152,7 +152,12 @@ pub async fn list_team_activity(
             el.target_user_id, el.puzzle_id, el.round_id, el.hint_id, el.ticket_id, el.submission_id, el.currency_id,
             el.delta_amount,
             (
-                (el.data - 'user' - 'target_user')
+                jsonb_set(
+                    el.data - 'user' - 'target_user',
+                    '{submission}',
+                    COALESCE((el.data->'submission') - 'ignored', '{}'::JSONB),
+                    FALSE
+                )
                 || CASE
                     WHEN u.id IS NULL THEN '{}'::JSONB
                     ELSE jsonb_build_object('user', jsonb_build_object('id', u.id, 'nickname', u.nickname))

@@ -184,6 +184,9 @@ impl SyncHub {
         if !event.currency_penalty.is_empty() {
             sync["currency_penalty"] = json!(event.currency_penalty);
         }
+        if event.content_changed {
+            sync["content_changed"] = json!(true);
+        }
         if event.solved {
             sync["solved"] = json!(true);
             sync["unlocks"] = json!(event.unlocks);
@@ -391,6 +394,7 @@ pub struct PuzzleSubmittedSync {
     pub state: Option<RbPuzzleTeamStateShowData>,
     pub currency: Vec<RbCurrencyShowData>,
     pub currency_penalty: Vec<CurrencyPenaltyShowData>,
+    pub content_changed: bool,
     pub sid: Option<String>,
 }
 

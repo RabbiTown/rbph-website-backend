@@ -18,8 +18,7 @@ use crate::{
     db::{self},
     error::{RbError, RbInternalError},
     extractor::auth::AuthUser,
-    game::judge::JudgeResult,
-    model::user::RbUserRole,
+    model::{game::RbJudgeAction, user::RbUserRole},
     module::sync::{PuzzleHintUnlockedSync, PuzzleSubmittedSync, PuzzleUnlockInfo},
 };
 
@@ -105,8 +104,15 @@ enum PuzzleJudgeResult {
 }
 
 #[derive(Serialize)]
+struct PublicJudgeResult {
+    action: RbJudgeAction,
+    result: Option<String>,
+    answer: Option<String>,
+}
+
+#[derive(Serialize)]
 struct JudgePuzzleResponse {
-    result: JudgeResult,
+    result: PublicJudgeResult,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     cooldown_till: Option<OffsetDateTime>,
     solved: bool,
@@ -114,6 +120,7 @@ struct JudgePuzzleResponse {
     state: Option<db::puzzle::RbPuzzleTeamStateShowData>,
     currency: Vec<db::team::RbCurrencyShowData>,
     currency_penalty: Vec<db::puzzle::CurrencyPenaltyShowData>,
+    content_changed: bool,
 }
 
 async fn judge_puzzle(
@@ -170,6 +177,7 @@ async fn judge_puzzle(
             let sync_state = update.state.clone();
             let sync_currency = update.currency.clone();
             let sync_currency_penalty = update.currency_penalty.clone();
+            let content_changed = update.content_changed;
 
             tokio::spawn(async move {
                 let _ = app
@@ -188,6 +196,7 @@ async fn judge_puzzle(
                             state: sync_state,
                             currency: sync_currency,
                             currency_penalty: sync_currency_penalty,
+                            content_changed,
                             sid,
                         },
                     )
@@ -195,13 +204,18 @@ async fn judge_puzzle(
             });
 
             Ok(HttpResponse::Ok().json(JudgePuzzleResponse {
-                result,
+                result: PublicJudgeResult {
+                    action: result.action,
+                    result: result.result,
+                    answer: result.answer,
+                },
                 cooldown_till,
                 solved,
                 unlocks: unlock_rows,
                 state: update.state,
                 currency: update.currency,
                 currency_penalty: update.currency_penalty,
+                content_changed: update.content_changed,
             }))
         }
     }

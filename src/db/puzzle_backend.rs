@@ -187,6 +187,11 @@ impl PuzzleStoreEqFilters {
     }
 }
 
+pub struct ClearPuzzleTeamBackendStateResult {
+    pub rows: usize,
+    pub team_ids: Vec<i32>,
+}
+
 #[derive(Clone)]
 pub struct PuzzleStoreListOptions {
     pub filters: PuzzleStoreEqFilters,
@@ -571,31 +576,39 @@ pub async fn list_kv(
 pub async fn clear_puzzle_team_kv(
     db_pool: &DbPool,
     puzzle_id: i32,
-) -> Result<u64, RbInternalError> {
-    let result = sqlx::query!(
+) -> Result<ClearPuzzleTeamBackendStateResult, RbInternalError> {
+    let team_ids = sqlx::query_scalar!(
         r#"DELETE FROM rb_puzzle_kv
-        WHERE puzzle_id = $1 AND team_id IS NOT NULL"#,
+        WHERE puzzle_id = $1 AND team_id IS NOT NULL
+        RETURNING team_id AS "team_id!""#,
         puzzle_id
     )
-    .execute(db_pool)
+    .fetch_all(db_pool)
     .await?;
 
-    Ok(result.rows_affected())
+    Ok(ClearPuzzleTeamBackendStateResult {
+        rows: team_ids.len(),
+        team_ids,
+    })
 }
 
 pub async fn clear_puzzle_team_store(
     db_pool: &DbPool,
     puzzle_id: i32,
-) -> Result<u64, RbInternalError> {
-    let result = sqlx::query!(
+) -> Result<ClearPuzzleTeamBackendStateResult, RbInternalError> {
+    let team_ids = sqlx::query_scalar!(
         r#"DELETE FROM rb_puzzle_store_doc
-        WHERE puzzle_id = $1 AND team_id IS NOT NULL"#,
+        WHERE puzzle_id = $1 AND team_id IS NOT NULL
+        RETURNING team_id AS "team_id!""#,
         puzzle_id
     )
-    .execute(db_pool)
+    .fetch_all(db_pool)
     .await?;
 
-    Ok(result.rows_affected())
+    Ok(ClearPuzzleTeamBackendStateResult {
+        rows: team_ids.len(),
+        team_ids,
+    })
 }
 
 pub async fn insert_store_doc(

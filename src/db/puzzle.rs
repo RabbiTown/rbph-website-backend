@@ -1088,6 +1088,7 @@ pub async fn submit_answer(
     .await?;
 
     let mut content_changed = false;
+    let mut trigger_inserted = false;
 
     if !result.ignored
         && !matches!(result.action, RbJudgeAction::Error)
@@ -1109,6 +1110,7 @@ pub async fn submit_answer(
         if inserted_triggers.rows_affected() > 0 {
             db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
             content_changed = true;
+            trigger_inserted = true;
         }
     }
 
@@ -1419,6 +1421,8 @@ pub async fn submit_answer(
         }
         _ => {}
     }
+
+    do_unlock = do_unlock || trigger_inserted;
 
     if matches!(result.action, RbJudgeAction::Fail) {
         let consequences = json!({
@@ -1827,6 +1831,7 @@ pub struct AdminClearPuzzleTeamStatesResult {
     pub submissions: usize,
     pub hints: usize,
     pub tickets: usize,
+    pub triggers: usize,
     pub team_ids: Vec<i32>,
 }
 
@@ -1838,7 +1843,11 @@ pub async fn admin_clear_puzzle_team_states(
 
     let locked_team_ids = sqlx::query_scalar!(
         "SELECT t.id FROM rb_team t
-        WHERE t.id IN (SELECT team_id FROM rb_team_puzzle WHERE puzzle_id = $1)
+        WHERE t.id IN (
+            SELECT team_id FROM rb_team_puzzle WHERE puzzle_id = $1
+            UNION
+            SELECT team_id FROM rb_team_puzzle_trigger WHERE puzzle_id = $1
+        )
         ORDER BY t.id FOR UPDATE;",
         puzzle_id
     )
@@ -1882,6 +1891,15 @@ pub async fn admin_clear_puzzle_team_states(
     .fetch_all(&mut *tx)
     .await?;
 
+    let trigger_team_ids = sqlx::query_scalar!(
+        "DELETE FROM rb_team_puzzle_trigger
+        WHERE puzzle_id = $1
+        RETURNING team_id;",
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
     if !locked_team_ids.is_empty() {
         sqlx::query!(
             "UPDATE rb_team SET content_blocks_dirty = TRUE WHERE id = ANY($1);",
@@ -1898,6 +1916,7 @@ pub async fn admin_clear_puzzle_team_states(
     team_ids.extend(submission_team_ids.iter().copied());
     team_ids.extend(hint_team_ids.iter().copied());
     team_ids.extend(ticket_team_ids.iter().copied());
+    team_ids.extend(trigger_team_ids.iter().copied());
 
     let mut team_ids = team_ids.into_iter().collect::<Vec<_>>();
     team_ids.sort_unstable();
@@ -1908,6 +1927,7 @@ pub async fn admin_clear_puzzle_team_states(
         submissions: submission_team_ids.len(),
         hints: hint_team_ids.len(),
         tickets: ticket_team_ids.len(),
+        triggers: trigger_team_ids.len(),
         team_ids,
     })
 }

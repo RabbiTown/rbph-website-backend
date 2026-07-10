@@ -88,6 +88,19 @@ struct PuzzleAdminUnlockCheckResponse {
 struct PuzzleAdminClearStatesResponse {
     code: PuzzleAdminResult,
     result: db::puzzle::AdminClearPuzzleTeamStatesResult,
+    backend_kv: usize,
+    backend_store: usize,
+    unlocked: usize,
+}
+
+#[derive(Deserialize)]
+struct PuzzleAdminClearStatesRequest {
+    #[serde(default = "default_check_unlock")]
+    check_unlock: bool,
+}
+
+fn default_check_unlock() -> bool {
+    true
 }
 
 fn validate_json_shape(data: &RbPuzzleCreateData) -> bool {
@@ -568,6 +581,7 @@ async fn unlock_check(
 
 async fn clear_states(
     path: web::Path<PuzzlePathInfo>,
+    req: Option<web::Json<PuzzleAdminClearStatesRequest>>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let puzzle = db::puzzle::admin_get(&app.db, path.puzzle_id).await?;
@@ -577,9 +591,28 @@ async fn clear_states(
             .http_err();
     };
 
-    let result = db::puzzle::admin_clear_puzzle_team_states(&app.db, puzzle.id).await?;
-    let _ = db::puzzle_backend::clear_puzzle_team_kv(&app.db, puzzle.id).await?;
-    let _ = db::puzzle_backend::clear_puzzle_team_store(&app.db, puzzle.id).await?;
+    let mut result = db::puzzle::admin_clear_puzzle_team_states(&app.db, puzzle.id).await?;
+    let backend_kv = db::puzzle_backend::clear_puzzle_team_kv(&app.db, puzzle.id).await?;
+    let backend_store = db::puzzle_backend::clear_puzzle_team_store(&app.db, puzzle.id).await?;
+    let backend_kv_count = backend_kv.rows;
+    let backend_store_count = backend_store.rows;
+    result.team_ids.extend(backend_kv.team_ids);
+    result.team_ids.extend(backend_store.team_ids);
+    result.team_ids.sort_unstable();
+    result.team_ids.dedup();
+    result.team_count = result.team_ids.len();
+    let check_unlock = req.as_ref().is_none_or(|req| req.check_unlock);
+    let unlocked_team_ids = if check_unlock {
+        db::puzzle::admin_unlock_puzzle_for_eligible_teams(
+            &app,
+            puzzle.id,
+            puzzle.game_id,
+            &puzzle.unlock_cond,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
 
     if !result.team_ids.is_empty() {
         invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
@@ -594,9 +627,17 @@ async fn clear_states(
         }
     }
 
+    if !unlocked_team_ids.is_empty() {
+        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
+        invalidate_round_state_cache(&app, puzzle.round_id).await;
+    }
+
     Ok(HttpResponse::Ok().json(PuzzleAdminClearStatesResponse {
         code: PuzzleAdminResult::Ok,
         result,
+        backend_kv: backend_kv_count,
+        backend_store: backend_store_count,
+        unlocked: unlocked_team_ids.len(),
     }))
 }
 

@@ -1617,6 +1617,8 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         }
     }
 
+    let mut inserted_unlocks = Vec::new();
+
     if !unlocks.is_empty() {
         let inserted = sqlx::query!(
             "WITH inserted AS (
@@ -1641,9 +1643,13 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
             )
             .execute(&app.db)
             .await?;
+
+            let round_ids: HashSet<i32> = inserted.iter().map(|puzzle| puzzle.round_id).collect();
+            db::cache::invalidate_team_rounds_now(app, team_id, round_ids).await?;
         }
 
         for puzzle in inserted {
+            inserted_unlocks.push(puzzle.id);
             db::event_log::insert_pool(
                 &app.db,
                 db::event_log::EventLogInput {
@@ -1667,7 +1673,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         }
     }
 
-    Ok(unlocks)
+    Ok(inserted_unlocks)
 }
 
 pub async fn admin_unlock_puzzle_for_eligible_teams(

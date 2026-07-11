@@ -105,6 +105,24 @@ pub async fn invalidate_team_round(
     Ok(())
 }
 
+pub async fn invalidate_team_rounds_now(
+    app: &AppState,
+    team_id: i32,
+    round_ids: impl IntoIterator<Item = i32>,
+) -> Result<(), RbInternalError> {
+    let keys: Vec<String> = round_ids
+        .into_iter()
+        .map(|round_id| format!("round:{round_id}:team:{team_id}:full_state"))
+        .collect();
+    if keys.is_empty() {
+        return Ok(());
+    }
+
+    let mut conn = app.kv.get().await?;
+    let _: () = conn.del(keys).await?;
+    Ok(())
+}
+
 pub async fn invalidate_team_puzzle_solved(
     app: &AppState,
     team_id: i32,

@@ -248,6 +248,39 @@ impl SyncHub {
         .await
     }
 
+    pub async fn notify_puzzle_backend_events(
+        &self,
+        db_pool: &DbPool,
+        team_id: i32,
+        events: Vec<PuzzleBackendEventSync>,
+    ) -> Result<(), RbInternalError> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let members = db::team::get_member_id(db_pool, team_id).await?;
+        for event in events {
+            self.push_users(
+                &members,
+                SyncMessageType::PuzzleBackendEvent,
+                json!({
+                    "puzzle_id": event.puzzle_id,
+                    "event": event.event,
+                    "payload": event.payload,
+                    "actor": {
+                        "id": event.user_id,
+                        "nickname": event.user_nickname,
+                    },
+                    "source": {
+                        "type": event.source_type,
+                        "function": event.function,
+                    },
+                }),
+            );
+        }
+        Ok(())
+    }
+
     pub async fn notify_team_info_updated(
         &self,
         db_pool: &DbPool,
@@ -403,6 +436,17 @@ pub struct PuzzleHintUnlockedSync {
     pub user_id: i32,
     pub hint_id: i32,
     pub sid: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct PuzzleBackendEventSync {
+    pub puzzle_id: i32,
+    pub user_id: i32,
+    pub user_nickname: String,
+    pub event: String,
+    pub payload: serde_json::Value,
+    pub source_type: &'static str,
+    pub function: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -610,6 +654,7 @@ pub enum SyncMessageType {
     // 300 - puzzle
     PuzzleSubmitted = 301,
     PuzzleHintUnlocked = 302,
+    PuzzleBackendEvent = 303,
 
     // 400 - ticket
     TicketUpdated = 401,

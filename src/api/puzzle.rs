@@ -150,6 +150,7 @@ async fn judge_puzzle(
             unlocks,
             cooldown_till,
             update,
+            backend_events,
         } => {
             let update = *update.0;
             let unlock_rows = sqlx::query_as!(
@@ -180,7 +181,7 @@ async fn judge_puzzle(
             let content_changed = update.content_changed;
 
             tokio::spawn(async move {
-                let _ = app
+                if let Err(error) = app
                     .sync_hub
                     .notify_puzzle_submitted(
                         &app.db,
@@ -200,7 +201,17 @@ async fn judge_puzzle(
                             sid,
                         },
                     )
-                    .await;
+                    .await
+                {
+                    log::warn!("failed to send puzzle submission sync event: {error}");
+                }
+                if let Err(error) = app
+                    .sync_hub
+                    .notify_puzzle_backend_events(&app.db, team_id, backend_events)
+                    .await
+                {
+                    log::warn!("failed to send puzzle backend events: {error}");
+                }
             });
 
             Ok(HttpResponse::Ok().json(JudgePuzzleResponse {
@@ -290,9 +301,12 @@ async fn purchase_hint(
         db::puzzle::PurchaseHintResult::Insufficient => {
             RbError::conflict(PurchaseHintResult::Insufficient.into()).http_err()
         }
-        db::puzzle::PurchaseHintResult::Ok(result) => {
+        db::puzzle::PurchaseHintResult::Ok {
+            result,
+            backend_events,
+        } => {
             tokio::spawn(async move {
-                let _ = app
+                if let Err(error) = app
                     .sync_hub
                     .notify_puzzle_hint_unlocked(
                         &app.db,
@@ -303,7 +317,17 @@ async fn purchase_hint(
                             sid,
                         },
                     )
-                    .await;
+                    .await
+                {
+                    log::warn!("failed to send puzzle hint sync event: {error}");
+                }
+                if let Err(error) = app
+                    .sync_hub
+                    .notify_puzzle_backend_events(&app.db, team_id, backend_events)
+                    .await
+                {
+                    log::warn!("failed to send puzzle backend events: {error}");
+                }
             });
 
             Ok(HttpResponse::Ok().json(result))

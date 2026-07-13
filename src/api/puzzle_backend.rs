@@ -92,8 +92,8 @@ async fn call(
     )
     .await;
 
-    let data = match result {
-        Ok(data) => data,
+    let execution = match result {
+        Ok(execution) => execution,
         Err(crate::error::RbInternalError::Other(message))
             if message == "export is not a function" =>
         {
@@ -101,6 +101,18 @@ async fn call(
         }
         Err(err) => return Err(err.into()),
     };
+    let data = execution.value;
+    if !execution.events.is_empty() {
+        tokio::spawn(async move {
+            if let Err(error) = app
+                .sync_hub
+                .notify_puzzle_backend_events(&app.db, team_id, execution.events)
+                .await
+            {
+                log::warn!("failed to send puzzle backend events: {error}");
+            }
+        });
+    }
     Ok(HttpResponse::Ok().json(BackendResponse { code: 0, data }))
 }
 

@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     rc::Rc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -21,7 +22,7 @@ use crate::{
     AppState, DbPool,
     db::{asset, puzzle_backend},
     error::RbInternalError,
-    module::storage::StorageManager,
+    module::{storage::StorageManager, sync::PuzzleBackendEventSync},
 };
 
 #[derive(Clone)]
@@ -77,6 +78,17 @@ pub struct HintPurchaseRuntimeContext {
 pub struct RuntimeServices {
     pub app: AppState,
     pub asset_runtime: AssetRuntime,
+    event_capture: Arc<Mutex<Vec<EmittedPuzzleBackendEvent>>>,
+}
+
+pub struct BackendExecution<T> {
+    pub value: T,
+    pub events: Vec<PuzzleBackendEventSync>,
+}
+
+struct EmittedPuzzleBackendEvent {
+    event: String,
+    payload: Value,
 }
 
 #[derive(Clone)]
@@ -93,6 +105,8 @@ const JUDGE_LOOP_ITERATION_LIMIT: u64 = 50_000;
 const MAX_CONSOLE_ENTRIES: usize = 100;
 const MAX_CONSOLE_ENTRY_BYTES: usize = 4 * 1024;
 const MAX_CONSOLE_TOTAL_BYTES: usize = 64 * 1024;
+const MAX_BACKEND_EVENTS: usize = 16;
+const MAX_BACKEND_EVENT_PAYLOAD_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Serialize)]
 struct BackendConsoleEntry {
@@ -2060,6 +2074,73 @@ fn build_submission_object(context: &mut Context, app: AppState) -> JsObject {
         .build()
 }
 
+fn valid_backend_event_name(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic())
+        && value.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn capture_backend_event(
+    capture: &Arc<Mutex<Vec<EmittedPuzzleBackendEvent>>>,
+    event: String,
+    payload: Value,
+) -> Result<(), String> {
+    if !valid_backend_event_name(&event) {
+        return Err(
+            "$this.event.emit event name must start with a letter and contain at most 64 letters, numbers, _, -, or ."
+                .to_string(),
+        );
+    }
+    let payload_bytes = serde_json::to_vec(&payload)
+        .map_err(|e| e.to_string())?
+        .len();
+    if payload_bytes > MAX_BACKEND_EVENT_PAYLOAD_BYTES {
+        return Err(format!(
+            "$this.event.emit payload exceeds {MAX_BACKEND_EVENT_PAYLOAD_BYTES} bytes",
+        ));
+    }
+
+    let mut events = capture
+        .lock()
+        .map_err(|_| "$this.event.emit capture is unavailable".to_string())?;
+    if events.len() >= MAX_BACKEND_EVENTS {
+        return Err(format!(
+            "$this.event.emit allows at most {MAX_BACKEND_EVENTS} events per execution",
+        ));
+    }
+    events.push(EmittedPuzzleBackendEvent { event, payload });
+    Ok(())
+}
+
+fn build_event_object(
+    context: &mut Context,
+    capture: Arc<Mutex<Vec<EmittedPuzzleBackendEvent>>>,
+) -> JsObject {
+    ObjectInitializer::new(context)
+        .function(
+            unsafe {
+                NativeFunction::from_closure_with_captures(
+                    move |_, args, _, context| {
+                        let event = js_string_arg(
+                            args.first().and_then(|value| value.as_string()),
+                            "$this.event.emit requires an event name",
+                        )?;
+                        let payload = args.get(1).cloned().unwrap_or_else(JsValue::null);
+                        let payload =
+                            js_to_json(&payload, context).map_err(|e| js_err(e.to_string()))?;
+                        capture_backend_event(&capture, event, payload).map_err(js_err)?;
+                        Ok(JsValue::undefined())
+                    },
+                    (),
+                )
+            },
+            js_string!("emit"),
+            2,
+        )
+        .build()
+}
+
 fn configure_runtime_limits(context: &mut Context) {
     let limits = context.runtime_limits_mut();
     limits.set_loop_iteration_limit(100_000);
@@ -2098,6 +2179,7 @@ pub fn register_ctx(
 
     let puzzle_assets = build_assets_object(context, asset_runtime);
     let this_submission = build_submission_object(context, app.clone());
+    let this_event = build_event_object(context, services.event_capture);
     let this_solve_app = app.clone();
 
     let runtime = with_runtime_context(|ctx| ctx.clone())?;
@@ -2141,6 +2223,7 @@ pub fn register_ctx(
         .property(js_string!("kv"), this_kv, Attribute::all())
         .property(js_string!("store"), this_store, Attribute::all())
         .property(js_string!("submission"), this_submission, Attribute::all())
+        .property(js_string!("event"), this_event, Attribute::all())
         .function(
             unsafe {
                 NativeFunction::from_closure_with_captures(
@@ -2219,8 +2302,9 @@ fn execute_backend_function<T>(
     runtime: RuntimeContext,
     build_args: impl FnOnce(&mut Context) -> Result<Vec<JsValue>, RbInternalError>,
     convert_result: impl FnOnce(JsValue, &mut Context) -> Result<T, RbInternalError>,
-) -> Result<T, RbInternalError> {
+) -> Result<BackendExecution<T>, RbInternalError> {
     let log_runtime = runtime.clone();
+    let event_capture = Arc::new(Mutex::new(Vec::new()));
     RUNTIME_CONTEXT.with(|slot| {
         *slot.borrow_mut() = Some(runtime);
     });
@@ -2245,6 +2329,7 @@ fn execute_backend_function<T>(
                     storage: app.storage.clone(),
                     max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
                 },
+                event_capture: event_capture.clone(),
             },
         )?;
 
@@ -2310,7 +2395,30 @@ fn execute_backend_function<T>(
         );
     }
 
-    result
+    let events = if result.is_ok() {
+        event_capture
+            .lock()
+            .map_err(|_| internal_err("puzzle backend event capture is unavailable"))?
+            .drain(..)
+            .map(|event| PuzzleBackendEventSync {
+                puzzle_id: log_runtime.puzzle_id,
+                user_id: log_runtime.user_id,
+                user_nickname: log_runtime.user_nickname.clone(),
+                event: event.event,
+                payload: event.payload,
+                source_type: match log_runtime.method.as_str() {
+                    "JUDGE" => "judge",
+                    "HINT_PURCHASE" => "hint_purchase",
+                    _ => "api",
+                },
+                function: function_name.clone(),
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    result.map(|value| BackendExecution { value, events })
 }
 
 pub async fn execute_api(
@@ -2318,7 +2426,7 @@ pub async fn execute_api(
     backend: crate::db::puzzle_backend::PuzzleBackend,
     api_name: String,
     runtime: RuntimeContext,
-) -> Result<Value, RbInternalError> {
+) -> Result<BackendExecution<Value>, RbInternalError> {
     let app = app.clone();
     let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
@@ -2341,7 +2449,7 @@ pub async fn execute_judge(
     backend: crate::db::puzzle_backend::PuzzleBackend,
     function_name: String,
     runtime: JudgeRuntimeContext,
-) -> Result<Option<crate::game::judge::JudgeBackendOutput>, RbInternalError> {
+) -> Result<BackendExecution<Option<crate::game::judge::JudgeBackendOutput>>, RbInternalError> {
     let app = app.clone();
     let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
@@ -2394,7 +2502,7 @@ pub async fn execute_judge_conn(
     backend: crate::db::puzzle_backend::PuzzleBackend,
     function_name: String,
     runtime: JudgeRuntimeContext,
-) -> Result<Option<crate::game::judge::JudgeBackendOutput>, RbInternalError> {
+) -> Result<BackendExecution<Option<crate::game::judge::JudgeBackendOutput>>, RbInternalError> {
     sqlx::query!("SET LOCAL statement_timeout = '500ms';")
         .execute(&mut *conn)
         .await?;
@@ -2472,7 +2580,7 @@ pub async fn execute_hint_purchase(
     backend: crate::db::puzzle_backend::PuzzleBackend,
     function_name: String,
     runtime: HintPurchaseRuntimeContext,
-) -> Result<(), RbInternalError> {
+) -> Result<BackendExecution<()>, RbInternalError> {
     let app = app.clone();
     let handle = Handle::current();
     tokio::task::spawn_blocking(move || {
@@ -2573,5 +2681,69 @@ mod tests {
         assert_eq!(capture.entries[0].message, "value 42");
         assert_eq!(capture.entries[1].level, "error");
         assert_eq!(capture.entries[1].message, "failed");
+    }
+
+    #[test]
+    fn backend_event_names_are_validated() {
+        for name in ["level_completed", "level.completed", "Level-2"] {
+            assert!(valid_backend_event_name(name));
+        }
+        for name in ["", "2level", ".level", "level completed"] {
+            assert!(!valid_backend_event_name(name));
+        }
+        assert!(!valid_backend_event_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn backend_event_capture_preserves_order_and_limits_count() {
+        let capture = Arc::new(Mutex::new(Vec::new()));
+        for index in 0..MAX_BACKEND_EVENTS {
+            capture_backend_event(&capture, format!("event_{index}"), Value::from(index))
+                .expect("event should be captured");
+        }
+
+        let events = capture.lock().expect("capture should be available");
+        assert_eq!(events.len(), MAX_BACKEND_EVENTS);
+        assert_eq!(events[0].event, "event_0");
+        assert_eq!(
+            events[MAX_BACKEND_EVENTS - 1].payload,
+            Value::from(MAX_BACKEND_EVENTS - 1)
+        );
+        drop(events);
+
+        assert!(capture_backend_event(&capture, "overflow".to_string(), Value::Null).is_err());
+    }
+
+    #[test]
+    fn backend_event_capture_limits_payload_size() {
+        let capture = Arc::new(Mutex::new(Vec::new()));
+        let oversized = Value::String("x".repeat(MAX_BACKEND_EVENT_PAYLOAD_BYTES));
+
+        assert!(capture_backend_event(&capture, "large".to_string(), oversized).is_err());
+        assert!(
+            capture
+                .lock()
+                .expect("capture should be available")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn backend_event_object_emits_null_payload_by_default() {
+        let mut context = Context::default();
+        let capture = Arc::new(Mutex::new(Vec::new()));
+        let event = build_event_object(&mut context, capture.clone());
+        context
+            .register_global_property(js_string!("event"), event, Attribute::all())
+            .expect("event object should register");
+
+        context
+            .eval(Source::from_bytes("event.emit('ready')"))
+            .expect("event should emit");
+
+        let events = capture.lock().expect("capture should be available");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "ready");
+        assert_eq!(events[0].payload, Value::Null);
     }
 }

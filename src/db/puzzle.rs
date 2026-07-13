@@ -830,6 +830,7 @@ pub enum SubmitAnswerResult {
         unlocks: Vec<i32>,
         cooldown_till: Option<OffsetDateTime>,
         update: SubmitStateBox,
+        backend_events: Vec<crate::module::sync::PuzzleBackendEventSync>,
     },
     Locked,
     Duplicate,
@@ -995,6 +996,7 @@ pub async fn submit_answer(
         ignored: false,
         triggers: Vec::new(),
     };
+    let mut backend_events = Vec::new();
     for rule in rules.iter() {
         match rule.rtype.as_deref() {
             Some("exact") => {
@@ -1026,7 +1028,7 @@ pub async fn submit_answer(
                 let team_info =
                     team_info.ok_or(RbInternalError::Other("team not found".to_string()))?;
 
-                if let Some(output) = crate::module::puzzle_backend_js::execute_judge_conn(
+                let execution = crate::module::puzzle_backend_js::execute_judge_conn(
                     app,
                     &mut tx,
                     backend,
@@ -1044,8 +1046,9 @@ pub async fn submit_answer(
                         submission: submit_row.clone(),
                     },
                 )
-                .await?
-                {
+                .await?;
+                backend_events.extend(execution.events);
+                if let Some(output) = execution.value {
                     result = output.into();
                     break;
                 }
@@ -1479,6 +1482,7 @@ pub async fn submit_answer(
         unlocks,
         cooldown_till,
         update,
+        backend_events,
     })
 }
 
@@ -2062,7 +2066,10 @@ pub async fn sync_due_hints(
 pub enum PurchaseHintResult {
     Insufficient,
     Unavailable,
-    Ok(RbHintTeamStateShowData),
+    Ok {
+        result: RbHintTeamStateShowData,
+        backend_events: Vec<crate::module::sync::PuzzleBackendEventSync>,
+    },
 }
 
 pub async fn purchase_hint(
@@ -2134,6 +2141,7 @@ pub async fn purchase_hint(
         }
     }
 
+    let mut backend_events = Vec::new();
     if let Some(function_name) = info.backend_function.as_deref() {
         let backend = db::puzzle_backend::get_backend(&app.db, info.puzzle_id)
             .await?
@@ -2154,7 +2162,7 @@ pub async fn purchase_hint(
                 "delta": currency.delta(),
             })
         });
-        crate::module::puzzle_backend_js::execute_hint_purchase(
+        let execution = crate::module::puzzle_backend_js::execute_hint_purchase(
             app,
             backend,
             function_name.to_string(),
@@ -2174,6 +2182,7 @@ pub async fn purchase_hint(
             },
         )
         .await?;
+        backend_events = execution.events;
     }
 
     let mut tx = app.db.begin().await?;
@@ -2287,7 +2296,10 @@ pub async fn purchase_hint(
     db::cache::invalidate_team_hints(app, info.team_id, info.puzzle_id).await?;
 
     tx.commit().await?;
-    Ok(PurchaseHintResult::Ok(result))
+    Ok(PurchaseHintResult::Ok {
+        result,
+        backend_events,
+    })
 }
 
 #[derive(Serialize)]

@@ -458,18 +458,20 @@ async fn logout(sess: Session, app: web::Data<AppState>) -> Result<HttpResponse>
     session::invalidate(&app.kv, &sess).await?;
     sess.purge();
 
-    db::event_log::insert_pool(
-        &app.db,
-        db::event_log::EventLogInput {
-            event_type: "auth.logout",
-            event_scope: i16::from(db::event_log::EventScope::Security),
-            severity: i16::from(db::event_log::EventSeverity::Info),
-            user_id,
-            data: json!({}),
-            ..Default::default()
-        },
-    )
-    .await?;
+    if let Some(user_id) = user_id {
+        db::event_log::insert_pool(
+            &app.db,
+            db::event_log::EventLogInput {
+                event_type: "auth.logout",
+                event_scope: i16::from(db::event_log::EventScope::Security),
+                severity: i16::from(db::event_log::EventSeverity::Info),
+                user_id: Some(user_id),
+                data: json!({}),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
 
     Ok(HttpResponse::Ok().json(UserLogoutResponse {
         code: UserLogoutResult::Ok,

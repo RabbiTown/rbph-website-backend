@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_kv (game_id, scope_type, team_id, puzzle_id, key, value)\n        VALUES ($1, $2, $3, $4, $5, $6)\n        ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)\n        DO UPDATE SET value = EXCLUDED.value,\n            version = rb_puzzle_kv.version + 1,\n            expires_at = NULL,\n            utime_at = CURRENT_TIMESTAMP\n        RETURNING value",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a1f5108c523241c159a83668bded0610ae3a2b932154f27ecfc79f0ff4e781b1"
+}

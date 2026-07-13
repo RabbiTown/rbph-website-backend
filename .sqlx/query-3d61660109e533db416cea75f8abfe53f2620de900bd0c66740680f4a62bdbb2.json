@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT scope_type, team_id, puzzle_id, key, value, utime_at\n        FROM rb_puzzle_kv\n        WHERE game_id = $1 AND scope_type = $2\n            AND team_id IS NOT DISTINCT FROM $3\n            AND puzzle_id IS NOT DISTINCT FROM $4\n            AND ($5::TEXT IS NULL OR key LIKE $5)\n        ORDER BY key",
+  "query": "SELECT scope_type, team_id, puzzle_id, key, value,\n            version, expires_at, utime_at\n        FROM rb_puzzle_kv\n        WHERE game_id = $1 AND scope_type = $2\n            AND team_id IS NOT DISTINCT FROM $3\n            AND puzzle_id IS NOT DISTINCT FROM $4\n            AND ($5::TEXT IS NULL OR key LIKE $5)\n        ORDER BY key",
   "describe": {
     "columns": [
       {
@@ -30,6 +30,16 @@
       },
       {
         "ordinal": 5,
+        "name": "version",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
         "name": "utime_at",
         "type_info": "Timestamptz"
       }
@@ -49,8 +59,10 @@
       true,
       false,
       false,
+      false,
+      true,
       false
     ]
   },
-  "hash": "a0d72727bc3f1c06f7da7ecd85854f344beb714a50dab7bd236230f5f5bb9667"
+  "hash": "3d61660109e533db416cea75f8abfe53f2620de900bd0c66740680f4a62bdbb2"
 }

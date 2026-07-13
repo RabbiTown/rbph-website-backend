@@ -130,8 +130,31 @@ pub struct PuzzleBackendKvEntry {
     pub puzzle_id: Option<i32>,
     pub key: String,
     pub value: Value,
+    pub version: i64,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub expires_at: Option<OffsetDateTime>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub utime_at: OffsetDateTime,
+}
+
+#[derive(Clone, FromRow)]
+pub struct PuzzleBackendKvValue {
+    pub value: Value,
+    pub version: i64,
+    pub expires_at: Option<OffsetDateTime>,
+}
+
+pub struct PuzzleBackendKvMutation {
+    pub applied: bool,
+    pub entry: Option<PuzzleBackendKvValue>,
+    pub server_time: OffsetDateTime,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PuzzleBackendKvExpiry {
+    Preserve,
+    Permanent,
+    Ttl(i64),
 }
 
 #[derive(Clone, Serialize)]
@@ -499,14 +522,37 @@ pub async fn get_kv_conn(
     scope: BackendScope,
     key: &str,
 ) -> Result<Option<Value>, RbInternalError> {
+    Ok(get_kv_entry_conn(conn, game_id, scope, key)
+        .await?
+        .map(|entry| entry.value))
+}
+
+pub async fn get_kv_entry(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+) -> Result<Option<PuzzleBackendKvValue>, RbInternalError> {
+    let mut conn = db_pool.acquire().await?;
+    get_kv_entry_conn(&mut conn, game_id, scope, key).await
+}
+
+pub async fn get_kv_entry_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+) -> Result<Option<PuzzleBackendKvValue>, RbInternalError> {
     require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
-    let row = sqlx::query!(
-        r#"SELECT value FROM rb_puzzle_kv
+    let row = sqlx::query_as!(
+        PuzzleBackendKvValue,
+        r#"SELECT value, version, expires_at FROM rb_puzzle_kv
         WHERE game_id = $1 AND scope_type = $2
             AND team_id IS NOT DISTINCT FROM $3
             AND puzzle_id IS NOT DISTINCT FROM $4
-            AND key = $5"#,
+            AND key = $5
+            AND (expires_at IS NULL OR expires_at > statement_timestamp())"#,
         game_id,
         scope_type,
         team_id,
@@ -516,7 +562,7 @@ pub async fn get_kv_conn(
     .fetch_optional(&mut *conn)
     .await?;
 
-    Ok(row.map(|row| row.value))
+    Ok(row)
 }
 
 pub async fn set_kv(
@@ -543,7 +589,10 @@ pub async fn set_kv_conn(
         r#"INSERT INTO rb_puzzle_kv (game_id, scope_type, team_id, puzzle_id, key, value)
         VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)
-        DO UPDATE SET value = EXCLUDED.value, utime_at = CURRENT_TIMESTAMP
+        DO UPDATE SET value = EXCLUDED.value,
+            version = rb_puzzle_kv.version + 1,
+            expires_at = NULL,
+            utime_at = CURRENT_TIMESTAMP
         RETURNING value"#,
         game_id,
         scope_type,
@@ -556,6 +605,156 @@ pub async fn set_kv_conn(
     .await?;
 
     Ok(value)
+}
+
+async fn current_kv_mutation_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    applied_entry: Option<PuzzleBackendKvValue>,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let applied = applied_entry.is_some();
+    let entry = if applied {
+        applied_entry
+    } else {
+        get_kv_entry_conn(conn, game_id, scope, key).await?
+    };
+    let server_time =
+        sqlx::query_scalar!(r#"SELECT statement_timestamp() AS "server_time!: OffsetDateTime""#)
+            .fetch_one(&mut *conn)
+            .await?;
+    Ok(PuzzleBackendKvMutation {
+        applied,
+        entry,
+        server_time,
+    })
+}
+
+pub async fn set_kv_if_absent(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    value: &Value,
+    ttl_ms: Option<i64>,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let mut conn = db_pool.acquire().await?;
+    set_kv_if_absent_conn(&mut conn, game_id, scope, key, value, ttl_ms).await
+}
+
+pub async fn set_kv_if_absent_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    value: &Value,
+    ttl_ms: Option<i64>,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
+    let entry = sqlx::query_as!(
+        PuzzleBackendKvValue,
+        r#"INSERT INTO rb_puzzle_kv (
+            game_id, scope_type, team_id, puzzle_id, key, value, expires_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6,
+            CASE WHEN $7::BIGINT IS NULL THEN NULL
+                ELSE statement_timestamp() + $7 * INTERVAL '1 millisecond' END
+        )
+        ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)
+        DO UPDATE SET value = EXCLUDED.value,
+            version = rb_puzzle_kv.version + 1,
+            expires_at = EXCLUDED.expires_at,
+            utime_at = CURRENT_TIMESTAMP
+        WHERE rb_puzzle_kv.expires_at IS NOT NULL
+            AND rb_puzzle_kv.expires_at <= statement_timestamp()
+        RETURNING value, version, expires_at"#,
+        game_id,
+        scope_type,
+        team_id,
+        puzzle_id,
+        key,
+        value,
+        ttl_ms
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    current_kv_mutation_conn(conn, game_id, scope, key, entry).await
+}
+
+pub async fn compare_and_set_kv(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    expected_version: i64,
+    value: &Value,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let mut conn = db_pool.acquire().await?;
+    compare_and_set_kv_conn(
+        &mut conn,
+        game_id,
+        scope,
+        key,
+        expected_version,
+        value,
+        expiry,
+    )
+    .await
+}
+
+pub async fn compare_and_set_kv_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    expected_version: i64,
+    value: &Value,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
+    let (preserve_expiry, ttl_ms) = match expiry {
+        PuzzleBackendKvExpiry::Preserve => (true, None),
+        PuzzleBackendKvExpiry::Permanent => (false, None),
+        PuzzleBackendKvExpiry::Ttl(ttl_ms) => (false, Some(ttl_ms)),
+    };
+    let entry = sqlx::query_as!(
+        PuzzleBackendKvValue,
+        r#"UPDATE rb_puzzle_kv SET
+            value = $6,
+            version = version + 1,
+            expires_at = CASE
+                WHEN $7 THEN expires_at
+                WHEN $8::BIGINT IS NULL THEN NULL
+                ELSE statement_timestamp() + $8 * INTERVAL '1 millisecond'
+            END,
+            utime_at = CURRENT_TIMESTAMP
+        WHERE game_id = $1 AND scope_type = $2
+            AND team_id IS NOT DISTINCT FROM $3
+            AND puzzle_id IS NOT DISTINCT FROM $4
+            AND key = $5
+            AND version = $9
+            AND (expires_at IS NULL OR expires_at > statement_timestamp())
+        RETURNING value, version, expires_at"#,
+        game_id,
+        scope_type,
+        team_id,
+        puzzle_id,
+        key,
+        value,
+        preserve_expiry,
+        ttl_ms,
+        expected_version
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    current_kv_mutation_conn(conn, game_id, scope, key, entry).await
 }
 
 pub async fn delete_kv(
@@ -605,7 +804,8 @@ pub async fn list_kv(
     let pattern = prefix.map(|value| format!("{value}%"));
     let rows = sqlx::query_as!(
         PuzzleBackendKvEntry,
-        r#"SELECT scope_type, team_id, puzzle_id, key, value, utime_at
+        r#"SELECT scope_type, team_id, puzzle_id, key, value,
+            version, expires_at, utime_at
         FROM rb_puzzle_kv
         WHERE game_id = $1 AND scope_type = $2
             AND team_id IS NOT DISTINCT FROM $3
@@ -1065,4 +1265,182 @@ pub async fn count_call_logs(
     .await?;
 
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use sqlx::PgPool;
+
+    use super::*;
+
+    async fn create_game(pool: &PgPool) -> i32 {
+        sqlx::query_scalar!(
+            "INSERT INTO rb_game (title, settings) VALUES ('KV test', '{}') RETURNING id"
+        )
+        .fetch_one(pool)
+        .await
+        .expect("test game should be created")
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn atomic_kv_supports_claim_expiry_and_cas(pool: PgPool) {
+        let game_id = create_game(&pool).await;
+        let scope = BackendScope::Global;
+
+        let first_pool = pool.clone();
+        let second_pool = pool.clone();
+        let (first, second) = tokio::join!(
+            async move {
+                set_kv_if_absent(
+                    &first_pool,
+                    game_id,
+                    scope,
+                    "concurrent",
+                    &json!({ "owner": 1 }),
+                    Some(60_000),
+                )
+                .await
+                .expect("first claim should complete")
+            },
+            async move {
+                set_kv_if_absent(
+                    &second_pool,
+                    game_id,
+                    scope,
+                    "concurrent",
+                    &json!({ "owner": 2 }),
+                    Some(60_000),
+                )
+                .await
+                .expect("second claim should complete")
+            }
+        );
+        assert_ne!(first.applied, second.applied);
+
+        let claimed = if first.applied { first } else { second };
+        let claimed_entry = claimed.entry.expect("claim should return its entry");
+        assert_eq!(claimed_entry.version, 1);
+        assert!(claimed_entry.expires_at > Some(claimed.server_time));
+
+        let preserved_expiry = claimed_entry.expires_at;
+        let updated = compare_and_set_kv(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            claimed_entry.version,
+            &json!({ "state": "updated" }),
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("CAS should complete");
+        assert!(updated.applied);
+        let updated_entry = updated.entry.expect("CAS should return its entry");
+        assert_eq!(updated_entry.version, 2);
+        assert_eq!(updated_entry.expires_at, preserved_expiry);
+
+        let stale = compare_and_set_kv(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            1,
+            &json!({ "state": "stale" }),
+            PuzzleBackendKvExpiry::Permanent,
+        )
+        .await
+        .expect("stale CAS should complete");
+        assert!(!stale.applied);
+        assert_eq!(
+            stale
+                .entry
+                .expect("current entry should be returned")
+                .version,
+            2
+        );
+
+        sqlx::query!("UPDATE rb_puzzle_kv SET expires_at = statement_timestamp() - INTERVAL '1 second' WHERE game_id = $1 AND key = 'concurrent'", game_id)
+            .execute(&pool)
+            .await
+            .expect("entry should be expired");
+        assert_eq!(
+            get_kv(&pool, game_id, scope, "concurrent")
+                .await
+                .expect("expired read should complete"),
+            None
+        );
+        let expired_cas = compare_and_set_kv(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            2,
+            &json!({ "state": "too late" }),
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("expired CAS should complete");
+        assert!(!expired_cas.applied);
+        assert!(expired_cas.entry.is_none());
+
+        let reclaimed = set_kv_if_absent(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            &json!({ "owner": 3 }),
+            None,
+        )
+        .await
+        .expect("expired entry should be reclaimable");
+        assert!(reclaimed.applied);
+        let reclaimed_entry = reclaimed.entry.expect("reclaim should return its entry");
+        assert_eq!(reclaimed_entry.version, 3);
+        assert_eq!(reclaimed_entry.expires_at, None);
+
+        let reset_expiry = compare_and_set_kv(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            3,
+            &json!({ "owner": 3, "temporary": true }),
+            PuzzleBackendKvExpiry::Ttl(60_000),
+        )
+        .await
+        .expect("TTL CAS should complete");
+        assert!(reset_expiry.applied);
+        let reset_entry = reset_expiry.entry.expect("TTL CAS should return its entry");
+        assert_eq!(reset_entry.version, 4);
+        assert!(reset_entry.expires_at > Some(reset_expiry.server_time));
+
+        let made_permanent = compare_and_set_kv(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            4,
+            &json!({ "owner": 3, "temporary": false }),
+            PuzzleBackendKvExpiry::Permanent,
+        )
+        .await
+        .expect("permanent CAS should complete");
+        assert!(made_permanent.applied);
+        let permanent_entry = made_permanent
+            .entry
+            .expect("permanent CAS should return its entry");
+        assert_eq!(permanent_entry.version, 5);
+        assert_eq!(permanent_entry.expires_at, None);
+
+        set_kv(&pool, game_id, scope, "concurrent", &json!({ "owner": 4 }))
+            .await
+            .expect("unconditional set should complete");
+        let final_entry = get_kv_entry(&pool, game_id, scope, "concurrent")
+            .await
+            .expect("final read should complete")
+            .expect("final entry should exist");
+        assert_eq!(final_entry.version, 6);
+        assert_eq!(final_entry.expires_at, None);
+    }
 }

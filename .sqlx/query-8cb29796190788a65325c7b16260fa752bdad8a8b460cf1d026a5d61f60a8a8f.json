@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_puzzle_kv SET\n            value = $6,\n            version = version + 1,\n            expires_at = CASE\n                WHEN $7 THEN expires_at\n                WHEN $8::BIGINT IS NULL THEN NULL\n                ELSE statement_timestamp() + $8 * INTERVAL '1 millisecond'\n            END,\n            utime_at = CURRENT_TIMESTAMP\n        WHERE game_id = $1 AND scope_type = $2\n            AND team_id IS NOT DISTINCT FROM $3\n            AND puzzle_id IS NOT DISTINCT FROM $4\n            AND key = $5\n            AND version = $9\n            AND (expires_at IS NULL OR expires_at > statement_timestamp())\n        RETURNING value, version, expires_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "version",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Text",
+        "Jsonb",
+        "Bool",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "8cb29796190788a65325c7b16260fa752bdad8a8b460cf1d026a5d61f60a8a8f"
+}

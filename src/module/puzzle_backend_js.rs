@@ -13,7 +13,7 @@ use boa_engine::{
     property::Attribute,
 };
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 use tokio::runtime::Handle;
@@ -345,6 +345,58 @@ fn js_string_arg(value: Option<JsString>, message: &str) -> Result<String, JsErr
     value
         .map(|v| v.to_std_string_escaped())
         .ok_or_else(|| js_err(message))
+}
+
+const MAX_KV_TTL_MS: i64 = 365 * 24 * 60 * 60 * 1000;
+
+fn kv_expiry_arg(
+    value: Option<&JsValue>,
+    context: &mut Context,
+    omitted: puzzle_backend::PuzzleBackendKvExpiry,
+    label: &str,
+) -> Result<puzzle_backend::PuzzleBackendKvExpiry, JsError> {
+    let Some(value) = value.filter(|value| !value.is_undefined() && !value.is_null()) else {
+        return Ok(omitted);
+    };
+    let value = js_to_json(value, context).map_err(|e| js_err(e.to_string()))?;
+    let options = value
+        .as_object()
+        .ok_or_else(|| js_err(format!("{label} options must be an object")))?;
+    let Some(ttl_ms) = options.get("ttl") else {
+        return Ok(omitted);
+    };
+    if ttl_ms.is_null() {
+        return Ok(puzzle_backend::PuzzleBackendKvExpiry::Permanent);
+    }
+    let ttl_ms = ttl_ms.as_i64().ok_or_else(|| {
+        js_err(format!(
+            "{label} options.ttl must be an integer between 1 and {MAX_KV_TTL_MS} milliseconds"
+        ))
+    })?;
+    if !(1..=MAX_KV_TTL_MS).contains(&ttl_ms) {
+        return Err(js_err(format!(
+            "{label} options.ttl must be an integer between 1 and {MAX_KV_TTL_MS} milliseconds"
+        )));
+    }
+    Ok(puzzle_backend::PuzzleBackendKvExpiry::Ttl(ttl_ms))
+}
+
+fn kv_entry_json(entry: puzzle_backend::PuzzleBackendKvValue) -> Value {
+    json!({
+        "value": entry.value,
+        "version": entry.version.to_string(),
+        "expiresAt": entry.expires_at.map(|value| {
+            crate::serde_helpers::format_offset_datetime(&value)
+        }),
+    })
+}
+
+fn kv_mutation_json(result: puzzle_backend::PuzzleBackendKvMutation) -> Value {
+    json!({
+        "applied": result.applied,
+        "entry": result.entry.map(kv_entry_json),
+        "serverTime": crate::serde_helpers::format_offset_datetime(&result.server_time),
+    })
 }
 
 enum CurrencyRef {
@@ -1156,7 +1208,10 @@ fn build_kv_object(
     label: &'static str,
 ) -> JsObject {
     let get_db = db.clone();
+    let get_entry_db = db.clone();
     let set_db = db.clone();
+    let set_if_absent_db = db.clone();
+    let compare_and_set_db = db.clone();
     let delete_db = db;
     ObjectInitializer::new(context)
         .function(
@@ -1205,6 +1260,45 @@ fn build_kv_object(
                         let (scope, offset) = runtime_scope(selector, args, context)?;
                         let key = js_string_arg(
                             args.get(offset).and_then(|value| value.as_string()),
+                            &format!("{label}.kv.getEntry requires a key"),
+                        )?;
+                        let runtime = with_runtime_context(|ctx| ctx.clone())
+                            .map_err(|e| js_err(e.to_string()))?;
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let entry = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::get_kv_entry_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::get_kv_entry(
+                                &get_entry_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                            ))
+                        }
+                        .map_err(|e| js_err(e.to_string()))?;
+                        let value = entry.map(kv_entry_json).unwrap_or(Value::Null);
+                        json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
+                    },
+                    (),
+                )
+            },
+            js_string!("getEntry"),
+            2,
+        )
+        .function(
+            unsafe {
+                NativeFunction::from_closure_with_captures(
+                    move |_, args, _, context| {
+                        let (scope, offset) = runtime_scope(selector, args, context)?;
+                        let key = js_string_arg(
+                            args.get(offset).and_then(|value| value.as_string()),
                             &format!("{label}.kv.set requires a key"),
                         )?;
                         let value = args.get(offset + 1).cloned().unwrap_or_else(JsValue::null);
@@ -1240,6 +1334,131 @@ fn build_kv_object(
             },
             js_string!("set"),
             3,
+        )
+        .function(
+            unsafe {
+                NativeFunction::from_closure_with_captures(
+                    move |_, args, _, context| {
+                        let (scope, offset) = runtime_scope(selector, args, context)?;
+                        let key = js_string_arg(
+                            args.get(offset).and_then(|value| value.as_string()),
+                            &format!("{label}.kv.setIfAbsent requires a key"),
+                        )?;
+                        let value = args.get(offset + 1).cloned().unwrap_or_else(JsValue::null);
+                        let value =
+                            js_to_json(&value, context).map_err(|e| js_err(e.to_string()))?;
+                        let expiry = kv_expiry_arg(
+                            args.get(offset + 2),
+                            context,
+                            puzzle_backend::PuzzleBackendKvExpiry::Permanent,
+                            &format!("{label}.kv.setIfAbsent"),
+                        )?;
+                        let ttl_ms = match expiry {
+                            puzzle_backend::PuzzleBackendKvExpiry::Ttl(value) => Some(value),
+                            puzzle_backend::PuzzleBackendKvExpiry::Permanent => None,
+                            puzzle_backend::PuzzleBackendKvExpiry::Preserve => unreachable!(),
+                        };
+                        let runtime = with_runtime_context(|ctx| ctx.clone())
+                            .map_err(|e| js_err(e.to_string()))?;
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let result = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::set_kv_if_absent_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                &value,
+                                ttl_ms,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::set_kv_if_absent(
+                                &set_if_absent_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                &value,
+                                ttl_ms,
+                            ))
+                        }
+                        .map_err(|e| js_err(e.to_string()))?;
+                        let value = kv_mutation_json(result);
+                        json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
+                    },
+                    (),
+                )
+            },
+            js_string!("setIfAbsent"),
+            4,
+        )
+        .function(
+            unsafe {
+                NativeFunction::from_closure_with_captures(
+                    move |_, args, _, context| {
+                        let (scope, offset) = runtime_scope(selector, args, context)?;
+                        let key = js_string_arg(
+                            args.get(offset).and_then(|value| value.as_string()),
+                            &format!("{label}.kv.compareAndSet requires a key"),
+                        )?;
+                        let expected_version = js_string_arg(
+                            args.get(offset + 1).and_then(|value| value.as_string()),
+                            &format!(
+                                "{label}.kv.compareAndSet requires an expected version string"
+                            ),
+                        )?
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| {
+                            js_err(format!(
+                                "{label}.kv.compareAndSet expected version is invalid"
+                            ))
+                        })?;
+                        let value = args.get(offset + 2).cloned().unwrap_or_else(JsValue::null);
+                        let value =
+                            js_to_json(&value, context).map_err(|e| js_err(e.to_string()))?;
+                        let expiry = kv_expiry_arg(
+                            args.get(offset + 3),
+                            context,
+                            puzzle_backend::PuzzleBackendKvExpiry::Preserve,
+                            &format!("{label}.kv.compareAndSet"),
+                        )?;
+                        let runtime = with_runtime_context(|ctx| ctx.clone())
+                            .map_err(|e| js_err(e.to_string()))?;
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let result = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::compare_and_set_kv_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                expected_version,
+                                &value,
+                                expiry,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::compare_and_set_kv(
+                                &compare_and_set_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                expected_version,
+                                &value,
+                                expiry,
+                            ))
+                        }
+                        .map_err(|e| js_err(e.to_string()))?;
+                        let value = kv_mutation_json(result);
+                        json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
+                    },
+                    (),
+                )
+            },
+            js_string!("compareAndSet"),
+            5,
         )
         .function(
             unsafe {
@@ -2745,5 +2964,78 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "ready");
         assert_eq!(events[0].payload, Value::Null);
+    }
+
+    #[test]
+    fn kv_expiry_options_distinguish_omitted_null_and_ttl() {
+        let mut context = Context::default();
+        assert_eq!(
+            kv_expiry_arg(
+                None,
+                &mut context,
+                puzzle_backend::PuzzleBackendKvExpiry::Preserve,
+                "$this.kv.compareAndSet",
+            )
+            .expect("omitted options should use the default"),
+            puzzle_backend::PuzzleBackendKvExpiry::Preserve
+        );
+
+        let permanent = JsValue::from_json(&json!({ "ttl": null }), &mut context)
+            .expect("options should convert to JS");
+        assert_eq!(
+            kv_expiry_arg(
+                Some(&permanent),
+                &mut context,
+                puzzle_backend::PuzzleBackendKvExpiry::Preserve,
+                "$this.kv.compareAndSet",
+            )
+            .expect("null TTL should be accepted"),
+            puzzle_backend::PuzzleBackendKvExpiry::Permanent
+        );
+
+        let ttl = context
+            .eval(Source::from_bytes("({ ttl: 30000 })"))
+            .expect("JavaScript options should evaluate");
+        assert_eq!(
+            kv_expiry_arg(
+                Some(&ttl),
+                &mut context,
+                puzzle_backend::PuzzleBackendKvExpiry::Permanent,
+                "$this.kv.setIfAbsent",
+            )
+            .expect("valid TTL should be accepted"),
+            puzzle_backend::PuzzleBackendKvExpiry::Ttl(30_000)
+        );
+    }
+
+    #[test]
+    fn kv_expiry_options_reject_out_of_range_ttl() {
+        let mut context = Context::default();
+        for ttl_ms in [0, MAX_KV_TTL_MS + 1] {
+            let options = JsValue::from_json(&json!({ "ttl": ttl_ms }), &mut context)
+                .expect("options should convert to JS");
+            assert!(
+                kv_expiry_arg(
+                    Some(&options),
+                    &mut context,
+                    puzzle_backend::PuzzleBackendKvExpiry::Permanent,
+                    "$this.kv.setIfAbsent",
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn kv_entry_versions_are_exposed_as_strings() {
+        let entry = kv_entry_json(puzzle_backend::PuzzleBackendKvValue {
+            value: json!({ "ready": true }),
+            version: 9_007_199_254_740_993,
+            expires_at: None,
+        });
+
+        assert_eq!(entry["version"], "9007199254740993");
+        assert_eq!(entry["value"], json!({ "ready": true }));
+        assert_eq!(entry["expiresAt"], Value::Null);
     }
 }

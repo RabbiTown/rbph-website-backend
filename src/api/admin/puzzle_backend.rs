@@ -1,5 +1,6 @@
 use actix_web::{HttpResponse, Result, web};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{
     AppState,
@@ -28,6 +29,27 @@ struct PuzzleBackendKvPathInfo {
 }
 
 #[derive(Deserialize)]
+struct PuzzleBackendLogQuery {
+    execution_type: Option<String>,
+    function_name: Option<String>,
+    ok: Option<bool>,
+    team_id: Option<i32>,
+    user_id: Option<i32>,
+    #[serde(
+        default,
+        with = "crate::serde_helpers::serialize_option_offset_datetime"
+    )]
+    from: Option<OffsetDateTime>,
+    #[serde(
+        default,
+        with = "crate::serde_helpers::serialize_option_offset_datetime"
+    )]
+    to: Option<OffsetDateTime>,
+    page: Option<i64>,
+    limit: Option<i64>,
+}
+
+#[derive(Deserialize)]
 struct PuzzleBackendSourceInput {
     source: String,
 }
@@ -53,6 +75,13 @@ struct PuzzleBackendKvResponse {
 struct PuzzleBackendDeleteResponse {
     code: i32,
     deleted: bool,
+}
+
+#[derive(Serialize)]
+struct PuzzleBackendLogResponse {
+    code: i32,
+    logs: Vec<db::puzzle_backend::PuzzleBackendCallLog>,
+    total: i64,
 }
 
 async fn puzzle_exists(app: &AppState, puzzle_id: i32) -> Result<bool> {
@@ -205,6 +234,56 @@ async fn delete_kv(
     Ok(HttpResponse::Ok().json(PuzzleBackendDeleteResponse { code: 0, deleted }))
 }
 
+async fn list_logs(
+    path: web::Path<PuzzleBackendPathInfo>,
+    query: web::Query<PuzzleBackendLogQuery>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !puzzle_exists(&app, path.puzzle_id).await? {
+        return RbError::not_found().http_err();
+    }
+
+    let execution_type = query
+        .execution_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if execution_type.is_some_and(|value| !matches!(value, "api" | "judge" | "hint_purchase")) {
+        return RbError::bad_req(-2).http_err();
+    }
+    let function_name = query
+        .function_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if query.from.zip(query.to).is_some_and(|(from, to)| from > to) {
+        return RbError::bad_req(-2).http_err();
+    }
+
+    let limit = query.limit.unwrap_or(50).clamp(1, 100);
+    let page = query.page.unwrap_or(1).max(1);
+    let log_query = db::puzzle_backend::PuzzleBackendCallLogQuery {
+        puzzle_id: path.puzzle_id,
+        execution_type,
+        function_name,
+        ok: query.ok,
+        team_id: query.team_id,
+        user_id: query.user_id,
+        from: query.from,
+        to: query.to,
+        offset: (page - 1).saturating_mul(limit),
+        limit,
+    };
+    let total = db::puzzle_backend::count_call_logs(&app.db, &log_query).await?;
+    let logs = db::puzzle_backend::list_call_logs(&app.db, log_query).await?;
+
+    Ok(HttpResponse::Ok().json(PuzzleBackendLogResponse {
+        code: 0,
+        logs,
+        total,
+    }))
+}
+
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("puzzles/{puzzle_id}/backend")
@@ -213,6 +292,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/source", web::patch().to(update_backend_source))
             .route("/functions", web::patch().to(update_backend_functions))
             .route("", web::delete().to(delete_backend))
+            .route("/logs", web::get().to(list_logs))
             .route("/kv", web::get().to(list_kv))
             .route("/kv/{key}", web::delete().to(delete_kv)),
     );

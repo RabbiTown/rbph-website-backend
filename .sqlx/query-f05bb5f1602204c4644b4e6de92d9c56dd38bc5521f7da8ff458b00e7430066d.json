@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_backend_call_log\n            (puzzle_id, team_id, user_id, execution_type, request_method,\n                function_name, ok, duration_ms, submission_id, hint_id, error,\n                console, console_truncated)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Bool",
+        "Int8",
+        "Int4",
+        "Int4",
+        "Text",
+        "Jsonb",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f05bb5f1602204c4644b4e6de92d9c56dd38bc5521f7da8ff458b00e7430066d"
+}

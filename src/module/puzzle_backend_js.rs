@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -10,6 +11,7 @@ use boa_engine::{
     object::{JsObject, ObjectInitializer},
     property::Attribute,
 };
+use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::PgConnection;
 use tokio::runtime::Handle;
@@ -29,6 +31,8 @@ pub struct RuntimeContext {
     pub team_id: i32,
     pub user_id: i32,
     pub api_name: String,
+    pub submission_id: Option<i32>,
+    pub hint_id: Option<i32>,
     pub query: Value,
     pub body: Value,
     pub puzzle_title: String,
@@ -85,6 +89,113 @@ const DEFAULT_MAX_ASSET_READ_BYTES: u64 = 5 * 1024 * 1024;
 const DEFAULT_BACKEND_FUNCTION_TIMEOUT: Duration = Duration::from_secs(5);
 const JUDGE_EXECUTION_TIMEOUT: Duration = Duration::from_millis(500);
 const JUDGE_LOOP_ITERATION_LIMIT: u64 = 50_000;
+const MAX_CONSOLE_ENTRIES: usize = 100;
+const MAX_CONSOLE_ENTRY_BYTES: usize = 4 * 1024;
+const MAX_CONSOLE_TOTAL_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Serialize)]
+struct BackendConsoleEntry {
+    level: &'static str,
+    message: String,
+}
+
+#[derive(Default)]
+struct BackendConsoleCapture {
+    entries: Vec<BackendConsoleEntry>,
+    bytes: usize,
+    truncated: bool,
+}
+
+impl BackendConsoleCapture {
+    fn push(&mut self, level: &'static str, message: String) {
+        if self.truncated
+            || self.entries.len() >= MAX_CONSOLE_ENTRIES
+            || self.bytes >= MAX_CONSOLE_TOTAL_BYTES
+        {
+            self.truncated = true;
+            return;
+        }
+
+        let remaining = MAX_CONSOLE_TOTAL_BYTES - self.bytes;
+        let max_bytes = remaining.min(MAX_CONSOLE_ENTRY_BYTES);
+        let (message, entry_truncated) = truncate_utf8(message, max_bytes);
+        self.bytes += message.len();
+        self.entries.push(BackendConsoleEntry { level, message });
+        if entry_truncated {
+            self.truncated = true;
+        }
+    }
+}
+
+fn truncate_utf8(mut value: String, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
+        return (value, false);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    (value, true)
+}
+
+fn console_function(
+    capture: Rc<RefCell<BackendConsoleCapture>>,
+    level: &'static str,
+) -> NativeFunction {
+    unsafe {
+        NativeFunction::from_closure_with_captures(
+            move |_, args, _, context| {
+                let message = args
+                    .iter()
+                    .map(|value| {
+                        value
+                            .to_string(context)
+                            .map(|value| value.to_std_string_escaped())
+                            .unwrap_or_else(|error| format!("<unprintable: {error}>"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                capture.borrow_mut().push(level, message);
+                Ok(JsValue::undefined())
+            },
+            (),
+        )
+    }
+}
+
+fn register_console(
+    context: &mut Context,
+    capture: Rc<RefCell<BackendConsoleCapture>>,
+) -> Result<(), RbInternalError> {
+    let console = ObjectInitializer::new(context)
+        .function(
+            console_function(capture.clone(), "debug"),
+            js_string!("debug"),
+            1,
+        )
+        .function(
+            console_function(capture.clone(), "log"),
+            js_string!("log"),
+            1,
+        )
+        .function(
+            console_function(capture.clone(), "info"),
+            js_string!("info"),
+            1,
+        )
+        .function(
+            console_function(capture.clone(), "warn"),
+            js_string!("warn"),
+            1,
+        )
+        .function(console_function(capture, "error"), js_string!("error"), 1)
+        .build();
+    context
+        .register_global_property(js_string!("console"), console, Attribute::all())
+        .map_err(|error| internal_err(error.to_string()))?;
+    Ok(())
+}
 
 thread_local! {
     static RUNTIME_CONTEXT: RefCell<Option<RuntimeContext>> = const { RefCell::new(None) };
@@ -2063,55 +2174,97 @@ fn execute_backend_function<T>(
     build_args: impl FnOnce(&mut Context) -> Result<Vec<JsValue>, RbInternalError>,
     convert_result: impl FnOnce(JsValue, &mut Context) -> Result<T, RbInternalError>,
 ) -> Result<T, RbInternalError> {
+    let log_runtime = runtime.clone();
     RUNTIME_CONTEXT.with(|slot| {
         *slot.borrow_mut() = Some(runtime);
     });
     let _guard = RuntimeContextGuard;
 
     let mut context = Context::default();
-    let is_judge = with_runtime_context(|ctx| ctx.method == "JUDGE")?;
-    if is_judge {
-        configure_judge_runtime_limits(&mut context);
-    } else {
-        configure_runtime_limits(&mut context);
-    }
-    register_ctx(
-        &mut context,
-        RuntimeServices {
-            app: app.clone(),
-            asset_runtime: AssetRuntime {
-                db: app.db.clone(),
-                storage: app.storage.clone(),
-                max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+    let capture = Rc::new(RefCell::new(BackendConsoleCapture::default()));
+    let result = (|| {
+        let is_judge = with_runtime_context(|ctx| ctx.method == "JUDGE")?;
+        if is_judge {
+            configure_judge_runtime_limits(&mut context);
+        } else {
+            configure_runtime_limits(&mut context);
+        }
+        register_console(&mut context, capture.clone())?;
+        register_ctx(
+            &mut context,
+            RuntimeServices {
+                app: app.clone(),
+                asset_runtime: AssetRuntime {
+                    db: app.db.clone(),
+                    storage: app.storage.clone(),
+                    max_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+                },
             },
-        },
-    )?;
+        )?;
 
-    let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
-        .map_err(|e| internal_err(e.to_string()))?;
-    let promise = module.load_link_evaluate(&mut context);
-    context
-        .run_jobs()
-        .map_err(|e| internal_err(e.to_string()))?;
-    if let Some(err) = promise.state().as_rejected() {
-        return Err(internal_err(format!("module rejected: {}", err.display())));
+        let module = Module::parse(Source::from_bytes(&backend.source), None, &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let promise = module.load_link_evaluate(&mut context);
+        context
+            .run_jobs()
+            .map_err(|e| internal_err(e.to_string()))?;
+        if let Some(err) = promise.state().as_rejected() {
+            return Err(internal_err(format!("module rejected: {}", err.display())));
+        }
+
+        let namespace = module.namespace(&mut context);
+        let value = namespace
+            .get(js_string!(function_name.as_str()), &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let function = value
+            .as_function()
+            .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
+
+        let args = build_args(&mut context)?;
+        let result = function
+            .call(&JsValue::undefined(), &args, &mut context)
+            .map_err(|e| internal_err(e.to_string()))?;
+        let result = resolve_promise_value(result, &mut context)?;
+
+        convert_result(result, &mut context)
+    })();
+
+    let duration_ms =
+        i64::try_from(log_runtime.started_at.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let (execution_type, request_method) = match log_runtime.method.as_str() {
+        "JUDGE" => ("judge", None),
+        "HINT_PURCHASE" => ("hint_purchase", None),
+        method => ("api", Some(method)),
+    };
+    let error = result.as_ref().err().map(ToString::to_string);
+    let capture = capture.borrow();
+    let console = serde_json::to_value(&capture.entries).unwrap_or_else(|_| Value::Array(vec![]));
+    if let Err(log_error) = block_on_db(crate::db::puzzle_backend::log_call(
+        &app.db,
+        crate::db::puzzle_backend::PuzzleBackendCallLogInput {
+            puzzle_id: log_runtime.puzzle_id,
+            team_id: Some(log_runtime.team_id),
+            user_id: log_runtime.user_id,
+            execution_type,
+            request_method,
+            function_name: &function_name,
+            ok: result.is_ok(),
+            duration_ms,
+            submission_id: log_runtime.submission_id,
+            hint_id: log_runtime.hint_id,
+            error: error.as_deref(),
+            console: &console,
+            console_truncated: capture.truncated,
+        },
+    )) {
+        log::warn!(
+            "failed to write puzzle backend execution log for puzzle {} function {}: {log_error}",
+            log_runtime.puzzle_id,
+            function_name
+        );
     }
 
-    let namespace = module.namespace(&mut context);
-    let value = namespace
-        .get(js_string!(function_name.as_str()), &mut context)
-        .map_err(|e| internal_err(e.to_string()))?;
-    let function = value
-        .as_function()
-        .ok_or_else(|| RbInternalError::Other("export is not a function".to_string()))?;
-
-    let args = build_args(&mut context)?;
-    let result = function
-        .call(&JsValue::undefined(), &args, &mut context)
-        .map_err(|e| internal_err(e.to_string()))?;
-    let result = resolve_promise_value(result, &mut context)?;
-
-    convert_result(result, &mut context)
+    result
 }
 
 pub async fn execute_api(
@@ -2154,6 +2307,8 @@ pub async fn execute_judge(
             team_id: runtime.team_id,
             user_id: runtime.user_id,
             api_name: function_name.clone(),
+            submission_id: Some(runtime.submission.id),
+            hint_id: None,
             query: Value::Null,
             body: Value::Null,
             puzzle_title: runtime.puzzle_title.clone(),
@@ -2208,6 +2363,8 @@ pub async fn execute_judge_conn(
         team_id: runtime.team_id,
         user_id: runtime.user_id,
         api_name: function_name.clone(),
+        submission_id: Some(runtime.submission.id),
+        hint_id: None,
         query: Value::Null,
         body: Value::Null,
         puzzle_title: runtime.puzzle_title.clone(),
@@ -2281,6 +2438,8 @@ pub async fn execute_hint_purchase(
             team_id: runtime.team_id,
             user_id: runtime.user_id,
             api_name: function_name.clone(),
+            submission_id: None,
+            hint_id: Some(runtime.hint_id),
             query: Value::Null,
             body: Value::Null,
             puzzle_title: runtime.puzzle_title.clone(),
@@ -2307,4 +2466,66 @@ pub async fn execute_hint_purchase(
     })
     .await
     .map_err(|e| internal_err(e.to_string()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn console_capture_truncates_at_utf8_boundary() {
+        let mut capture = BackendConsoleCapture::default();
+        capture.push("log", "测".repeat(MAX_CONSOLE_ENTRY_BYTES));
+
+        assert_eq!(capture.entries.len(), 1);
+        assert!(capture.entries[0].message.len() <= MAX_CONSOLE_ENTRY_BYTES);
+        assert!(
+            capture.entries[0]
+                .message
+                .is_char_boundary(capture.entries[0].message.len())
+        );
+        assert!(capture.truncated);
+    }
+
+    #[test]
+    fn console_capture_limits_entry_count() {
+        let mut capture = BackendConsoleCapture::default();
+        for index in 0..=MAX_CONSOLE_ENTRIES {
+            capture.push("info", index.to_string());
+        }
+
+        assert_eq!(capture.entries.len(), MAX_CONSOLE_ENTRIES);
+        assert!(capture.truncated);
+    }
+
+    #[test]
+    fn console_capture_limits_total_bytes() {
+        let mut capture = BackendConsoleCapture::default();
+        for _ in 0..=MAX_CONSOLE_TOTAL_BYTES / MAX_CONSOLE_ENTRY_BYTES {
+            capture.push("warn", "x".repeat(MAX_CONSOLE_ENTRY_BYTES));
+        }
+
+        assert_eq!(capture.bytes, MAX_CONSOLE_TOTAL_BYTES);
+        assert!(capture.truncated);
+    }
+
+    #[test]
+    fn registered_console_captures_levels_and_arguments() {
+        let mut context = Context::default();
+        let capture = Rc::new(RefCell::new(BackendConsoleCapture::default()));
+        register_console(&mut context, capture.clone()).expect("console should register");
+
+        context
+            .eval(Source::from_bytes(
+                "console.log('value', 42); console.error('failed');",
+            ))
+            .expect("console calls should succeed");
+
+        let capture = capture.borrow();
+        assert_eq!(capture.entries.len(), 2);
+        assert_eq!(capture.entries[0].level, "log");
+        assert_eq!(capture.entries[0].message, "value 42");
+        assert_eq!(capture.entries[1].level, "error");
+        assert_eq!(capture.entries[1].message, "failed");
+    }
 }

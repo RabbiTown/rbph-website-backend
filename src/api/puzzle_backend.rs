@@ -79,6 +79,8 @@ async fn call(
             team_id,
             user_id: user.uid,
             api_name: path.api_name.clone(),
+            submission_id: None,
+            hint_id: None,
             query: Value::Object(query_value),
             body,
             puzzle_title: puzzle.title,
@@ -87,21 +89,6 @@ async fn call(
             started_at: std::time::Instant::now(),
             timeout: std::time::Duration::from_secs(5),
         },
-    )
-    .await;
-
-    let (ok, error) = match &result {
-        Ok(_) => (true, None),
-        Err(err) => (false, Some(err.to_string())),
-    };
-    let _ = db::puzzle_backend::log_call(
-        &app.db,
-        path.puzzle_id,
-        Some(team_id),
-        user.uid,
-        &path.api_name,
-        ok,
-        error.as_deref(),
     )
     .await;
 

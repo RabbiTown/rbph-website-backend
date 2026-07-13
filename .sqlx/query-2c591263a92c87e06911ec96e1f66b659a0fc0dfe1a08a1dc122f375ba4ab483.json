@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"count!\"\n        FROM rb_puzzle_backend_call_log l\n        WHERE l.puzzle_id = $1\n            AND ($2::TEXT IS NULL OR l.execution_type = $2)\n            AND ($3::TEXT IS NULL OR l.function_name = $3)\n            AND ($4::BOOLEAN IS NULL OR l.ok = $4)\n            AND ($5::INT IS NULL OR l.team_id = $5)\n            AND ($6::INT IS NULL OR l.user_id = $6)\n            AND ($7::TIMESTAMPTZ IS NULL OR l.ctime_at >= $7)\n            AND ($8::TIMESTAMPTZ IS NULL OR l.ctime_at <= $8)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Text",
+        "Bool",
+        "Int4",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2c591263a92c87e06911ec96e1f66b659a0fc0dfe1a08a1dc122f375ba4ab483"
+}

@@ -173,6 +173,57 @@ pub struct PuzzleStoreEqFilters {
     pub bool_: Vec<(String, bool)>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct PuzzleBackendCallLog {
+    pub id: i64,
+    pub puzzle_id: i32,
+    pub team_id: Option<i32>,
+    pub team_name: Option<String>,
+    pub user_id: Option<i32>,
+    pub user_nickname: Option<String>,
+    pub execution_type: String,
+    pub request_method: Option<String>,
+    pub function_name: String,
+    pub ok: bool,
+    pub duration_ms: i64,
+    pub submission_id: Option<i32>,
+    pub hint_id: Option<i32>,
+    pub error: Option<String>,
+    pub console: Value,
+    pub console_truncated: bool,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}
+
+pub struct PuzzleBackendCallLogInput<'a> {
+    pub puzzle_id: i32,
+    pub team_id: Option<i32>,
+    pub user_id: i32,
+    pub execution_type: &'a str,
+    pub request_method: Option<&'a str>,
+    pub function_name: &'a str,
+    pub ok: bool,
+    pub duration_ms: i64,
+    pub submission_id: Option<i32>,
+    pub hint_id: Option<i32>,
+    pub error: Option<&'a str>,
+    pub console: &'a Value,
+    pub console_truncated: bool,
+}
+
+pub struct PuzzleBackendCallLogQuery<'a> {
+    pub puzzle_id: i32,
+    pub execution_type: Option<&'a str>,
+    pub function_name: Option<&'a str>,
+    pub ok: Option<bool>,
+    pub team_id: Option<i32>,
+    pub user_id: Option<i32>,
+    pub from: Option<OffsetDateTime>,
+    pub to: Option<OffsetDateTime>,
+    pub offset: i64,
+    pub limit: i64,
+}
+
 impl PuzzleStoreEqFilters {
     pub fn empty() -> Self {
         Self {
@@ -917,26 +968,101 @@ pub async fn list_store_docs_conn(
 
 pub async fn log_call(
     db_pool: &DbPool,
-    puzzle_id: i32,
-    team_id: Option<i32>,
-    user_id: i32,
-    function_name: &str,
-    ok: bool,
-    error: Option<&str>,
+    input: PuzzleBackendCallLogInput<'_>,
 ) -> Result<(), RbInternalError> {
     sqlx::query!(
         r#"INSERT INTO rb_puzzle_backend_call_log
-            (puzzle_id, team_id, user_id, function_name, ok, error)
-        VALUES ($1, $2, $3, $4, $5, $6)"#,
-        puzzle_id,
-        team_id,
-        user_id,
-        function_name,
-        ok,
-        error
+            (puzzle_id, team_id, user_id, execution_type, request_method,
+                function_name, ok, duration_ms, submission_id, hint_id, error,
+                console, console_truncated)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
+        input.puzzle_id,
+        input.team_id,
+        input.user_id,
+        input.execution_type,
+        input.request_method,
+        input.function_name,
+        input.ok,
+        input.duration_ms,
+        input.submission_id,
+        input.hint_id,
+        input.error,
+        input.console,
+        input.console_truncated
     )
     .execute(db_pool)
     .await?;
 
     Ok(())
+}
+
+pub async fn list_call_logs(
+    db_pool: &DbPool,
+    query: PuzzleBackendCallLogQuery<'_>,
+) -> Result<Vec<PuzzleBackendCallLog>, RbInternalError> {
+    let rows = sqlx::query_as!(
+        PuzzleBackendCallLog,
+        r#"SELECT l.id, l.puzzle_id, l.team_id, t.name AS team_name,
+            l.user_id, u.nickname AS user_nickname, l.execution_type,
+            l.request_method, l.function_name, l.ok, l.duration_ms,
+            l.submission_id, l.hint_id, l.error, l.console,
+            l.console_truncated, l.ctime_at
+        FROM rb_puzzle_backend_call_log l
+        LEFT JOIN rb_team t ON t.id = l.team_id
+        LEFT JOIN rb_user u ON u.id = l.user_id
+        WHERE l.puzzle_id = $1
+            AND ($2::TEXT IS NULL OR l.execution_type = $2)
+            AND ($3::TEXT IS NULL OR l.function_name = $3)
+            AND ($4::BOOLEAN IS NULL OR l.ok = $4)
+            AND ($5::INT IS NULL OR l.team_id = $5)
+            AND ($6::INT IS NULL OR l.user_id = $6)
+            AND ($7::TIMESTAMPTZ IS NULL OR l.ctime_at >= $7)
+            AND ($8::TIMESTAMPTZ IS NULL OR l.ctime_at <= $8)
+        ORDER BY l.ctime_at DESC, l.id DESC
+        LIMIT $9 OFFSET $10"#,
+        query.puzzle_id,
+        query.execution_type,
+        query.function_name,
+        query.ok,
+        query.team_id,
+        query.user_id,
+        query.from,
+        query.to,
+        query.limit.clamp(1, 100),
+        query.offset.max(0)
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+pub async fn count_call_logs(
+    db_pool: &DbPool,
+    query: &PuzzleBackendCallLogQuery<'_>,
+) -> Result<i64, RbInternalError> {
+    let count = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!"
+        FROM rb_puzzle_backend_call_log l
+        WHERE l.puzzle_id = $1
+            AND ($2::TEXT IS NULL OR l.execution_type = $2)
+            AND ($3::TEXT IS NULL OR l.function_name = $3)
+            AND ($4::BOOLEAN IS NULL OR l.ok = $4)
+            AND ($5::INT IS NULL OR l.team_id = $5)
+            AND ($6::INT IS NULL OR l.user_id = $6)
+            AND ($7::TIMESTAMPTZ IS NULL OR l.ctime_at >= $7)
+            AND ($8::TIMESTAMPTZ IS NULL OR l.ctime_at <= $8)"#,
+        query.puzzle_id,
+        query.execution_type,
+        query.function_name,
+        query.ok,
+        query.team_id,
+        query.user_id,
+        query.from,
+        query.to
+    )
+    .fetch_one(db_pool)
+    .await?;
+
+    Ok(count)
 }

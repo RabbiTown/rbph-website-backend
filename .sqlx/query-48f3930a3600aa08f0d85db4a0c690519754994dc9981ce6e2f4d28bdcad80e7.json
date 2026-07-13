@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.content\n         FROM rb_asset_file_blob b\n         JOIN rb_asset_file f ON f.id = b.file_id\n         WHERE f.group_id = $1 AND f.relative_path = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "content",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "48f3930a3600aa08f0d85db4a0c690519754994dc9981ce6e2f4d28bdcad80e7"
+}

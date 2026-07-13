@@ -13,6 +13,7 @@ use boa_engine::{
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use sqlx::PgConnection;
 use tokio::runtime::Handle;
 
@@ -400,13 +401,25 @@ fn readable_asset_file(
     relative_path: &str,
 ) -> Result<asset::RbAssetReadableFile, JsError> {
     let runtime = with_runtime_context(|ctx| ctx.clone()).map_err(|e| js_err(e.to_string()))?;
-    let file = block_on_db(asset::get_readable_file_by_object_key(
-        &asset_runtime.db,
-        runtime.game_id,
-        runtime.puzzle_id,
-        object_key,
-        relative_path,
-    ))
+    let file = if let Some(result) = with_judge_conn(|conn| {
+        block_on_db(asset::get_readable_file_by_object_key_conn(
+            conn,
+            runtime.game_id,
+            runtime.puzzle_id,
+            object_key,
+            relative_path,
+        ))
+    }) {
+        result
+    } else {
+        block_on_db(asset::get_readable_file_by_object_key(
+            &asset_runtime.db,
+            runtime.game_id,
+            runtime.puzzle_id,
+            object_key,
+            relative_path,
+        ))
+    }
     .map_err(|e| js_err(e.to_string()))?
     .ok_or_else(|| js_err("$asset file not found or not readable"))?;
     Ok(file)
@@ -418,12 +431,45 @@ fn read_asset_bytes(
     relative_path: &str,
 ) -> Result<Vec<u8>, JsError> {
     let file = readable_asset_file(asset_runtime, object_key, relative_path)?;
-    let Some(local) = asset_runtime.storage.local(&file.backend) else {
-        return Err(js_err("$asset backend resources must use local storage"));
-    };
     if file.size < 0 || file.size as u64 > asset_runtime.max_read_bytes {
         return Err(js_err("$asset file is too large"));
     }
+    if asset_runtime.storage.is_database(&file.backend) {
+        if let Some(content) = asset_runtime.storage.cached_database_asset(&file.sha256) {
+            return Ok(content.as_ref().to_vec());
+        }
+        let content = if let Some(result) = with_judge_conn(|conn| {
+            block_on_db(asset::get_file_blob_conn(
+                conn,
+                file.group_id,
+                &file.relative_path,
+            ))
+        }) {
+            result
+        } else {
+            block_on_db(asset::get_file_blob(
+                &asset_runtime.db,
+                file.group_id,
+                &file.relative_path,
+            ))
+        }
+        .map_err(|e| js_err(e.to_string()))?
+        .ok_or_else(|| js_err("$asset file content not found"))?;
+        if content.len() as i64 != file.size
+            || format!("{:x}", Sha256::digest(&content)) != file.sha256
+        {
+            return Err(js_err("$asset file content integrity check failed"));
+        }
+        let content: std::sync::Arc<[u8]> = content.into();
+        asset_runtime
+            .storage
+            .cache_database_asset(&file.sha256, content.clone());
+        return Ok(content.as_ref().to_vec());
+    }
+
+    let Some(local) = asset_runtime.storage.local(&file.backend) else {
+        return Err(js_err("$asset backend resources are not backend-readable"));
+    };
     block_on_io(local.read_object_file_limited(
         &file.object_key,
         &file.relative_path,

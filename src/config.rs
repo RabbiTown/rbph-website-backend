@@ -63,12 +63,21 @@ pub enum StorageBackendConfig {
         secret_key: String,
         public_base_url: String,
     },
+    Database {
+        label: String,
+    },
 }
 
 impl StorageConfig {
     pub fn validate(&self) -> Result<(), String> {
         if !self.backends.contains_key(&self.default_backend) {
             return Err("storage.default_backend must reference a configured backend".to_string());
+        }
+        if matches!(
+            self.backends.get(&self.default_backend),
+            Some(StorageBackendConfig::Database { .. })
+        ) {
+            return Err("storage.default_backend must support public assets".to_string());
         }
         if let Some(backend) = &self.content_cdn_backend
             && !self.backends.contains_key(backend)
@@ -77,14 +86,14 @@ impl StorageConfig {
                 "storage.content_cdn_backend must reference a configured backend".to_string(),
             );
         }
-        if !self
-            .backends
-            .values()
-            .any(|backend| matches!(backend, StorageBackendConfig::Local { .. }))
-        {
-            return Err("at least one local storage backend must be configured".to_string());
+        if self.content_cdn_backend.as_ref().is_some_and(|backend| {
+            matches!(
+                self.backends.get(backend),
+                Some(StorageBackendConfig::Database { .. })
+            )
+        }) {
+            return Err("storage.content_cdn_backend must support public assets".to_string());
         }
-
         for (id, backend) in &self.backends {
             if !valid_storage_backend_id(id) {
                 return Err(format!("invalid storage backend id: {id}"));
@@ -114,6 +123,7 @@ impl StorageConfig {
                     }
                     label
                 }
+                StorageBackendConfig::Database { label } => label,
             };
             if label.trim().is_empty() || label.chars().count() > 64 {
                 return Err(format!("storage backend {id} has an invalid label"));
@@ -275,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn named_storage_requires_valid_default_and_local_backend() {
+    fn named_storage_requires_valid_public_default() {
         let mut backends = BTreeMap::new();
         backends.insert(
             "local".to_string(),
@@ -320,7 +330,40 @@ mod tests {
                 },
             )]),
         };
-        assert!(cos_only.validate().is_err());
+        assert!(cos_only.validate().is_ok());
+
+        let database_default = StorageConfig {
+            default_backend: "private".to_string(),
+            content_cdn_backend: None,
+            backends: BTreeMap::from([(
+                "private".to_string(),
+                StorageBackendConfig::Database {
+                    label: "Private".to_string(),
+                },
+            )]),
+        };
+        assert!(database_default.validate().is_err());
+
+        let database_cdn = StorageConfig {
+            default_backend: "local".to_string(),
+            content_cdn_backend: Some("private".to_string()),
+            backends: BTreeMap::from([
+                (
+                    "local".to_string(),
+                    StorageBackendConfig::Local {
+                        label: "Local".to_string(),
+                        asset_root: "./assets".to_string(),
+                    },
+                ),
+                (
+                    "private".to_string(),
+                    StorageBackendConfig::Database {
+                        label: "Private".to_string(),
+                    },
+                ),
+            ]),
+        };
+        assert!(database_cdn.validate().is_err());
 
         let mut invalid_id = valid;
         invalid_id.backends.insert(

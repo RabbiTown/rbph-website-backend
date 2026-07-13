@@ -18,6 +18,10 @@ kind = "local"
 label = "Local"
 asset_root = "./assets"
 
+[storage.backends.private]
+kind = "database"
+label = "Data"
+
 [auth]
 
 [auth.rate_limit]

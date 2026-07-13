@@ -1,9 +1,9 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{Cursor, Read},
     path::{Component, Path, PathBuf},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use hmac::{Hmac, Mac};
@@ -27,6 +27,11 @@ const URL_PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 const STORAGE_OBJECT_KEY_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_');
+pub const DATABASE_MAX_FILE_BYTES: u64 = 1024 * 1024;
+pub const DATABASE_MAX_GROUP_BYTES: u64 = 20 * 1024 * 1024;
+pub const DATABASE_MAX_GROUP_FILES: usize = 1000;
+const DATABASE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+const DATABASE_CACHE_IDLE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone)]
 pub struct LocalStorage {
@@ -37,6 +42,7 @@ pub struct LocalStorage {
 pub struct StorageManager {
     backends: Arc<HashMap<String, StorageInstance>>,
     default_backend: Arc<str>,
+    database_cache: DatabaseAssetCache,
 }
 
 #[derive(Clone)]
@@ -49,6 +55,7 @@ struct StorageInstance {
 enum StorageBackend {
     Local(LocalStorage),
     Cos(CosStorage),
+    Database,
 }
 
 pub struct ConfiguredStorageBackend {
@@ -56,6 +63,27 @@ pub struct ConfiguredStorageBackend {
     pub kind: &'static str,
     pub label: String,
     pub recommended: bool,
+    pub public_read: bool,
+    pub backend_read: bool,
+    pub allowed_scopes: &'static [&'static str],
+    pub max_file_bytes: Option<u64>,
+    pub max_group_bytes: Option<u64>,
+}
+
+#[derive(Clone)]
+struct DatabaseAssetCache {
+    inner: Arc<Mutex<DatabaseAssetCacheInner>>,
+}
+
+struct DatabaseAssetCacheInner {
+    entries: HashMap<String, DatabaseAssetCacheEntry>,
+    order: VecDeque<String>,
+    bytes: u64,
+}
+
+struct DatabaseAssetCacheEntry {
+    content: Arc<[u8]>,
+    last_used: Instant,
 }
 
 #[derive(Clone)]
@@ -263,15 +291,24 @@ impl LocalStorage {
         })
     }
 
-    pub fn unpack_zip_files(bytes: &[u8]) -> Result<Vec<AssetUploadFile>, RbInternalError> {
+    pub fn unpack_zip_files_limited(
+        bytes: &[u8],
+        max_file_bytes: u64,
+        max_group_bytes: u64,
+        max_files: usize,
+    ) -> Result<Vec<AssetUploadFile>, RbInternalError> {
         let cursor = Cursor::new(bytes);
         let mut archive = ZipArchive::new(cursor)?;
         let mut files = Vec::new();
+        let mut total_bytes = 0_u64;
 
         for index in 0..archive.len() {
             let mut file = archive.by_index(index)?;
             if file.is_dir() {
                 continue;
+            }
+            if files.len() >= max_files || file.size() > max_file_bytes {
+                return Err("asset archive exceeds configured limits".into());
             }
 
             let Some(path) = file.enclosed_name() else {
@@ -282,12 +319,22 @@ impl LocalStorage {
                 continue;
             }
 
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
+            let mime_type = guess_mime_type(path.extension().and_then(|ext| ext.to_str()));
+            let mut bytes = Vec::with_capacity(file.size() as usize);
+            file.by_ref()
+                .take(max_file_bytes.saturating_add(1))
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > max_file_bytes {
+                return Err("asset archive file exceeds configured limit".into());
+            }
+            total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+            if total_bytes > max_group_bytes {
+                return Err("asset archive exceeds configured group limit".into());
+            }
             files.push(AssetUploadFile {
                 relative_path,
                 bytes,
-                mime_type: guess_mime_type(path.extension().and_then(|ext| ext.to_str())),
+                mime_type,
             });
         }
 
@@ -367,6 +414,7 @@ impl StorageManager {
                         public_base_url,
                     )),
                 ),
+                StorageBackendConfig::Database { label } => (label, StorageBackend::Database),
             };
             backends.insert(
                 id.clone(),
@@ -379,6 +427,7 @@ impl StorageManager {
         Ok(Self {
             backends: Arc::new(backends),
             default_backend: config.default_backend.clone().into(),
+            database_cache: DatabaseAssetCache::new(),
         })
     }
 
@@ -386,7 +435,30 @@ impl StorageManager {
         match &self.backends.get(backend)?.backend {
             StorageBackend::Local(local) => Some(local),
             StorageBackend::Cos(_) => None,
+            StorageBackend::Database => None,
         }
+    }
+
+    pub fn is_database(&self, backend: &str) -> bool {
+        matches!(
+            self.backends.get(backend).map(|instance| &instance.backend),
+            Some(StorageBackend::Database)
+        )
+    }
+
+    pub fn supports_public_read(&self, backend: &str) -> bool {
+        matches!(
+            self.backends.get(backend).map(|instance| &instance.backend),
+            Some(StorageBackend::Local(_) | StorageBackend::Cos(_))
+        )
+    }
+
+    pub fn cached_database_asset(&self, sha256: &str) -> Option<Arc<[u8]>> {
+        self.database_cache.get(sha256)
+    }
+
+    pub fn cache_database_asset(&self, sha256: &str, content: Arc<[u8]>) {
+        self.database_cache.insert(sha256.to_string(), content);
     }
 
     pub fn available_backends(&self) -> Vec<ConfiguredStorageBackend> {
@@ -398,6 +470,20 @@ impl StorageManager {
                 kind: instance.backend.kind(),
                 label: instance.label.to_string(),
                 recommended: id == self.default_backend.as_ref(),
+                public_read: !matches!(instance.backend, StorageBackend::Database),
+                backend_read: matches!(
+                    instance.backend,
+                    StorageBackend::Local(_) | StorageBackend::Database
+                ),
+                allowed_scopes: if matches!(instance.backend, StorageBackend::Database) {
+                    &["game", "puzzle"]
+                } else {
+                    &["game", "puzzle", "round"]
+                },
+                max_file_bytes: matches!(instance.backend, StorageBackend::Database)
+                    .then_some(DATABASE_MAX_FILE_BYTES),
+                max_group_bytes: matches!(instance.backend, StorageBackend::Database)
+                    .then_some(DATABASE_MAX_GROUP_BYTES),
             })
             .collect::<Vec<_>>();
         backends.sort_by(|a, b| {
@@ -429,6 +515,9 @@ impl StorageManager {
         match &self.backend(backend)?.backend {
             StorageBackend::Local(local) => local.store_group_files(object_key, files).await,
             StorageBackend::Cos(cos) => cos.store_group_files(object_key, files).await,
+            StorageBackend::Database => {
+                Err("database assets require a database transaction".into())
+            }
         }
     }
 
@@ -457,6 +546,9 @@ impl StorageManager {
                     sha256: format!("{:x}", hasher.finalize()),
                 })
             }
+            StorageBackend::Database => {
+                Err("database content cannot be used as CDN storage".into())
+            }
         }
     }
 
@@ -475,6 +567,9 @@ impl StorageManager {
             StorageBackend::Cos(cos) => {
                 cos.summarize_existing_group_files(object_key, relative_paths)
                     .await
+            }
+            StorageBackend::Database => {
+                Err("database assets must be summarized transactionally".into())
             }
         }
     }
@@ -498,6 +593,7 @@ impl StorageManager {
                 Ok(())
             }
             StorageBackend::Cos(cos) => cos.rename(object_key, old_path, new_path, mime_type).await,
+            StorageBackend::Database => Ok(()),
         }
     }
 
@@ -522,6 +618,7 @@ impl StorageManager {
                 }
                 Ok(())
             }
+            StorageBackend::Database => Ok(()),
         }
     }
 
@@ -534,6 +631,28 @@ impl StorageManager {
         match &self.backends.get(backend)?.backend {
             StorageBackend::Local(_) => None,
             StorageBackend::Cos(cos) => Some(cos.public_url(object_key, relative_path)),
+            StorageBackend::Database => None,
+        }
+    }
+
+    pub fn asset_public_url(
+        &self,
+        backend: &str,
+        object_key: &str,
+        relative_path: &str,
+    ) -> Option<String> {
+        match &self.backends.get(backend)?.backend {
+            StorageBackend::Local(_) => Some(build_public_path(object_key, relative_path)),
+            StorageBackend::Cos(cos) => Some(cos.public_url(object_key, relative_path)),
+            StorageBackend::Database => None,
+        }
+    }
+
+    pub fn asset_group_public_url(&self, backend: &str, object_key: &str) -> Option<String> {
+        match &self.backends.get(backend)?.backend {
+            StorageBackend::Local(_) => Some(build_public_group_path(object_key)),
+            StorageBackend::Cos(cos) => Some(cos.group_public_url(object_key)),
+            StorageBackend::Database => None,
         }
     }
 
@@ -544,6 +663,7 @@ impl StorageManager {
                     .await
                     .is_ok_and(|metadata| metadata.is_dir()),
                 StorageBackend::Cos(cos) => cos.ready().await,
+                StorageBackend::Database => true,
             };
             if !ready {
                 return false;
@@ -564,6 +684,86 @@ impl StorageBackend {
         match self {
             Self::Local(_) => "local",
             Self::Cos(_) => "cos",
+            Self::Database => "database",
+        }
+    }
+}
+
+impl DatabaseAssetCache {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(DatabaseAssetCacheInner {
+                entries: HashMap::new(),
+                order: VecDeque::new(),
+                bytes: 0,
+            })),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<Arc<[u8]>> {
+        let mut cache = self.inner.lock().ok()?;
+        cache.remove_expired();
+        let content = {
+            let entry = cache.entries.get_mut(key)?;
+            entry.last_used = Instant::now();
+            entry.content.clone()
+        };
+        cache.touch(key);
+        Some(content)
+    }
+
+    fn insert(&self, key: String, content: Arc<[u8]>) {
+        let size = content.len() as u64;
+        if size > DATABASE_CACHE_BYTES {
+            return;
+        }
+        let Ok(mut cache) = self.inner.lock() else {
+            return;
+        };
+        cache.remove_expired();
+        if let Some(previous) = cache.entries.remove(&key) {
+            cache.bytes = cache.bytes.saturating_sub(previous.content.len() as u64);
+        }
+        cache.order.retain(|current| current != &key);
+        while cache.bytes.saturating_add(size) > DATABASE_CACHE_BYTES {
+            let Some(oldest) = cache.order.pop_front() else {
+                break;
+            };
+            if let Some(entry) = cache.entries.remove(&oldest) {
+                cache.bytes = cache.bytes.saturating_sub(entry.content.len() as u64);
+            }
+        }
+        cache.bytes = cache.bytes.saturating_add(size);
+        cache.order.push_back(key.clone());
+        cache.entries.insert(
+            key,
+            DatabaseAssetCacheEntry {
+                content,
+                last_used: Instant::now(),
+            },
+        );
+    }
+}
+
+impl DatabaseAssetCacheInner {
+    fn touch(&mut self, key: &str) {
+        self.order.retain(|current| current != key);
+        self.order.push_back(key.to_string());
+    }
+
+    fn remove_expired(&mut self) {
+        let now = Instant::now();
+        let expired = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| now.duration_since(entry.last_used) >= DATABASE_CACHE_IDLE)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in expired {
+            if let Some(entry) = self.entries.remove(&key) {
+                self.bytes = self.bytes.saturating_sub(entry.content.len() as u64);
+            }
+            self.order.retain(|current| current != &key);
         }
     }
 }
@@ -735,6 +935,10 @@ impl CosStorage {
         )
     }
 
+    fn group_public_url(&self, object_key: &str) -> String {
+        format!("{}{}/", self.public_base_url, cos_group_path(object_key))
+    }
+
     async fn copy(
         &self,
         object_key: &str,
@@ -847,6 +1051,16 @@ fn cos_object_path(object_key: &str, relative_path: &str) -> String {
     )
 }
 
+fn cos_group_path(object_key: &str) -> String {
+    format!(
+        "/{}",
+        utf8_percent_encode(
+            &sanitize_object_key(object_key),
+            URL_PATH_SEGMENT_ENCODE_SET
+        )
+    )
+}
+
 fn encode_cos_component(value: &str) -> String {
     utf8_percent_encode(value, URL_PATH_SEGMENT_ENCODE_SET).to_string()
 }
@@ -872,6 +1086,12 @@ pub fn build_public_path(object_key: &str, original_name: &str) -> String {
         .collect::<Vec<_>>()
         .join("/");
     format!("/assets/{encoded_object_key}/{encoded_name}")
+}
+
+pub fn build_public_group_path(object_key: &str) -> String {
+    let encoded_object_key =
+        utf8_percent_encode(object_key, URL_PATH_SEGMENT_ENCODE_SET).to_string();
+    format!("/assets/{encoded_object_key}/")
 }
 
 fn sanitize_object_key(value: &str) -> String {
@@ -942,7 +1162,7 @@ fn guess_mime_type(ext: Option<&str>) -> String {
     .to_string()
 }
 
-fn uniquify_relative_path(path: String, used_paths: &mut HashMap<String, usize>) -> String {
+pub fn uniquify_relative_path(path: String, used_paths: &mut HashMap<String, usize>) -> String {
     let count = used_paths.entry(path.clone()).or_insert(0);
     if *count == 0 {
         *count = 1;
@@ -982,9 +1202,29 @@ fn uniquify_relative_path(path: String, used_paths: &mut HashMap<String, usize>)
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Component, Path};
+    use std::{
+        io::{Cursor, Write},
+        path::{Component, Path},
+        sync::Arc,
+    };
 
-    use super::{LocalStorage, build_public_path, cos_object_path};
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    use super::{
+        CosStorage, DatabaseAssetCache, LocalStorage, build_public_group_path, build_public_path,
+        cos_object_path,
+    };
+
+    fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, content) in files {
+            writer
+                .start_file(*path, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
 
     #[test]
     fn public_path_encodes_literal_percent_signs() {
@@ -1002,6 +1242,23 @@ mod tests {
         assert_eq!(
             build_public_path("group-test", "目录/a b#c.png"),
             "/assets/group-test/%E7%9B%AE%E5%BD%95/a%20b%23c.png"
+        );
+    }
+
+    #[test]
+    fn public_group_paths_have_a_trailing_slash() {
+        assert_eq!(build_public_group_path("group-test"), "/assets/group-test/");
+
+        let cos = CosStorage::new(
+            "ap-test",
+            "bucket",
+            "secret-id",
+            "secret-key",
+            "https://assets.example.com/",
+        );
+        assert_eq!(
+            cos.group_public_url("group-test"),
+            "https://assets.example.com/group-test/"
         );
     }
 
@@ -1060,5 +1317,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn zip_extraction_enforces_each_limit() {
+        let bytes = archive(&[("a.txt", b"1234"), ("b.txt", b"5678")]);
+        assert!(LocalStorage::unpack_zip_files_limited(&bytes, 4, 8, 2).is_ok());
+        assert!(LocalStorage::unpack_zip_files_limited(&bytes, 3, 8, 2).is_err());
+        assert!(LocalStorage::unpack_zip_files_limited(&bytes, 4, 7, 2).is_err());
+        assert!(LocalStorage::unpack_zip_files_limited(&bytes, 4, 8, 1).is_err());
+    }
+
+    #[test]
+    fn database_cache_returns_inserted_content() {
+        let cache = DatabaseAssetCache::new();
+        let content: Arc<[u8]> = Arc::from(b"hidden".as_slice());
+        cache.insert("sha".to_string(), content.clone());
+        assert_eq!(cache.get("sha").unwrap().as_ref(), content.as_ref());
+        assert!(cache.get("missing").is_none());
     }
 }

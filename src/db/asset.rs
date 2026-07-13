@@ -193,6 +193,35 @@ pub async fn get_readable_file_by_object_key(
     Ok(result)
 }
 
+pub async fn get_readable_file_by_object_key_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    puzzle_id: i32,
+    object_key: &str,
+    relative_path: &str,
+) -> Result<Option<RbAssetReadableFile>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbAssetReadableFile,
+        r#"SELECT f.group_id, g.backend, g.object_key, g.original_name,
+            f.relative_path, f.mime_type, f.size, f.sha256
+        FROM rb_asset_file f
+        JOIN rb_asset_group g ON g.id = f.group_id
+        WHERE g.object_key = $1
+            AND f.relative_path = $2
+            AND g.game_id = $3
+            AND (
+                (g.puzzle_id = $4 AND g.round_id IS NULL)
+                OR (g.puzzle_id IS NULL AND g.round_id IS NULL)
+            )"#,
+        object_key,
+        relative_path,
+        game_id,
+        puzzle_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?)
+}
+
 pub async fn get_public_file_backend(
     pool: &DbPool,
     object_key: &str,
@@ -312,6 +341,115 @@ pub async fn create_file_conn(
     .await?;
 
     Ok(result)
+}
+
+pub async fn create_file_blob_conn(
+    conn: &mut PgConnection,
+    file_id: i32,
+    content: &[u8],
+) -> Result<(), RbInternalError> {
+    sqlx::query!(
+        "INSERT INTO rb_asset_file_blob (file_id, content) VALUES ($1, $2)",
+        file_id,
+        content
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_file_blob(
+    pool: &DbPool,
+    group_id: i32,
+    relative_path: &str,
+) -> Result<Option<Vec<u8>>, RbInternalError> {
+    let row = sqlx::query!(
+        "SELECT b.content
+         FROM rb_asset_file_blob b
+         JOIN rb_asset_file f ON f.id = b.file_id
+         WHERE f.group_id = $1 AND f.relative_path = $2",
+        group_id,
+        relative_path
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| row.content))
+}
+
+pub async fn get_file_blob_conn(
+    conn: &mut PgConnection,
+    group_id: i32,
+    relative_path: &str,
+) -> Result<Option<Vec<u8>>, RbInternalError> {
+    let row = sqlx::query!(
+        "SELECT b.content
+         FROM rb_asset_file_blob b
+         JOIN rb_asset_file f ON f.id = b.file_id
+         WHERE f.group_id = $1 AND f.relative_path = $2",
+        group_id,
+        relative_path
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(row.map(|row| row.content))
+}
+
+pub async fn get_file_blob_by_id(
+    pool: &DbPool,
+    group_id: i32,
+    file_id: i32,
+) -> Result<Option<Vec<u8>>, RbInternalError> {
+    let row = sqlx::query!(
+        "SELECT b.content
+         FROM rb_asset_file_blob b
+         JOIN rb_asset_file f ON f.id = b.file_id
+         WHERE f.group_id = $1 AND f.id = $2",
+        group_id,
+        file_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|row| row.content))
+}
+
+pub async fn list_file_blobs(
+    pool: &DbPool,
+    group_id: i32,
+) -> Result<Vec<(String, Vec<u8>)>, RbInternalError> {
+    let rows = sqlx::query!(
+        "SELECT f.relative_path, b.content
+         FROM rb_asset_file f
+         JOIN rb_asset_file_blob b ON b.file_id = f.id
+         WHERE f.group_id = $1
+         ORDER BY f.relative_path, f.id",
+        group_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.relative_path, row.content))
+        .collect())
+}
+
+pub async fn list_file_blobs_conn(
+    conn: &mut PgConnection,
+    group_id: i32,
+) -> Result<Vec<(String, Vec<u8>)>, RbInternalError> {
+    let rows = sqlx::query!(
+        "SELECT f.relative_path, b.content
+         FROM rb_asset_file f
+         JOIN rb_asset_file_blob b ON b.file_id = f.id
+         WHERE f.group_id = $1
+         ORDER BY f.relative_path, f.id",
+        group_id
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.relative_path, row.content))
+        .collect())
 }
 
 pub async fn admin_get_group(

@@ -17,6 +17,9 @@ async fn get(
     let backend = db::asset::get_public_file_backend(&app.db, &path.object_key, &path.filename)
         .await?
         .ok_or_else(crate::error::RbError::not_found)?;
+    if !app.storage.supports_public_read(&backend) {
+        return crate::error::RbError::not_found().http_err();
+    }
 
     if let Some(local) = app.storage.local(&backend) {
         let file_path = local.object_path(&path.object_key, &path.filename);
@@ -30,6 +33,10 @@ async fn get(
         .public_url(&backend, &path.object_key, &path.filename)
         .ok_or_else(crate::error::RbError::not_found)?;
     Ok(HttpResponse::Found()
+        .insert_header((
+            actix_web::http::header::CACHE_CONTROL,
+            "public, max-age=86400",
+        ))
         .insert_header((actix_web::http::header::LOCATION, url))
         .finish())
 }

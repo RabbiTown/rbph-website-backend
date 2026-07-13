@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n            c.id AS \"id!\",\n            c.game_id AS \"game_id!\",\n            c.slug AS \"slug!\",\n            c.cname AS \"name!\",\n            c.prec AS \"prec!\",\n            CASE WHEN gf.state = 1 THEN\n                GREATEST(0::NUMERIC, LEAST(\n                    tc.amount::NUMERIC\n                        + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                ))::BIGINT\n            ELSE tc.amount END AS \"current_amount!\",\n            c.max_amount AS \"max_amount!\"\n        FROM rb_team_currency tc\n        JOIN rb_currency c ON tc.currency_id = c.id\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3\n        FOR UPDATE;",
+  "query": "SELECT\n            c.id AS \"id!\", c.game_id AS \"game_id!\", c.slug AS \"slug!\", c.cname AS \"name!\", c.prec AS \"prec!\",\n            CASE WHEN gf.state = 1 THEN\n                GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(\n                    tc.amount::NUMERIC\n                        + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                ))::BIGINT\n            ELSE tc.amount END AS \"current_amount!\",\n            c.max_amount AS \"max_amount!\"\n        FROM rb_team_currency tc\n        JOIN rb_currency c ON tc.currency_id = c.id\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE tc.team_id = $1 AND c.game_id = $2 AND c.slug = $3\n        FOR UPDATE;",
   "describe": {
     "columns": [
       {
@@ -56,5 +56,5 @@
       false
     ]
   },
-  "hash": "b582ca76004eb6e1c6aca6c2456fbb92476d1404b0f6340e2b5f8c8cb40f812a"
+  "hash": "e21a7e234aee5211631e14d2d00202d973f8474ef565410c842246f4f251f017"
 }

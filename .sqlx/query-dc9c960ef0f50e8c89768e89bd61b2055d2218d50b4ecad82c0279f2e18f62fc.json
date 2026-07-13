@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_currency SET amount = $3, utime_at = NOW() WHERE team_id = $1 AND currency_id = $2;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc9c960ef0f50e8c89768e89bd61b2055d2218d50b4ecad82c0279f2e18f62fc"
+}

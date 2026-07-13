@@ -608,7 +608,7 @@ async fn get_currency_info_conn(
                 c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
                 CASE WHEN gf.state = 1 THEN
-                    GREATEST(0::NUMERIC, LEAST(
+                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
                         tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
                         c.max_amount::NUMERIC
                     ))::BIGINT
@@ -662,7 +662,7 @@ async fn get_currency_info_one_conn(
                 c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
                 CASE WHEN gf.state = 1 THEN
-                    GREATEST(0::NUMERIC, LEAST(
+                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
                         tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
                         c.max_amount::NUMERIC
                     ))::BIGINT
@@ -712,7 +712,7 @@ async fn get_currency_info_one_by_slug_conn(
                 c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",
                 c.init_amount, c.prec, tc.amount,
                 CASE WHEN gf.state = 1 THEN
-                    GREATEST(0::NUMERIC, LEAST(
+                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
                         tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
                         c.max_amount::NUMERIC
                     ))::BIGINT
@@ -785,13 +785,9 @@ async fn lock_currency_runtime_conn(
     let row = sqlx::query_as!(
         CurrencyRuntimeRow,
         r#"SELECT
-            c.id AS "id!",
-            c.game_id AS "game_id!",
-            c.slug AS "slug!",
-            c.cname AS "name!",
-            c.prec AS "prec!",
+            c.id AS "id!", c.game_id AS "game_id!", c.slug AS "slug!", c.cname AS "name!", c.prec AS "prec!",
             CASE WHEN gf.state = 1 THEN
-                GREATEST(0::NUMERIC, LEAST(
+                GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
                     tc.amount::NUMERIC
                         + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
                     c.max_amount::NUMERIC
@@ -821,13 +817,9 @@ async fn lock_currency_runtime_by_slug_conn(
     let row = sqlx::query_as!(
         CurrencyRuntimeRow,
         r#"SELECT
-            c.id AS "id!",
-            c.game_id AS "game_id!",
-            c.slug AS "slug!",
-            c.cname AS "name!",
-            c.prec AS "prec!",
+            c.id AS "id!", c.game_id AS "game_id!", c.slug AS "slug!", c.cname AS "name!", c.prec AS "prec!",
             CASE WHEN gf.state = 1 THEN
-                GREATEST(0::NUMERIC, LEAST(
+                GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
                     tc.amount::NUMERIC
                         + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
                     c.max_amount::NUMERIC
@@ -858,7 +850,7 @@ async fn apply_currency_update_conn(
     let next_amount = options
         .amount
         .unwrap_or(row.current_amount)
-        .clamp(0, row.max_amount);
+        .min(row.max_amount);
     sqlx::query!(
         r#"UPDATE rb_team_currency
         SET amount = CASE
@@ -882,6 +874,170 @@ async fn apply_currency_update_conn(
     .execute(&mut *conn)
     .await?;
     Ok(())
+}
+
+async fn insert_staff_currency_event_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    row: &CurrencyRuntimeRow,
+    after: i64,
+    actor_id: i32,
+    reason: Option<&str>,
+    source: &'static str,
+) -> Result<(), RbInternalError> {
+    let reason = reason.map(str::trim).filter(|reason| !reason.is_empty());
+    db::event_log::insert_conn(
+        conn,
+        db::event_log::EventLogInput {
+            event_type: "currency.staff_adjusted",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(row.game_id),
+            team_id: Some(team_id),
+            user_id: Some(actor_id),
+            currency_id: Some(row.id),
+            delta_amount: Some(after - row.current_amount),
+            data: {
+                let mut data = db::event_log::CurrencyEventData {
+                    id: row.id,
+                    slug: row.slug.clone(),
+                    name: row.name.clone(),
+                    prec: row.prec,
+                    before: row.current_amount,
+                    after,
+                }
+                .json(reason, None, None);
+                data["staff"] = serde_json::Value::Bool(true);
+                data["source"] = serde_json::Value::String(source.to_owned());
+                data
+            },
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+pub enum StaffCurrencyAdjustResult {
+    NotFound,
+    Overflow,
+    AboveMax(RbCurrencyShowData),
+    Updated(RbCurrencyShowData),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum StrictCurrencyBoundary {
+    Overflow,
+    AboveMax,
+    Next(i64),
+}
+
+fn strict_currency_next(current: i64, max: i64, delta: i64) -> StrictCurrencyBoundary {
+    let Some(next) = current.checked_add(delta) else {
+        return StrictCurrencyBoundary::Overflow;
+    };
+    if next > max {
+        StrictCurrencyBoundary::AboveMax
+    } else {
+        StrictCurrencyBoundary::Next(next)
+    }
+}
+
+pub async fn staff_adjust_currency(
+    db_pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    currency_id: i32,
+    delta: i64,
+    actor_id: i32,
+    reason: Option<&str>,
+) -> Result<StaffCurrencyAdjustResult, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let Some(row) = lock_currency_runtime_conn(&mut tx, team_id, currency_id).await? else {
+        return Ok(StaffCurrencyAdjustResult::NotFound);
+    };
+    let available = sqlx::query_scalar!(
+        "SELECT NOT tc.hidden AND gf.state = 1 AS \"available!\"
+         FROM rb_team_currency tc
+         JOIN rb_currency c ON c.id = tc.currency_id
+         JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
+         WHERE tc.team_id = $1 AND tc.currency_id = $2",
+        team_id,
+        currency_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if row.game_id != game_id || !available {
+        return Ok(StaffCurrencyAdjustResult::NotFound);
+    }
+    let next_amount = match strict_currency_next(row.current_amount, row.max_amount, delta) {
+        StrictCurrencyBoundary::Next(next) => next,
+        boundary => {
+            let latest = get_currency_info_one_all_conn(&mut tx, team_id, currency_id)
+                .await?
+                .expect("locked currency must still exist");
+            return Ok(match boundary {
+                StrictCurrencyBoundary::Overflow => StaffCurrencyAdjustResult::Overflow,
+                StrictCurrencyBoundary::AboveMax => StaffCurrencyAdjustResult::AboveMax(latest),
+                StrictCurrencyBoundary::Next(_) => unreachable!(),
+            });
+        }
+    };
+
+    sqlx::query!(
+        "UPDATE rb_team_currency SET amount = $3, utime_at = NOW() WHERE team_id = $1 AND currency_id = $2;",
+        team_id,
+        currency_id,
+        next_amount
+    )
+    .execute(&mut *tx)
+    .await?;
+    insert_staff_currency_event_conn(
+        &mut tx,
+        team_id,
+        &row,
+        next_amount,
+        actor_id,
+        reason,
+        "staff_workspace",
+    )
+    .await?;
+    let updated = get_currency_info_one_all_conn(&mut tx, team_id, currency_id)
+        .await?
+        .expect("updated currency must still exist");
+    tx.commit().await?;
+    Ok(StaffCurrencyAdjustResult::Updated(updated))
+}
+
+pub async fn admin_update_currency(
+    db_pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    currency_id: i32,
+    actor_id: i32,
+    options: UpdateCurrencyOptions,
+    reason: Option<&str>,
+) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
+    let mut tx = db_pool.begin().await?;
+    let Some(row) = lock_currency_runtime_conn(&mut tx, team_id, currency_id).await? else {
+        return Ok(None);
+    };
+    if row.game_id != game_id {
+        return Ok(None);
+    }
+    apply_currency_update_conn(&mut tx, team_id, &row, &options).await?;
+    let updated = get_currency_info_one_all_conn(&mut tx, team_id, currency_id).await?;
+    if let Some(amount) = options.amount {
+        let after = amount.min(row.max_amount);
+        if after != row.current_amount {
+            insert_staff_currency_event_conn(
+                &mut tx, team_id, &row, after, actor_id, reason, "admin",
+            )
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(updated)
 }
 
 pub async fn update_currency(
@@ -1117,7 +1273,7 @@ async fn add_currency_locked_conn(
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<i64>, RbInternalError> {
     let next_amount = row.current_amount.saturating_add(delta);
-    let stored_amount = next_amount.clamp(0, row.max_amount);
+    let stored_amount = next_amount.clamp(row.current_amount.min(0), row.max_amount);
     let actual_growth = stored_amount - row.current_amount;
 
     sqlx::query!(
@@ -1946,4 +2102,41 @@ pub async fn admin_delete(
     db::cache::remove_team_info(game_id, team_id).await?;
     app.sync_hub.notify_team_disbanded(&members);
     Ok(Some(members))
+}
+
+#[cfg(test)]
+mod currency_adjust_tests {
+    use super::{StrictCurrencyBoundary, strict_currency_next};
+
+    #[test]
+    fn strict_adjustment_allows_negative_balances_and_exact_upper_boundary() {
+        assert_eq!(
+            strict_currency_next(10, 100, -10),
+            StrictCurrencyBoundary::Next(0)
+        );
+        assert_eq!(
+            strict_currency_next(10, 100, -11),
+            StrictCurrencyBoundary::Next(-1)
+        );
+        assert_eq!(
+            strict_currency_next(10, 100, 90),
+            StrictCurrencyBoundary::Next(100)
+        );
+    }
+
+    #[test]
+    fn strict_adjustment_rejects_upper_bound_and_integer_overflow() {
+        assert_eq!(
+            strict_currency_next(10, 100, 91),
+            StrictCurrencyBoundary::AboveMax
+        );
+        assert_eq!(
+            strict_currency_next(i64::MAX, i64::MAX, 1),
+            StrictCurrencyBoundary::Overflow
+        );
+        assert_eq!(
+            strict_currency_next(0, i64::MAX, i64::MIN),
+            StrictCurrencyBoundary::Next(i64::MIN)
+        );
+    }
 }

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team_currency tc\n        SET amount = GREATEST(\n                LEAST(tc.amount::NUMERIC, 0::NUMERIC),\n                LEAST(\n                    tc.amount::NUMERIC\n                        + GREATEST(\n                            FLOOR(EXTRACT(EPOCH FROM ($3 - tc.utime_at)) / 60),\n                            0::NUMERIC\n                        ) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                )\n            )::BIGINT,\n            utime_at = GREATEST(tc.utime_at, $3)\n        FROM rb_currency c\n        WHERE tc.currency_id = c.id\n            AND c.game_id = $1\n            AND ($2::INT IS NULL OR c.id = $2);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d83cc4dcf912091ab9b1b93bfde078785b3501b72d5247b3e37b2e7ecc1d5660"
+}

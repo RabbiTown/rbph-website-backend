@@ -837,6 +837,293 @@ struct StaffTeamListResponse {
     teams: Vec<StaffTeamListItem>,
 }
 
+#[derive(Deserialize)]
+struct StaffTeamAccessPath {
+    game_id: i32,
+    team_id: i32,
+}
+
+#[derive(Deserialize)]
+struct StaffTeamFeatureUpdate {
+    feature: db::feature::GameFeature,
+    enabled: bool,
+}
+
+#[derive(Deserialize, Validate)]
+struct StaffTeamAccessUpdateRequest {
+    is_banned: Option<bool>,
+    is_locked: Option<bool>,
+    features: Option<Vec<StaffTeamFeatureUpdate>>,
+    #[validate(length(max = 500))]
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StaffTeamAccessData {
+    team_id: i32,
+    is_banned: bool,
+    is_locked: bool,
+    features: Vec<db::team::RbTeamFeatureData>,
+}
+
+#[derive(Serialize)]
+struct StaffTeamAccessCapabilities {
+    team_ban: bool,
+    team_lock: bool,
+    features: Vec<db::feature::GameFeature>,
+}
+
+#[derive(Serialize)]
+struct StaffTeamAccessResponse {
+    access: StaffTeamAccessData,
+    editable: StaffTeamAccessCapabilities,
+}
+
+#[derive(Deserialize, Validate)]
+struct StaffCurrencyAdjustRequest {
+    delta: i64,
+    #[validate(length(max = 500))]
+    reason: Option<String>,
+}
+
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+enum StaffCurrencyAdjustCode {
+    Invalid = -3,
+    AboveMax = -1,
+    Ok = 0,
+}
+
+#[derive(Serialize)]
+struct StaffCurrencyListResponse {
+    currencies: Vec<db::team::RbCurrencyShowData>,
+}
+
+#[derive(Deserialize)]
+struct StaffManagementActivityQuery {
+    before: Option<i64>,
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct StaffCurrencyResponse {
+    code: StaffCurrencyAdjustCode,
+    currency: db::team::RbCurrencyShowData,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum StaffTeamAccessValidation {
+    Valid,
+    Invalid,
+    Forbidden,
+}
+
+fn validate_staff_team_access_update(
+    role: RbUserRole,
+    req: &StaffTeamAccessUpdateRequest,
+) -> StaffTeamAccessValidation {
+    let mut features = std::collections::HashSet::new();
+    let valid_features = req.features.as_ref().is_none_or(|updates| {
+        updates.iter().all(|update| {
+            let valid = matches!(
+                update.feature,
+                db::feature::GameFeature::DirectMessage
+                    | db::feature::GameFeature::PuzzleTicket
+                    | db::feature::GameFeature::Leaderboard
+            );
+            valid && features.insert(update.feature.value())
+        })
+    });
+    if !valid_features {
+        return StaffTeamAccessValidation::Invalid;
+    }
+
+    if !role.is_admin()
+        && (req.is_banned.is_some()
+            || req.is_locked.is_some()
+            || req.features.as_ref().is_some_and(|updates| {
+                updates
+                    .iter()
+                    .any(|update| update.feature == db::feature::GameFeature::Leaderboard)
+            }))
+    {
+        return StaffTeamAccessValidation::Forbidden;
+    }
+
+    StaffTeamAccessValidation::Valid
+}
+
+fn staff_team_access_response(
+    team: db::team::AdminTeamDetail,
+    role: RbUserRole,
+) -> StaffTeamAccessResponse {
+    let is_admin = role.is_admin();
+    StaffTeamAccessResponse {
+        access: StaffTeamAccessData {
+            team_id: team.id,
+            is_banned: team.is_banned,
+            is_locked: team.is_locked,
+            features: team.features,
+        },
+        editable: StaffTeamAccessCapabilities {
+            team_ban: is_admin,
+            team_lock: is_admin,
+            features: if is_admin {
+                vec![
+                    db::feature::GameFeature::DirectMessage,
+                    db::feature::GameFeature::PuzzleTicket,
+                    db::feature::GameFeature::Leaderboard,
+                ]
+            } else {
+                vec![
+                    db::feature::GameFeature::DirectMessage,
+                    db::feature::GameFeature::PuzzleTicket,
+                ]
+            },
+        },
+    }
+}
+
+async fn get_staff_team_access(
+    path: web::Path<StaffTeamAccessPath>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let role = user.req_role()?;
+    let team = db::team::admin_get(&app.db, path.game_id, path.team_id).await?;
+    let Some(team) = team else {
+        return RbError::not_found().http_err();
+    };
+    Ok(HttpResponse::Ok().json(staff_team_access_response(team, role)))
+}
+
+async fn update_staff_team_access(
+    path: web::Path<StaffTeamAccessPath>,
+    req: web::Json<StaffTeamAccessUpdateRequest>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if let Err(error) = req.validate() {
+        return RbError::bad_req(-1).msg(error.to_string()).http_err();
+    }
+    let role = user.req_role()?;
+    match validate_staff_team_access_update(role, &req) {
+        StaffTeamAccessValidation::Valid => {}
+        StaffTeamAccessValidation::Invalid => return RbError::bad_req(-1).http_err(),
+        StaffTeamAccessValidation::Forbidden => return RbError::forbid().http_err(),
+    }
+
+    let update = db::team::AdminTeamUpdateData {
+        name: None,
+        pass: None,
+        bio: None,
+        is_banned: req.is_banned,
+        is_locked: req.is_locked,
+        features: req.features.as_ref().map(|features| {
+            features
+                .iter()
+                .map(|feature| db::team::AdminTeamFeatureDataInput {
+                    feature: feature.feature,
+                    enabled: feature.enabled,
+                })
+                .collect()
+        }),
+        reason: req.reason.clone(),
+    };
+    let team =
+        db::team::admin_update(&app.db, path.game_id, path.team_id, user.uid, &update).await?;
+    let Some(team) = team else {
+        return RbError::not_found().http_err();
+    };
+    db::cache::invalidate_team_info(&app, path.team_id).await?;
+    db::board::LEADER_BOARD_CACHE
+        .invalidate_game(path.game_id)
+        .await;
+    Ok(HttpResponse::Ok().json(staff_team_access_response(team, role)))
+}
+
+async fn get_staff_team_currencies(
+    path: web::Path<StaffTeamAccessPath>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let team_exists = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM rb_team WHERE id = $1 AND game_id = $2) AS \"exists!\";",
+        path.team_id,
+        path.game_id
+    )
+    .fetch_one(&app.db)
+    .await
+    .map_err(crate::error::RbInternalError::from)?;
+    if !team_exists {
+        return RbError::not_found().http_err();
+    }
+    let currencies = db::team::get_currency_info(&app.db, path.team_id).await?;
+    Ok(HttpResponse::Ok().json(StaffCurrencyListResponse { currencies }))
+}
+
+async fn adjust_staff_team_currency(
+    path: web::Path<(i32, i32, i32)>,
+    req: web::Json<StaffCurrencyAdjustRequest>,
+    user: AuthUser,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let (game_id, team_id, currency_id) = path.into_inner();
+    if req.delta == 0 {
+        return RbError::bad_req(StaffCurrencyAdjustCode::Invalid.into()).http_err();
+    }
+    if let Err(error) = req.validate() {
+        return RbError::bad_req(StaffCurrencyAdjustCode::Invalid.into())
+            .msg(error.to_string())
+            .http_err();
+    }
+    let result = db::team::staff_adjust_currency(
+        &app.db,
+        game_id,
+        team_id,
+        currency_id,
+        req.delta,
+        user.uid,
+        req.reason.as_deref(),
+    )
+    .await?;
+    let (code, currency) = match result {
+        db::team::StaffCurrencyAdjustResult::NotFound => {
+            return RbError::not_found().http_err();
+        }
+        db::team::StaffCurrencyAdjustResult::Overflow => {
+            return RbError::bad_req(StaffCurrencyAdjustCode::Invalid.into()).http_err();
+        }
+        db::team::StaffCurrencyAdjustResult::AboveMax(currency) => {
+            (StaffCurrencyAdjustCode::AboveMax, currency)
+        }
+        db::team::StaffCurrencyAdjustResult::Updated(currency) => {
+            db::cache::invalidate_team_info(&app, team_id).await?;
+            db::board::LEADER_BOARD_CACHE.invalidate_game(game_id).await;
+            return Ok(HttpResponse::Ok().json(StaffCurrencyResponse {
+                code: StaffCurrencyAdjustCode::Ok,
+                currency,
+            }));
+        }
+    };
+    Ok(HttpResponse::Conflict().json(StaffCurrencyResponse { code, currency }))
+}
+
+async fn get_staff_team_management_activity(
+    path: web::Path<StaffTeamAccessPath>,
+    query: web::Query<StaffManagementActivityQuery>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let activity = db::event_log::list_team_management_activity(
+        &app.db,
+        path.game_id,
+        path.team_id,
+        query.before,
+        query.limit.unwrap_or(30),
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(activity))
+}
+
 async fn list_staff_teams(
     path: web::Path<crate::api::game::GamePathInfo>,
     query: web::Query<StaffTeamListQuery>,
@@ -1062,6 +1349,26 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
             .route("", web::get().to(list_staff_tickets))
             .route("/teams", web::get().to(list_staff_teams))
             .route(
+                "/teams/{team_id}/access",
+                web::get().to(get_staff_team_access),
+            )
+            .route(
+                "/teams/{team_id}/access",
+                web::patch().to(update_staff_team_access),
+            )
+            .route(
+                "/teams/{team_id}/currencies",
+                web::get().to(get_staff_team_currencies),
+            )
+            .route(
+                "/teams/{team_id}/currencies/{currency_id}/adjust",
+                web::post().to(adjust_staff_team_currency),
+            )
+            .route(
+                "/teams/{team_id}/management-activity",
+                web::get().to(get_staff_team_management_activity),
+            )
+            .route(
                 "/puzzle/{puzzle_id}/teams/{team_id}",
                 web::get().to(get_staff_team_puzzle_tickets),
             )
@@ -1109,6 +1416,104 @@ pub fn tickets_config(cfg: &mut web::ServiceConfig) {
             )
             .default_service(web::route().to(error_handler)),
     );
+}
+
+#[cfg(test)]
+mod staff_team_access_tests {
+    use super::{
+        StaffTeamAccessUpdateRequest, StaffTeamAccessValidation, StaffTeamFeatureUpdate,
+        validate_staff_team_access_update,
+    };
+    use crate::{db::feature::GameFeature, model::user::RbUserRole};
+    use validator::Validate;
+
+    fn request(features: Vec<GameFeature>) -> StaffTeamAccessUpdateRequest {
+        StaffTeamAccessUpdateRequest {
+            is_banned: None,
+            is_locked: None,
+            features: Some(
+                features
+                    .into_iter()
+                    .map(|feature| StaffTeamFeatureUpdate {
+                        feature,
+                        enabled: false,
+                    })
+                    .collect(),
+            ),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn moderators_can_only_update_message_features() {
+        assert_eq!(
+            validate_staff_team_access_update(
+                RbUserRole::Moderator,
+                &request(vec![GameFeature::DirectMessage, GameFeature::PuzzleTicket]),
+            ),
+            StaffTeamAccessValidation::Valid,
+        );
+        assert_eq!(
+            validate_staff_team_access_update(
+                RbUserRole::Moderator,
+                &request(vec![GameFeature::Leaderboard]),
+            ),
+            StaffTeamAccessValidation::Forbidden,
+        );
+
+        let mut team_update = request(vec![]);
+        team_update.is_banned = Some(true);
+        assert_eq!(
+            validate_staff_team_access_update(RbUserRole::Moderator, &team_update),
+            StaffTeamAccessValidation::Forbidden,
+        );
+    }
+
+    #[test]
+    fn administrators_can_update_complete_access_section() {
+        let mut update = request(vec![
+            GameFeature::DirectMessage,
+            GameFeature::PuzzleTicket,
+            GameFeature::Leaderboard,
+        ]);
+        update.is_banned = Some(true);
+        update.is_locked = Some(true);
+        assert_eq!(
+            validate_staff_team_access_update(RbUserRole::Admin, &update),
+            StaffTeamAccessValidation::Valid,
+        );
+        assert_eq!(
+            validate_staff_team_access_update(RbUserRole::Root, &update),
+            StaffTeamAccessValidation::Valid,
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_and_non_team_features() {
+        assert_eq!(
+            validate_staff_team_access_update(
+                RbUserRole::Admin,
+                &request(vec![GameFeature::DirectMessage, GameFeature::DirectMessage]),
+            ),
+            StaffTeamAccessValidation::Invalid,
+        );
+        assert_eq!(
+            validate_staff_team_access_update(
+                RbUserRole::Admin,
+                &request(vec![GameFeature::Currency]),
+            ),
+            StaffTeamAccessValidation::Invalid,
+        );
+    }
+
+    #[test]
+    fn validates_optional_reason_length() {
+        let mut update = request(vec![]);
+        update.reason = Some("a".repeat(500));
+        assert!(update.validate().is_ok());
+        update.reason = Some("a".repeat(501));
+        assert!(update.validate().is_err());
+    }
 }
 
 // /messages/... - purchase, delete, ...

@@ -302,7 +302,7 @@ pub async fn settle_currency_growth_conn(
     sqlx::query!(
         r#"UPDATE rb_team_currency tc
         SET amount = GREATEST(
-                0::NUMERIC,
+                LEAST(tc.amount::NUMERIC, 0::NUMERIC),
                 LEAST(
                     tc.amount::NUMERIC
                         + GREATEST(

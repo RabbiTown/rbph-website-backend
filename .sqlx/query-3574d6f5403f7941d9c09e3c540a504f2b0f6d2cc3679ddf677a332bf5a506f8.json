@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NOT tc.hidden AND gf.state = 1 AS \"available!\"\n         FROM rb_team_currency tc\n         JOIN rb_currency c ON c.id = tc.currency_id\n         JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n         WHERE tc.team_id = $1 AND tc.currency_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "available!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3574d6f5403f7941d9c09e3c540a504f2b0f6d2cc3679ddf677a332bf5a506f8"
+}

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT CASE WHEN gf.state = 1 THEN\n                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(\n                        tc.amount::NUMERIC\n                            + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60)\n                                * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    ))::BIGINT\n                ELSE tc.amount END AS \"current_amount!\"\n            FROM rb_team_currency tc\n            JOIN rb_currency c ON c.id = tc.currency_id\n            JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n            WHERE tc.team_id = $1 AND tc.currency_id = $2 AND c.game_id = $3\n            FOR UPDATE OF tc",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "current_amount!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "dc41bf03e6b7b4563819013c6e70d1053d032c0b82cab95fd0539f5cb53703db"
+}

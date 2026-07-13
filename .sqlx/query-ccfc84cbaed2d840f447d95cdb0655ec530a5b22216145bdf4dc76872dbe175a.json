@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",\n                c.init_amount, c.prec, tc.amount,\n                CASE WHEN gf.state = 1 THEN\n                    GREATEST(0::NUMERIC, LEAST(\n                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    ))::BIGINT\n                ELSE tc.amount END AS \"current_amount!\",\n                c.max_amount, tc.hidden, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE tc.team_id = $1 AND ($2 OR (NOT tc.hidden AND gf.state = 1));",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",\n                c.init_amount, c.prec, tc.amount,\n                CASE WHEN gf.state = 1 THEN\n                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(\n                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    ))::BIGINT\n                ELSE tc.amount END AS \"current_amount!\",\n                c.max_amount, tc.hidden, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE tc.team_id = $1 AND ($2 OR (NOT tc.hidden AND gf.state = 1));",
   "describe": {
     "columns": [
       {
@@ -91,5 +91,5 @@
       false
     ]
   },
-  "hash": "2c0748f837f2967181fc89025391fd96475609e9b8fb864f7faa92155f6f9bc4"
+  "hash": "ccfc84cbaed2d840f447d95cdb0655ec530a5b22216145bdf4dc76872dbe175a"
 }

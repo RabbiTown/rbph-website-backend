@@ -51,11 +51,13 @@ struct MemberAddRequest {
     user_id: i32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Validate)]
 struct CurrencyUpdateRequest {
     amount: Option<i64>,
     growth: Option<i64>,
     hidden: Option<bool>,
+    #[validate(length(max = 500))]
+    reason: Option<String>,
 }
 
 #[repr(i32)]
@@ -284,17 +286,26 @@ async fn promote_member(
 async fn update_currency(
     path: web::Path<CurrencyPathInfo>,
     req: web::Json<CurrencyUpdateRequest>,
+    actor: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let currency = db::team::update_currency(
+    if let Err(error) = req.validate() {
+        return RbError::bad_req(TeamAdminResult::Invalid.into())
+            .msg(error.to_string())
+            .http_err();
+    }
+    let currency = db::team::admin_update_currency(
         &app.db,
+        path.game_id,
         path.team_id,
         path.currency_id,
+        actor.uid,
         db::team::UpdateCurrencyOptions {
             amount: req.amount,
             growth: req.growth,
             hidden: req.hidden,
         },
+        req.reason.as_deref(),
     )
     .await?;
     if currency.is_none() {
@@ -302,6 +313,10 @@ async fn update_currency(
             .code(TeamAdminResult::NotFound.into())
             .http_err();
     }
+    db::cache::invalidate_team_info(&app, path.team_id).await?;
+    db::board::LEADER_BOARD_CACHE
+        .invalidate_game(path.game_id)
+        .await;
     let team = db::team::admin_get(&app.db, path.game_id, path.team_id)
         .await?
         .ok_or(RbError::not_found())?;

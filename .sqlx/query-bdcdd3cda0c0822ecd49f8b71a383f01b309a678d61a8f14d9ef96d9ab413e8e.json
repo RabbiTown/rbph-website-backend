@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",\n                c.init_amount, c.prec, tc.amount,\n                CASE WHEN gf.state = 1 THEN\n                    GREATEST(0::NUMERIC, LEAST(\n                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    ))::BIGINT\n                ELSE tc.amount END AS \"current_amount!\",\n                c.max_amount, tc.hidden, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE tc.team_id = $1 AND c.id = $2 AND ($3 OR NOT tc.hidden);",
+  "query": "SELECT c.id, c.slug, c.cname AS name, c.growth + tc.growth AS \"growth!\",\n                c.growth AS \"game_growth!\", tc.growth AS \"team_growth!\",\n                c.init_amount, c.prec, tc.amount,\n                CASE WHEN gf.state = 1 THEN\n                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(\n                        tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                        c.max_amount::NUMERIC\n                    ))::BIGINT\n                ELSE tc.amount END AS \"current_amount!\",\n                c.max_amount, tc.hidden, tc.utime_at\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        WHERE tc.team_id = $1 AND c.id = $2 AND ($3 OR NOT tc.hidden);",
   "describe": {
     "columns": [
       {
@@ -92,5 +92,5 @@
       false
     ]
   },
-  "hash": "20aed0ff5ea33495c7ee7d78afa7ae787ea4d183d83b07523678bddc9f9dc37e"
+  "hash": "bdcdd3cda0c0822ecd49f8b71a383f01b309a678d61a8f14d9ef96d9ab413e8e"
 }

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            c.id AS \"currency_id!\",\n            c.init_amount,\n            CASE WHEN gf.state = 1 THEN\n                GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(\n                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,\n                    c.max_amount::NUMERIC\n                ))::BIGINT\n            ELSE tc.amount END AS \"current_amount!\",\n            COALESCE(SUM(el.delta_amount), 0)::BIGINT AS \"logged_delta!\"\n        FROM rb_currency c\n        JOIN rb_team_currency tc ON tc.currency_id = c.id AND tc.team_id = $1\n        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4\n        LEFT JOIN rb_event_log el ON el.team_id = tc.team_id\n            AND el.currency_id = c.id\n        WHERE c.id = $2\n        GROUP BY c.id, c.init_amount, tc.amount, tc.utime_at, tc.growth, c.growth, c.max_amount, gf.state;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "currency_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "init_amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "current_amount!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "logged_delta!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "e2b0ce9cd18e2aa0ffd17a663c1195324b7a030ac2c738bfab5e360a2cac5d9f"
+}

@@ -198,6 +198,49 @@ pub async fn list_team_activity(
     Ok(rows)
 }
 
+pub async fn list_team_management_activity(
+    pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    before: Option<i64>,
+    limit: i64,
+) -> Result<Vec<EventLogData>, RbInternalError> {
+    let scope = i16::from(EventScope::TeamActivity);
+    let limit = limit.clamp(1, 100);
+    let rows = sqlx::query_as!(
+        EventLogData,
+        r#"SELECT el.id, el.event_type, el.event_scope AS scope, el.severity, el.game_id, el.team_id, el.user_id,
+            el.target_user_id, el.puzzle_id, el.round_id, el.hint_id, el.ticket_id, el.submission_id, el.currency_id,
+            el.delta_amount,
+            (
+                (el.data - 'user' - 'target_user')
+                || CASE
+                    WHEN u.id IS NULL THEN '{}'::JSONB
+                    ELSE jsonb_build_object('user', jsonb_build_object('id', u.id, 'nickname', u.nickname))
+                END
+            ) AS "data!",
+            el.ctime_at
+        FROM rb_event_log el
+        LEFT JOIN rb_user u ON u.id = el.user_id
+        WHERE el.game_id = $1
+            AND el.team_id = $2
+            AND el.event_scope = $3
+            AND el.event_type IN ('team.access_changed', 'currency.staff_adjusted')
+            AND ($4::BIGINT IS NULL OR el.id < $4)
+        ORDER BY el.id DESC
+        LIMIT $5;"#,
+        game_id,
+        team_id,
+        scope,
+        before,
+        limit
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 pub struct AdminLogQuery<'a> {
     pub scope: Option<i16>,
     pub severity: Option<i16>,
@@ -295,33 +338,32 @@ pub async fn get_currency_activity_summary(
     team_id: i32,
     currency_id: i32,
 ) -> Result<Option<CurrencyActivitySummary>, RbInternalError> {
-    let row = sqlx::query!(
+    let row = sqlx::query_as!(
+        CurrencyActivitySummary,
         r#"SELECT
             c.id AS "currency_id!",
             c.init_amount,
-            LEAST(
-                tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
-                c.max_amount::NUMERIC
-            )::BIGINT AS "current_amount!",
+            CASE WHEN gf.state = 1 THEN
+                GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
+                    tc.amount::NUMERIC + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60) * (c.growth + tc.growth)::NUMERIC,
+                    c.max_amount::NUMERIC
+                ))::BIGINT
+            ELSE tc.amount END AS "current_amount!",
             COALESCE(SUM(el.delta_amount), 0)::BIGINT AS "logged_delta!"
         FROM rb_currency c
         JOIN rb_team_currency tc ON tc.currency_id = c.id AND tc.team_id = $1
+        JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
         LEFT JOIN rb_event_log el ON el.team_id = tc.team_id
             AND el.currency_id = c.id
         WHERE c.id = $2
-        GROUP BY c.id, c.init_amount, tc.amount, tc.utime_at, tc.growth, c.growth, c.max_amount;"#,
+        GROUP BY c.id, c.init_amount, tc.amount, tc.utime_at, tc.growth, c.growth, c.max_amount, gf.state;"#,
         team_id,
         currency_id
     )
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|row| CurrencyActivitySummary {
-        currency_id: row.currency_id,
-        init_amount: row.init_amount,
-        current_amount: row.current_amount,
-        logged_delta: row.logged_delta,
-    }))
+    Ok(row)
 }
 
 #[derive(Clone)]

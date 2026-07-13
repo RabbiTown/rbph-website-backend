@@ -850,7 +850,7 @@ async fn submit_requirements_conn(
         } = requirement;
         let current = sqlx::query_scalar!(
             r#"SELECT CASE WHEN gf.state = 1 THEN
-                    GREATEST(0::NUMERIC, LEAST(
+                    GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
                         tc.amount::NUMERIC
                             + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60)
                                 * (c.growth + tc.growth)::NUMERIC,

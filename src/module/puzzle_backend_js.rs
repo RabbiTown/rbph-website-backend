@@ -649,58 +649,10 @@ fn build_judge_ctx_arg(
     let submission = ObjectInitializer::new(context)
         .property(js_string!("id"), runtime.submission.id, Attribute::all())
         .property(
-            js_string!("teamId"),
-            runtime.submission.team_id,
-            Attribute::all(),
-        )
-        .property(
-            js_string!("userId"),
-            runtime.submission.user_id,
-            Attribute::all(),
-        )
-        .property(
-            js_string!("puzzleId"),
-            runtime.submission.puzzle_id,
-            Attribute::all(),
-        )
-        .property(
-            js_string!("userAnswer"),
-            JsValue::from(JsString::from(runtime.submission.user_answer.clone())),
-            Attribute::all(),
-        )
-        .property(
-            js_string!("normAnswer"),
-            JsValue::from(JsString::from(runtime.submission.norm_answer.clone())),
-            Attribute::all(),
-        )
-        .property(
-            js_string!("saction"),
-            i16::from(runtime.submission.saction),
-            Attribute::all(),
-        )
-        .property(
-            js_string!("sresult"),
-            runtime
-                .submission
-                .sresult
-                .as_ref()
-                .map(|value| JsValue::from(JsString::from(value.clone())))
-                .unwrap_or_else(JsValue::null),
-            Attribute::all(),
-        )
-        .property(
-            js_string!("realAnswer"),
-            runtime
-                .submission
-                .real_answer
-                .as_ref()
-                .map(|value| JsValue::from(JsString::from(value.clone())))
-                .unwrap_or_else(JsValue::null),
-            Attribute::all(),
-        )
-        .property(
-            js_string!("ignored"),
-            runtime.submission.ignored,
+            js_string!("ctime_at"),
+            JsValue::from(JsString::from(
+                crate::serde_helpers::format_offset_datetime(&runtime.submission.ctime_at),
+            )),
             Attribute::all(),
         )
         .build();
@@ -1703,6 +1655,71 @@ fn build_store_object(
         .build()
 }
 
+fn backend_currency_json(
+    currency: Option<crate::db::team::RbCurrencyShowData>,
+) -> serde_json::Result<Value> {
+    serde_json::to_value(currency.map(crate::db::team::PuzzleBackendCurrencyShowData::from))
+}
+
+fn backend_currencies_json(
+    currencies: Vec<crate::db::team::RbCurrencyShowData>,
+) -> serde_json::Result<Value> {
+    serde_json::to_value(
+        currencies
+            .into_iter()
+            .map(crate::db::team::PuzzleBackendCurrencyShowData::from)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn currency_update_options_arg(
+    value: &JsValue,
+    context: &mut Context,
+) -> Result<crate::db::team::UpdateCurrencyOptions, JsError> {
+    if let Some(amount) = value.as_number() {
+        return Ok(crate::db::team::UpdateCurrencyOptions {
+            amount: Some(js_number_to_i64(
+                amount,
+                "currency.update amount must be an integer in i64 range",
+            )?),
+            team_growth: None,
+            hidden: None,
+        });
+    }
+
+    let json = js_to_json(value, context).map_err(|e| js_err(e.to_string()))?;
+    let object = json
+        .as_object()
+        .ok_or_else(|| js_err("currency.update options must be an object"))?;
+    if object.contains_key("growth") {
+        return Err(js_err(
+            "currency.update options.growth was renamed to options.team_growth",
+        ));
+    }
+    let number_field = |name: &str| -> Result<Option<i64>, JsError> {
+        object
+            .get(name)
+            .map(|value| {
+                value.as_i64().ok_or_else(|| {
+                    js_err(format!("currency.update options.{name} must be a number"))
+                })
+            })
+            .transpose()
+    };
+    Ok(crate::db::team::UpdateCurrencyOptions {
+        amount: number_field("amount")?,
+        team_growth: number_field("team_growth")?,
+        hidden: object
+            .get("hidden")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| js_err("currency.update options.hidden must be a boolean"))
+            })
+            .transpose()?,
+    })
+}
+
 fn build_currency_object(
     context: &mut Context,
     db: DbPool,
@@ -1744,7 +1761,7 @@ fn build_currency_object(
                                             *currency_id,
                                         ),
                                     )?;
-                                    serde_json::to_value(row)
+                                    backend_currency_json(row)
                                         .map_err(|e| internal_err(e.to_string()))
                                 }
                                 Some(CurrencyRef::Slug(slug)) => {
@@ -1756,14 +1773,14 @@ fn build_currency_object(
                                             slug,
                                         ),
                                     )?;
-                                    serde_json::to_value(row)
+                                    backend_currency_json(row)
                                         .map_err(|e| internal_err(e.to_string()))
                                 }
                                 None => {
                                     let rows = block_on_db(
                                         crate::db::team::get_currency_info_all_conn(conn, team_id),
                                     )?;
-                                    serde_json::to_value(rows)
+                                    backend_currencies_json(rows)
                                         .map_err(|e| internal_err(e.to_string()))
                                 }
                             }
@@ -1782,8 +1799,8 @@ fn build_currency_object(
                                     currency_id,
                                 ))
                                 .map_err(|e| js_err(e.to_string()))?;
-                                let json =
-                                    serde_json::to_value(row).map_err(|e| js_err(e.to_string()))?;
+                                let json = backend_currency_json(row)
+                                    .map_err(|e| js_err(e.to_string()))?;
                                 json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
                             }
                             Some(CurrencyRef::Slug(slug)) => {
@@ -1796,8 +1813,8 @@ fn build_currency_object(
                                     ),
                                 )
                                 .map_err(|e| js_err(e.to_string()))?;
-                                let json =
-                                    serde_json::to_value(row).map_err(|e| js_err(e.to_string()))?;
+                                let json = backend_currency_json(row)
+                                    .map_err(|e| js_err(e.to_string()))?;
                                 json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
                             }
                             None => {
@@ -1805,7 +1822,7 @@ fn build_currency_object(
                                     &query_db, team_id,
                                 ))
                                 .map_err(|e| js_err(e.to_string()))?;
-                                let json = serde_json::to_value(rows)
+                                let json = backend_currencies_json(rows)
                                     .map_err(|e| js_err(e.to_string()))?;
                                 json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
                             }
@@ -2026,48 +2043,7 @@ fn build_currency_object(
                         let value = args
                             .get(offset + 1)
                             .ok_or_else(|| js_err("currency.update requires amount or options"))?;
-                        let options = if let Some(amount) = value.as_number() {
-                            crate::db::team::UpdateCurrencyOptions {
-                                amount: Some(js_number_to_i64(
-                                    amount,
-                                    "currency.update amount must be an integer in i64 range",
-                                )?),
-                                growth: None,
-                                hidden: None,
-                            }
-                        } else {
-                            let json =
-                                js_to_json(value, context).map_err(|e| js_err(e.to_string()))?;
-                            let object = json.as_object().ok_or_else(|| {
-                                js_err("currency.update options must be an object")
-                            })?;
-                            let number_field = |name: &str| -> Result<Option<i64>, JsError> {
-                                object
-                                    .get(name)
-                                    .map(|value| {
-                                        value.as_i64().ok_or_else(|| {
-                                            js_err(format!(
-                                                "currency.update options.{name} must be a number"
-                                            ))
-                                        })
-                                    })
-                                    .transpose()
-                            };
-                            crate::db::team::UpdateCurrencyOptions {
-                                amount: number_field("amount")?,
-                                growth: number_field("growth")?,
-                                hidden: object
-                                    .get("hidden")
-                                    .map(|value| {
-                                        value.as_bool().ok_or_else(|| {
-                                            js_err(
-                                                "currency.update options.hidden must be a boolean",
-                                            )
-                                        })
-                                    })
-                                    .transpose()?,
-                            }
-                        };
+                        let options = currency_update_options_arg(value, context)?;
                         if let Some(result) = with_judge_conn(|conn| {
                             if check_team {
                                 require_currency_team_in_game_conn(conn, team_id, runtime.game_id)
@@ -2094,7 +2070,7 @@ fn build_currency_object(
                             }
                         }) {
                             let json =
-                                serde_json::to_value(result.map_err(|e| js_err(e.to_string()))?)
+                                backend_currency_json(result.map_err(|e| js_err(e.to_string()))?)
                                     .map_err(|e| js_err(e.to_string()))?;
                             return json_to_js(&json, context).map_err(|e| js_err(e.to_string()));
                         }
@@ -2122,7 +2098,7 @@ fn build_currency_object(
                         }
                         .map_err(|e| js_err(e.to_string()))?;
                         let json =
-                            serde_json::to_value(updated).map_err(|e| js_err(e.to_string()))?;
+                            backend_currency_json(updated).map_err(|e| js_err(e.to_string()))?;
                         json_to_js(&json, context).map_err(|e| js_err(e.to_string()))
                     },
                     (),
@@ -2903,6 +2879,51 @@ mod tests {
     }
 
     #[test]
+    fn judge_context_exposes_only_stable_submission_metadata() {
+        let created_at = time::OffsetDateTime::from_unix_timestamp(1_700_000_000)
+            .expect("timestamp should be valid");
+        let runtime = JudgeRuntimeContext {
+            puzzle_id: 3,
+            game_id: 4,
+            puzzle_title: "Puzzle".to_string(),
+            team_id: 5,
+            team_name: "Team".to_string(),
+            user_id: 6,
+            user_nickname: "User".to_string(),
+            user_answer: " Answer ".to_string(),
+            norm_answer: "answer".to_string(),
+            submission: crate::db::puzzle::BackendSubmissionShowData {
+                id: 7,
+                team_id: 5,
+                user_id: 6,
+                puzzle_id: 3,
+                user_answer: " Answer ".to_string(),
+                norm_answer: "answer".to_string(),
+                saction: crate::model::game::RbJudgeAction::Pending,
+                sresult: None,
+                real_answer: None,
+                ignored: false,
+                ctime_at: created_at,
+            },
+        };
+        let mut context = Context::default();
+
+        let value =
+            build_judge_ctx_arg(&mut context, &runtime).expect("judge context should build");
+        let value = js_to_json(&value, &mut context).expect("judge context should be JSON");
+
+        assert_eq!(value["request"]["userAnswer"], " Answer ");
+        assert_eq!(value["request"]["normAnswer"], "answer");
+        assert_eq!(
+            value["submission"],
+            json!({
+                "id": 7,
+                "ctime_at": crate::serde_helpers::format_offset_datetime(&created_at),
+            })
+        );
+    }
+
+    #[test]
     fn backend_event_names_are_validated() {
         for name in ["level_completed", "level.completed", "Level-2"] {
             assert!(valid_backend_event_name(name));
@@ -3037,5 +3058,25 @@ mod tests {
         assert_eq!(entry["version"], "9007199254740993");
         assert_eq!(entry["value"], json!({ "ready": true }));
         assert_eq!(entry["expiresAt"], Value::Null);
+    }
+
+    #[test]
+    fn currency_update_options_use_explicit_team_growth() {
+        let mut context = Context::default();
+        let value = JsValue::from_json(
+            &json!({ "amount": 10, "team_growth": 2, "hidden": true }),
+            &mut context,
+        )
+        .expect("options should convert to JS");
+
+        let options = currency_update_options_arg(&value, &mut context)
+            .expect("team growth options should be accepted");
+        assert_eq!(options.amount, Some(10));
+        assert_eq!(options.team_growth, Some(2));
+        assert_eq!(options.hidden, Some(true));
+
+        let legacy = JsValue::from_json(&json!({ "growth": 2 }), &mut context)
+            .expect("legacy options should convert to JS");
+        assert!(currency_update_options_arg(&legacy, &mut context).is_err());
     }
 }

@@ -597,6 +597,24 @@ pub struct RbCurrencyShowData {
     utime_at: OffsetDateTime,
 }
 
+#[derive(Serialize)]
+pub(crate) struct PuzzleBackendCurrencyShowData {
+    #[serde(flatten)]
+    currency: RbCurrencyShowData,
+    base_growth: i64,
+    team_growth: i64,
+}
+
+impl From<RbCurrencyShowData> for PuzzleBackendCurrencyShowData {
+    fn from(currency: RbCurrencyShowData) -> Self {
+        Self {
+            base_growth: currency.game_growth,
+            team_growth: currency.team_growth,
+            currency,
+        }
+    }
+}
+
 async fn get_currency_info_conn(
     conn: &mut PgConnection,
     team_id: i32,
@@ -766,7 +784,7 @@ struct CurrencyRuntimeRow {
 #[derive(Clone, Copy)]
 pub struct UpdateCurrencyOptions {
     pub amount: Option<i64>,
-    pub growth: Option<i64>,
+    pub team_growth: Option<i64>,
     pub hidden: Option<bool>,
 }
 
@@ -867,7 +885,7 @@ async fn apply_currency_update_conn(
         team_id,
         row.id,
         options.amount,
-        options.growth,
+        options.team_growth,
         next_amount,
         options.hidden
     )
@@ -2106,7 +2124,10 @@ pub async fn admin_delete(
 
 #[cfg(test)]
 mod currency_adjust_tests {
-    use super::{StrictCurrencyBoundary, strict_currency_next};
+    use super::{
+        PuzzleBackendCurrencyShowData, RbCurrencyShowData, StrictCurrencyBoundary,
+        strict_currency_next,
+    };
 
     #[test]
     fn strict_adjustment_allows_negative_balances_and_exact_upper_boundary() {
@@ -2138,5 +2159,33 @@ mod currency_adjust_tests {
             strict_currency_next(0, i64::MAX, i64::MIN),
             StrictCurrencyBoundary::Next(i64::MIN)
         );
+    }
+
+    #[test]
+    fn puzzle_backend_currency_exposes_growth_components_only_in_backend_view() {
+        let currency = RbCurrencyShowData {
+            id: 1,
+            slug: "coin".to_string(),
+            name: "Coin".to_string(),
+            growth: 7,
+            game_growth: 5,
+            team_growth: 2,
+            init_amount: 10,
+            prec: 0,
+            amount: 20,
+            current_amount: 21,
+            max_amount: 100,
+            hidden: false,
+            utime_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        let public = serde_json::to_value(&currency).expect("public currency should serialize");
+        assert!(public.get("base_growth").is_none());
+        assert!(public.get("team_growth").is_none());
+
+        let backend = serde_json::to_value(PuzzleBackendCurrencyShowData::from(currency))
+            .expect("backend currency should serialize");
+        assert_eq!(backend["growth"], 7);
+        assert_eq!(backend["base_growth"], 5);
+        assert_eq!(backend["team_growth"], 2);
     }
 }

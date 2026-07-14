@@ -302,7 +302,7 @@ async fn update_currency(
         actor.uid,
         db::team::UpdateCurrencyOptions {
             amount: req.amount,
-            growth: req.growth,
+            team_growth: req.growth,
             hidden: req.hidden,
         },
         req.reason.as_deref(),

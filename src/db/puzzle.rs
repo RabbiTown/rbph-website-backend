@@ -467,8 +467,8 @@ pub struct SubmitStateBox(pub Box<SubmitStateUpdate>);
 pub struct BackendSubmissionInput {
     pub user_answer: String,
     pub norm_answer: Option<String>,
-    pub saction: RbJudgeAction,
-    pub sresult: Option<String>,
+    pub action: RbJudgeAction,
+    pub result: Option<String>,
     pub real_answer: Option<String>,
     pub ignored: bool,
 }
@@ -482,7 +482,9 @@ pub struct BackendSubmissionShowData {
     pub puzzle_id: i32,
     pub user_answer: String,
     pub norm_answer: String,
+    #[serde(rename = "action")]
     pub saction: RbJudgeAction,
+    #[serde(rename = "result")]
     pub sresult: Option<String>,
     pub real_answer: Option<String>,
     pub ignored: bool,
@@ -514,8 +516,8 @@ pub async fn add_backend_submission(
         puzzle_id,
         data.user_answer,
         norm_answer,
-        i16::from(data.saction),
-        data.sresult,
+        i16::from(data.action),
+        data.result,
         data.real_answer,
         data.ignored
     )

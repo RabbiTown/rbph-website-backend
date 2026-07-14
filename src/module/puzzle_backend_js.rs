@@ -948,13 +948,12 @@ fn backend_submission_input_from_value(
         .and_then(Value::as_str)
         .map(ToString::to_string);
     let saction = obj
-        .get("saction")
-        .or_else(|| obj.get("action"))
+        .get("action")
         .map(submission_action_from_value)
         .transpose()?
         .unwrap_or(crate::model::game::RbJudgeAction::Correct);
     let sresult = obj
-        .get("sresult")
+        .get("result")
         .and_then(Value::as_str)
         .map(ToString::to_string);
     let real_answer = obj
@@ -966,8 +965,8 @@ fn backend_submission_input_from_value(
     Ok(crate::db::puzzle::BackendSubmissionInput {
         user_answer,
         norm_answer,
-        saction,
-        sresult,
+        action: saction,
+        result: sresult,
         real_answer,
         ignored,
     })
@@ -1876,7 +1875,7 @@ fn build_currency_object(
                                         conn,
                                         team_id,
                                         *currency_id,
-                                        -amount,
+                                        amount,
                                         Some(context),
                                     ))
                                 }
@@ -1886,7 +1885,7 @@ fn build_currency_object(
                                         team_id,
                                         runtime.game_id,
                                         slug,
-                                        -amount,
+                                        amount,
                                         Some(context),
                                     ))
                                 }
@@ -1903,7 +1902,7 @@ fn build_currency_object(
                                     &cost_db,
                                     team_id,
                                     currency_id,
-                                    -amount,
+                                    amount,
                                     Some(context),
                                 ))
                             }
@@ -1913,7 +1912,7 @@ fn build_currency_object(
                                     team_id,
                                     runtime.game_id,
                                     &slug,
-                                    -amount,
+                                    amount,
                                     Some(context),
                                 ))
                             }
@@ -2044,6 +2043,15 @@ fn build_currency_object(
                             .get(offset + 1)
                             .ok_or_else(|| js_err("currency.update requires amount or options"))?;
                         let options = currency_update_options_arg(value, context)?;
+                        let reason = optional_reason_arg(
+                            args.get(offset + 2),
+                            "currency.update reason must be a string or null",
+                        )?;
+                        let event_context = crate::db::team::CurrencyEventContext {
+                            puzzle_id: Some(runtime.puzzle_id),
+                            puzzle_title: Some(&runtime.puzzle_title),
+                            reason: reason.as_deref(),
+                        };
                         if let Some(result) = with_judge_conn(|conn| {
                             if check_team {
                                 require_currency_team_in_game_conn(conn, team_id, runtime.game_id)
@@ -2056,6 +2064,7 @@ fn build_currency_object(
                                         team_id,
                                         *currency_id,
                                         options,
+                                        Some(event_context),
                                     ))
                                 }
                                 CurrencyRef::Slug(slug) => {
@@ -2065,6 +2074,7 @@ fn build_currency_object(
                                         runtime.game_id,
                                         slug,
                                         options,
+                                        Some(event_context),
                                     ))
                                 }
                             }
@@ -2084,6 +2094,7 @@ fn build_currency_object(
                                     team_id,
                                     currency_id,
                                     options,
+                                    Some(event_context),
                                 ))
                             }
                             CurrencyRef::Slug(slug) => {
@@ -2093,6 +2104,7 @@ fn build_currency_object(
                                     runtime.game_id,
                                     &slug,
                                     options,
+                                    Some(event_context),
                                 ))
                             }
                         }
@@ -2105,7 +2117,7 @@ fn build_currency_object(
                 )
             },
             js_string!("update"),
-            3,
+            4,
         )
         .build()
 }
@@ -3078,5 +3090,50 @@ mod tests {
         let legacy = JsValue::from_json(&json!({ "growth": 2 }), &mut context)
             .expect("legacy options should convert to JS");
         assert!(currency_update_options_arg(&legacy, &mut context).is_err());
+    }
+
+    #[test]
+    fn backend_submission_uses_action_and_result_names() {
+        let input = backend_submission_input_from_value(&json!({
+            "userAnswer": "answer",
+            "action": "milestone",
+            "result": "close",
+        }))
+        .expect("public submission fields should be accepted");
+        assert_eq!(i16::from(input.action), 2);
+        assert_eq!(input.result.as_deref(), Some("close"));
+
+        let legacy = backend_submission_input_from_value(&json!({
+            "userAnswer": "answer",
+            "saction": "fail",
+            "sresult": "ignored",
+        }))
+        .expect("unknown submission fields should be ignored");
+        assert_eq!(i16::from(legacy.action), 1);
+        assert_eq!(legacy.result, None);
+
+        let submission = crate::db::puzzle::BackendSubmissionShowData {
+            id: 1,
+            team_id: 2,
+            user_id: 3,
+            puzzle_id: 4,
+            user_answer: "answer".to_string(),
+            norm_answer: "answer".to_string(),
+            saction: crate::model::game::RbJudgeAction::Milestone,
+            sresult: Some("close".to_string()),
+            real_answer: None,
+            ignored: false,
+            ctime_at: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        let value = serde_json::to_value(&submission).expect("submission should serialize");
+        assert_eq!(value["action"], 2);
+        assert_eq!(value["result"], "close");
+        assert!(value.get("saction").is_none());
+        assert!(value.get("sresult").is_none());
+
+        let decoded = backend_submission_from_value(&value)
+            .expect("public submission should deserialize for solve");
+        assert_eq!(i16::from(decoded.saction), 2);
+        assert_eq!(decoded.sresult.as_deref(), Some("close"));
     }
 }

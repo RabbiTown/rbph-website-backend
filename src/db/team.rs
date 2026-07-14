@@ -894,6 +894,47 @@ async fn apply_currency_update_conn(
     Ok(())
 }
 
+async fn insert_backend_currency_update_event_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    row: &CurrencyRuntimeRow,
+    after: i64,
+    context: Option<CurrencyEventContext<'_>>,
+) -> Result<(), RbInternalError> {
+    let delta = after.checked_sub(row.current_amount).ok_or_else(|| {
+        RbInternalError::Other("currency.update delta amount overflow".to_string())
+    })?;
+    let context = context.as_ref();
+    db::event_log::insert_conn(
+        conn,
+        db::event_log::EventLogInput {
+            event_type: "currency.updated",
+            event_scope: i16::from(db::event_log::EventScope::TeamActivity),
+            severity: i16::from(db::event_log::EventSeverity::Info),
+            game_id: Some(row.game_id),
+            team_id: Some(team_id),
+            currency_id: Some(row.id),
+            delta_amount: Some(delta),
+            data: db::event_log::CurrencyEventData {
+                id: row.id,
+                slug: row.slug.clone(),
+                name: row.name.clone(),
+                prec: row.prec,
+                before: row.current_amount,
+                after,
+            }
+            .json(
+                context.and_then(|context| context.reason),
+                context.and_then(|context| context.puzzle_id),
+                context.and_then(|context| context.puzzle_title),
+            ),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 async fn insert_staff_currency_event_conn(
     conn: &mut PgConnection,
     team_id: i32,
@@ -1063,9 +1104,10 @@ pub async fn update_currency(
     team_id: i32,
     currency_id: i32,
     options: UpdateCurrencyOptions,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let result = update_currency_conn(&mut tx, team_id, currency_id, options).await?;
+    let result = update_currency_conn(&mut tx, team_id, currency_id, options, context).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1076,9 +1118,11 @@ pub async fn update_currency_by_slug(
     game_id: i32,
     slug: &str,
     options: UpdateCurrencyOptions,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let result = update_currency_by_slug_conn(&mut tx, team_id, game_id, slug, options).await?;
+    let result =
+        update_currency_by_slug_conn(&mut tx, team_id, game_id, slug, options, context).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1088,12 +1132,23 @@ pub async fn update_currency_conn(
     team_id: i32,
     currency_id: i32,
     options: UpdateCurrencyOptions,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let Some(row) = lock_currency_runtime_conn(conn, team_id, currency_id).await? else {
         return Ok(None);
     };
 
     apply_currency_update_conn(conn, team_id, &row, &options).await?;
+    if let Some(amount) = options.amount {
+        insert_backend_currency_update_event_conn(
+            conn,
+            team_id,
+            &row,
+            amount.min(row.max_amount),
+            context,
+        )
+        .await?;
+    }
     get_currency_info_one_all_conn(conn, team_id, currency_id).await
 }
 
@@ -1103,12 +1158,23 @@ pub async fn update_currency_by_slug_conn(
     game_id: i32,
     slug: &str,
     options: UpdateCurrencyOptions,
+    context: Option<CurrencyEventContext<'_>>,
 ) -> Result<Option<RbCurrencyShowData>, RbInternalError> {
     let Some(row) = lock_currency_runtime_by_slug_conn(conn, team_id, game_id, slug).await? else {
         return Ok(None);
     };
 
     apply_currency_update_conn(conn, team_id, &row, &options).await?;
+    if let Some(amount) = options.amount {
+        insert_backend_currency_update_event_conn(
+            conn,
+            team_id,
+            &row,
+            amount.min(row.max_amount),
+            context,
+        )
+        .await?;
+    }
     get_currency_info_one_all_conn(conn, team_id, row.id).await
 }
 
@@ -1116,11 +1182,11 @@ pub async fn cost_currency(
     db_pool: &DbPool,
     team_id: i32,
     currency_id: i32,
-    delta: i64,
+    amount: i64,
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
-    let result = cost_currency_conn(&mut tx, team_id, currency_id, delta, context).await?;
+    let result = cost_currency_conn(&mut tx, team_id, currency_id, amount, context).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1130,12 +1196,12 @@ pub async fn cost_currency_by_slug(
     team_id: i32,
     game_id: i32,
     slug: &str,
-    delta: i64,
+    amount: i64,
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let mut tx = db_pool.begin().await?;
     let result =
-        cost_currency_by_slug_conn(&mut tx, team_id, game_id, slug, delta, context).await?;
+        cost_currency_by_slug_conn(&mut tx, team_id, game_id, slug, amount, context).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1144,14 +1210,14 @@ pub async fn cost_currency_conn(
     conn: &mut PgConnection,
     team_id: i32,
     currency_id: i32,
-    delta: i64,
+    amount: i64,
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let Some(row) = lock_currency_runtime_conn(conn, team_id, currency_id).await? else {
         return Ok(false);
     };
 
-    cost_currency_locked_conn(conn, team_id, &row, delta, context).await
+    cost_currency_locked_conn(conn, team_id, &row, amount, context).await
 }
 
 pub async fn cost_currency_by_slug_conn(
@@ -1159,29 +1225,41 @@ pub async fn cost_currency_by_slug_conn(
     team_id: i32,
     game_id: i32,
     slug: &str,
-    delta: i64,
+    amount: i64,
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
     let Some(row) = lock_currency_runtime_by_slug_conn(conn, team_id, game_id, slug).await? else {
         return Ok(false);
     };
 
-    cost_currency_locked_conn(conn, team_id, &row, delta, context).await
+    cost_currency_locked_conn(conn, team_id, &row, amount, context).await
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CurrencyCostChange {
+    next_amount: i64,
+    delta: i64,
+}
+
+fn currency_cost_change(current: i64, max: i64, amount: i64) -> Option<CurrencyCostChange> {
+    let delta = amount.checked_neg()?;
+    let next_amount = current.checked_add(delta)?;
+    if (amount > 0 && next_amount < 0) || (amount < 0 && next_amount > max) {
+        return None;
+    }
+    Some(CurrencyCostChange { next_amount, delta })
 }
 
 async fn cost_currency_locked_conn(
     conn: &mut PgConnection,
     team_id: i32,
     row: &CurrencyRuntimeRow,
-    delta: i64,
+    amount: i64,
     context: Option<CurrencyEventContext<'_>>,
 ) -> Result<bool, RbInternalError> {
-    let Some(next_amount) = row.current_amount.checked_add(delta) else {
+    let Some(change) = currency_cost_change(row.current_amount, row.max_amount, amount) else {
         return Ok(false);
     };
-    if next_amount < 0 || next_amount > row.max_amount {
-        return Ok(false);
-    }
 
     sqlx::query!(
         r#"UPDATE rb_team_currency
@@ -1189,12 +1267,12 @@ async fn cost_currency_locked_conn(
         WHERE team_id = $1 AND currency_id = $2;"#,
         team_id,
         row.id,
-        next_amount
+        change.next_amount
     )
     .execute(&mut *conn)
     .await?;
 
-    let after = next_amount;
+    let after = change.next_amount;
     let context = context.as_ref();
     db::event_log::insert_conn(
         conn,
@@ -1205,7 +1283,7 @@ async fn cost_currency_locked_conn(
             game_id: Some(row.game_id),
             team_id: Some(team_id),
             currency_id: Some(row.id),
-            delta_amount: Some(after - row.current_amount),
+            delta_amount: Some(change.delta),
             data: db::event_log::CurrencyEventData {
                 id: row.id,
                 slug: row.slug.clone(),
@@ -2125,9 +2203,43 @@ pub async fn admin_delete(
 #[cfg(test)]
 mod currency_adjust_tests {
     use super::{
-        PuzzleBackendCurrencyShowData, RbCurrencyShowData, StrictCurrencyBoundary,
-        strict_currency_next,
+        CurrencyCostChange, PuzzleBackendCurrencyShowData, RbCurrencyShowData,
+        StrictCurrencyBoundary, currency_cost_change, strict_currency_next,
     };
+
+    #[test]
+    fn currency_cost_checks_only_the_boundary_for_its_direction() {
+        assert_eq!(
+            currency_cost_change(110, 100, 10),
+            Some(CurrencyCostChange {
+                next_amount: 100,
+                delta: -10,
+            })
+        );
+        assert_eq!(currency_cost_change(10, 100, 11), None);
+        assert_eq!(
+            currency_cost_change(-10, 100, -5),
+            Some(CurrencyCostChange {
+                next_amount: -5,
+                delta: 5,
+            })
+        );
+        assert_eq!(currency_cost_change(95, 100, -6), None);
+        assert_eq!(
+            currency_cost_change(-1, 100, 0),
+            Some(CurrencyCostChange {
+                next_amount: -1,
+                delta: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn currency_cost_rejects_negation_and_balance_overflow() {
+        assert_eq!(currency_cost_change(0, i64::MAX, i64::MIN), None);
+        assert_eq!(currency_cost_change(i64::MIN, i64::MAX, 1), None);
+        assert_eq!(currency_cost_change(i64::MAX, i64::MAX, -1), None);
+    }
 
     #[test]
     fn strict_adjustment_allows_negative_balances_and_exact_upper_boundary() {

@@ -599,18 +599,46 @@ pub struct RbCurrencyShowData {
 
 #[derive(Serialize)]
 pub(crate) struct PuzzleBackendCurrencyShowData {
-    #[serde(flatten)]
-    currency: RbCurrencyShowData,
+    id: i32,
+    slug: String,
+    name: String,
+    growth: i64,
+    #[serde(rename = "baseGrowth")]
     base_growth: i64,
+    #[serde(rename = "teamGrowth")]
     team_growth: i64,
+    #[serde(rename = "initialAmount")]
+    initial_amount: i64,
+    precision: i32,
+    amount: i64,
+    #[serde(rename = "currentAmount")]
+    current_amount: i64,
+    #[serde(rename = "maxAmount")]
+    max_amount: i64,
+    hidden: bool,
+    #[serde(
+        rename = "updatedAt",
+        with = "crate::serde_helpers::serialize_offset_datetime"
+    )]
+    updated_at: OffsetDateTime,
 }
 
 impl From<RbCurrencyShowData> for PuzzleBackendCurrencyShowData {
     fn from(currency: RbCurrencyShowData) -> Self {
         Self {
+            id: currency.id,
+            slug: currency.slug,
+            name: currency.name,
+            growth: currency.growth,
             base_growth: currency.game_growth,
             team_growth: currency.team_growth,
-            currency,
+            initial_amount: currency.init_amount,
+            precision: currency.prec,
+            amount: currency.amount,
+            current_amount: currency.current_amount,
+            max_amount: currency.max_amount,
+            hidden: currency.hidden,
+            updated_at: currency.utime_at,
         }
     }
 }
@@ -2297,7 +2325,12 @@ mod currency_adjust_tests {
         let backend = serde_json::to_value(PuzzleBackendCurrencyShowData::from(currency))
             .expect("backend currency should serialize");
         assert_eq!(backend["growth"], 7);
-        assert_eq!(backend["base_growth"], 5);
-        assert_eq!(backend["team_growth"], 2);
+        assert_eq!(backend["baseGrowth"], 5);
+        assert_eq!(backend["teamGrowth"], 2);
+        assert_eq!(backend["initialAmount"], 10);
+        assert_eq!(backend["precision"], 0);
+        assert_eq!(backend["currentAmount"], 21);
+        assert_eq!(backend["maxAmount"], 100);
+        assert!(backend.get("updatedAt").is_some());
     }
 }

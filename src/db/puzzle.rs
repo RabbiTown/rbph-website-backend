@@ -488,7 +488,10 @@ pub struct BackendSubmissionShowData {
     pub sresult: Option<String>,
     pub real_answer: Option<String>,
     pub ignored: bool,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    #[serde(
+        rename = "createdAt",
+        with = "crate::serde_helpers::serialize_offset_datetime"
+    )]
     pub ctime_at: OffsetDateTime,
 }
 
@@ -2158,7 +2161,7 @@ pub async fn purchase_hint(
                 "id": currency.id,
                 "slug": currency.slug,
                 "name": currency.name,
-                "prec": currency.prec,
+                "precision": currency.prec,
                 "before": currency.before,
                 "after": currency.after,
                 "delta": currency.delta(),

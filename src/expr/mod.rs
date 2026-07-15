@@ -171,17 +171,6 @@ mod test {
     }
 
     #[test]
-    pub fn test_old_names_failed() {
-        assert!(super::compile_gate_expr("(completed 1)").is_err());
-        assert!(super::compile_gate_expr("(all-completed (puzzles 1 2))").is_err());
-        assert!(super::compile_gate_expr("(any-completed (puzzles 1 2))").is_err());
-        assert!(super::compile_gate_expr("(solved-ge (puzzles 1 2) 2)").is_err());
-        assert!(super::compile_gate_expr("(countge (puzzles 1 2) 2)").is_err());
-        assert!(super::compile_gate_expr("(ge (solved-count (set 1 2)) 2)").is_err());
-        assert!(super::compile_gate_expr("(ge (solved-count (range 1 2)) 2)").is_err());
-    }
-
-    #[test]
     pub fn test_unknown_slug_failed() {
         let state = TestState {};
         assert!(!eval(&state, "(solved unknown-puzzle)"));

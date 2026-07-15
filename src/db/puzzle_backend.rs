@@ -8,12 +8,27 @@ use time::OffsetDateTime;
 use crate::{DbPool, error::RbInternalError};
 
 #[derive(Clone, Copy, Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum BackendScope {
+    #[serde(rename = "global")]
     Global,
-    Team { team_id: i32 },
-    Puzzle { puzzle_id: i32 },
-    TeamPuzzle { team_id: i32, puzzle_id: i32 },
+    #[serde(rename = "team")]
+    Team {
+        #[serde(rename = "teamId")]
+        team_id: i32,
+    },
+    #[serde(rename = "puzzle")]
+    Puzzle {
+        #[serde(rename = "puzzleId")]
+        puzzle_id: i32,
+    },
+    #[serde(rename = "teamPuzzle")]
+    TeamPuzzle {
+        #[serde(rename = "teamId")]
+        team_id: i32,
+        #[serde(rename = "puzzleId")]
+        puzzle_id: i32,
+    },
 }
 
 impl BackendScope {
@@ -164,15 +179,22 @@ pub struct PuzzleStoreDocUser {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PuzzleStoreDoc {
     pub id: i64,
     pub scope: BackendScope,
     pub collection: String,
     pub created_by: Option<PuzzleStoreDocUser>,
     pub value: Value,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    #[serde(
+        rename = "createdAt",
+        with = "crate::serde_helpers::serialize_offset_datetime"
+    )]
     pub ctime_at: OffsetDateTime,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    #[serde(
+        rename = "updatedAt",
+        with = "crate::serde_helpers::serialize_offset_datetime"
+    )]
     pub utime_at: OffsetDateTime,
 }
 
@@ -1281,6 +1303,34 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("test game should be created")
+    }
+
+    #[test]
+    fn store_documents_and_scopes_serialize_with_public_names() {
+        let document = PuzzleStoreDoc {
+            id: 1,
+            scope: BackendScope::TeamPuzzle {
+                team_id: 2,
+                puzzle_id: 3,
+            },
+            collection: "attempts".to_string(),
+            created_by: Some(PuzzleStoreDocUser {
+                id: 4,
+                nickname: "User".to_string(),
+            }),
+            value: json!({ "score": 5 }),
+            ctime_at: OffsetDateTime::UNIX_EPOCH,
+            utime_at: OffsetDateTime::UNIX_EPOCH,
+        };
+
+        let value = serde_json::to_value(document).expect("document should serialize");
+        assert_eq!(
+            value["scope"],
+            json!({ "type": "teamPuzzle", "teamId": 2, "puzzleId": 3 })
+        );
+        assert_eq!(value["createdBy"]["id"], 4);
+        assert!(value.get("createdAt").is_some());
+        assert!(value.get("updatedAt").is_some());
     }
 
     #[sqlx::test(migrations = "./migrations")]

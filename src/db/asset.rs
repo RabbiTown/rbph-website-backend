@@ -35,6 +35,7 @@ pub struct RbAssetFileAdminData {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RbAssetReadableFile {
     pub group_id: i32,
     pub backend: String,
@@ -575,4 +576,30 @@ where
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RbAssetReadableFile;
+
+    #[test]
+    fn readable_assets_serialize_with_public_names() {
+        let value = serde_json::to_value(RbAssetReadableFile {
+            group_id: 1,
+            backend: "database".to_string(),
+            object_key: "data".to_string(),
+            original_name: "data.zip".to_string(),
+            relative_path: "config.json".to_string(),
+            mime_type: "application/json".to_string(),
+            size: 10,
+            sha256: "hash".to_string(),
+        })
+        .expect("readable asset should serialize");
+
+        assert_eq!(value["groupId"], 1);
+        assert_eq!(value["objectKey"], "data");
+        assert_eq!(value["originalName"], "data.zip");
+        assert_eq!(value["relativePath"], "config.json");
+        assert_eq!(value["mimeType"], "application/json");
+    }
 }

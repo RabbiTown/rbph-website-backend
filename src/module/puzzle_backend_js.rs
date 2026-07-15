@@ -649,7 +649,7 @@ fn build_judge_ctx_arg(
     let submission = ObjectInitializer::new(context)
         .property(js_string!("id"), runtime.submission.id, Attribute::all())
         .property(
-            js_string!("ctime_at"),
+            js_string!("createdAt"),
             JsValue::from(JsString::from(
                 crate::serde_helpers::format_offset_datetime(&runtime.submission.ctime_at),
             )),
@@ -914,7 +914,15 @@ fn submission_action_from_value(
     value: &Value,
 ) -> Result<crate::model::game::RbJudgeAction, JsError> {
     if let Some(action) = value.as_str() {
-        return Ok(action.into());
+        return Ok(match action {
+            "fail" => crate::model::game::RbJudgeAction::Fail,
+            "correct" => crate::model::game::RbJudgeAction::Correct,
+            "milestone" => crate::model::game::RbJudgeAction::Milestone,
+            "startGame" => crate::model::game::RbJudgeAction::StartGame,
+            "easterEgg" => crate::model::game::RbJudgeAction::EasterEgg,
+            "finishGame" => crate::model::game::RbJudgeAction::FinishGame,
+            _ => crate::model::game::RbJudgeAction::Error,
+        });
     }
     if let Some(action) = value.as_i64() {
         return Ok(match action as i16 {
@@ -1005,7 +1013,6 @@ fn scope_from_js(
         Some("team") => {
             let team_id = object
                 .get("teamId")
-                .or_else(|| object.get("team_id"))
                 .and_then(Value::as_i64)
                 .ok_or_else(|| js_err("team scope requires teamId"))?;
             Ok(puzzle_backend::BackendScope::Team {
@@ -1018,7 +1025,6 @@ fn scope_from_js(
         Some("puzzle") => {
             let puzzle_id = object
                 .get("puzzleId")
-                .or_else(|| object.get("puzzle_id"))
                 .and_then(Value::as_i64)
                 .ok_or_else(|| js_err("puzzle scope requires puzzleId"))?;
             Ok(puzzle_backend::BackendScope::Puzzle {
@@ -1028,17 +1034,15 @@ fn scope_from_js(
                     .ok_or_else(|| js_err("puzzleId must be a positive integer in i32 range"))?,
             })
         }
-        Some("team_puzzle") | Some("teamPuzzle") => {
+        Some("teamPuzzle") => {
             let team_id = object
                 .get("teamId")
-                .or_else(|| object.get("team_id"))
                 .and_then(Value::as_i64)
-                .ok_or_else(|| js_err("team_puzzle scope requires teamId"))?;
+                .ok_or_else(|| js_err("teamPuzzle scope requires teamId"))?;
             let puzzle_id = object
                 .get("puzzleId")
-                .or_else(|| object.get("puzzle_id"))
                 .and_then(Value::as_i64)
-                .ok_or_else(|| js_err("team_puzzle scope requires puzzleId"))?;
+                .ok_or_else(|| js_err("teamPuzzle scope requires puzzleId"))?;
             Ok(puzzle_backend::BackendScope::TeamPuzzle {
                 team_id: i32::try_from(team_id)
                     .ok()
@@ -1051,7 +1055,7 @@ fn scope_from_js(
             })
         }
         _ => Err(js_err(
-            "scope.type must be global, team, puzzle, or team_puzzle",
+            "scope.type must be global, team, puzzle, or teamPuzzle",
         )),
     }
 }
@@ -1690,11 +1694,6 @@ fn currency_update_options_arg(
     let object = json
         .as_object()
         .ok_or_else(|| js_err("currency.update options must be an object"))?;
-    if object.contains_key("growth") {
-        return Err(js_err(
-            "currency.update options.growth was renamed to options.team_growth",
-        ));
-    }
     let number_field = |name: &str| -> Result<Option<i64>, JsError> {
         object
             .get(name)
@@ -1707,7 +1706,7 @@ fn currency_update_options_arg(
     };
     Ok(crate::db::team::UpdateCurrencyOptions {
         amount: number_field("amount")?,
-        team_growth: number_field("team_growth")?,
+        team_growth: number_field("teamGrowth")?,
         hidden: object
             .get("hidden")
             .map(|value| {
@@ -2615,7 +2614,7 @@ fn execute_backend_function<T>(
                 payload: event.payload,
                 source_type: match log_runtime.method.as_str() {
                     "JUDGE" => "judge",
-                    "HINT_PURCHASE" => "hint_purchase",
+                    "HINT_PURCHASE" => "hintPurchase",
                     _ => "api",
                 },
                 function: function_name.clone(),
@@ -2930,7 +2929,7 @@ mod tests {
             value["submission"],
             json!({
                 "id": 7,
-                "ctime_at": crate::serde_helpers::format_offset_datetime(&created_at),
+                "createdAt": crate::serde_helpers::format_offset_datetime(&created_at),
             })
         );
     }
@@ -3073,10 +3072,10 @@ mod tests {
     }
 
     #[test]
-    fn currency_update_options_use_explicit_team_growth() {
+    fn currency_update_options_use_camel_case_team_growth() {
         let mut context = Context::default();
         let value = JsValue::from_json(
-            &json!({ "amount": 10, "team_growth": 2, "hidden": true }),
+            &json!({ "amount": 10, "teamGrowth": 2, "hidden": true }),
             &mut context,
         )
         .expect("options should convert to JS");
@@ -3086,31 +3085,18 @@ mod tests {
         assert_eq!(options.amount, Some(10));
         assert_eq!(options.team_growth, Some(2));
         assert_eq!(options.hidden, Some(true));
-
-        let legacy = JsValue::from_json(&json!({ "growth": 2 }), &mut context)
-            .expect("legacy options should convert to JS");
-        assert!(currency_update_options_arg(&legacy, &mut context).is_err());
     }
 
     #[test]
     fn backend_submission_uses_action_and_result_names() {
         let input = backend_submission_input_from_value(&json!({
             "userAnswer": "answer",
-            "action": "milestone",
+            "action": "startGame",
             "result": "close",
         }))
         .expect("public submission fields should be accepted");
-        assert_eq!(i16::from(input.action), 2);
+        assert_eq!(i16::from(input.action), 3);
         assert_eq!(input.result.as_deref(), Some("close"));
-
-        let legacy = backend_submission_input_from_value(&json!({
-            "userAnswer": "answer",
-            "saction": "fail",
-            "sresult": "ignored",
-        }))
-        .expect("unknown submission fields should be ignored");
-        assert_eq!(i16::from(legacy.action), 1);
-        assert_eq!(legacy.result, None);
 
         let submission = crate::db::puzzle::BackendSubmissionShowData {
             id: 1,
@@ -3128,8 +3114,7 @@ mod tests {
         let value = serde_json::to_value(&submission).expect("submission should serialize");
         assert_eq!(value["action"], 2);
         assert_eq!(value["result"], "close");
-        assert!(value.get("saction").is_none());
-        assert!(value.get("sresult").is_none());
+        assert!(value.get("createdAt").is_some());
 
         let decoded = backend_submission_from_value(&value)
             .expect("public submission should deserialize for solve");

@@ -73,7 +73,15 @@ where
     }
 
     match Option::<RawAction>::deserialize(deserializer)? {
-        Some(RawAction::String(value)) => Ok(Some(value.into())),
+        Some(RawAction::String(value)) => Ok(Some(match value.as_str() {
+            "fail" => RbJudgeAction::Fail,
+            "correct" => RbJudgeAction::Correct,
+            "milestone" => RbJudgeAction::Milestone,
+            "startGame" => RbJudgeAction::StartGame,
+            "easterEgg" => RbJudgeAction::EasterEgg,
+            "finishGame" => RbJudgeAction::FinishGame,
+            _ => RbJudgeAction::Error,
+        })),
         Some(RawAction::Number(value)) => Ok(Some(value.into())),
         Some(RawAction::Null) | None => Ok(None),
     }
@@ -162,4 +170,18 @@ pub fn valid_trigger_key(value: &str) -> bool {
     matches!(chars.next(), Some(first) if first.is_ascii_alphabetic())
         && value.len() <= 64
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JudgeBackendOutput, RbJudgeAction};
+
+    #[test]
+    fn backend_actions_use_camel_case_names() {
+        let output: JudgeBackendOutput = serde_json::from_value(serde_json::json!({
+            "action": "finishGame"
+        }))
+        .expect("camel-case action should deserialize");
+        assert!(matches!(output.action, Some(RbJudgeAction::FinishGame)));
+    }
 }

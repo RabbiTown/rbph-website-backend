@@ -381,6 +381,16 @@ fn kv_expiry_arg(
     Ok(puzzle_backend::PuzzleBackendKvExpiry::Ttl(ttl_ms))
 }
 
+fn kv_increment_amount_arg(value: Option<&JsValue>, label: &str) -> Result<f64, JsError> {
+    let Some(value) = value.filter(|value| !value.is_undefined()) else {
+        return Ok(1.0);
+    };
+    value
+        .as_number()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| js_err(format!("{label} amount must be a finite number")))
+}
+
 fn kv_entry_json(entry: puzzle_backend::PuzzleBackendKvValue) -> Value {
     json!({
         "value": entry.value,
@@ -1165,6 +1175,7 @@ fn build_kv_object(
     let get_db = db.clone();
     let get_entry_db = db.clone();
     let set_db = db.clone();
+    let increment_db = db.clone();
     let set_if_absent_db = db.clone();
     let compare_and_set_db = db.clone();
     let delete_db = db;
@@ -1259,6 +1270,12 @@ fn build_kv_object(
                         let value = args.get(offset + 1).cloned().unwrap_or_else(JsValue::null);
                         let value =
                             js_to_json(&value, context).map_err(|e| js_err(e.to_string()))?;
+                        let expiry = kv_expiry_arg(
+                            args.get(offset + 2),
+                            context,
+                            puzzle_backend::PuzzleBackendKvExpiry::Preserve,
+                            &format!("{label}.kv.set"),
+                        )?;
                         let runtime = with_runtime_context(|ctx| ctx.clone())
                             .map_err(|e| js_err(e.to_string()))?;
                         check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
@@ -1269,6 +1286,7 @@ fn build_kv_object(
                                 scope,
                                 &key,
                                 &value,
+                                expiry,
                             ))
                         }) {
                             result
@@ -1279,16 +1297,71 @@ fn build_kv_object(
                                 scope,
                                 &key,
                                 &value,
+                                expiry,
                             ))
                         }
                         .map_err(|e| js_err(e.to_string()))?;
+                        let value = kv_mutation_json(value);
                         json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
                     },
                     (),
                 )
             },
             js_string!("set"),
-            3,
+            4,
+        )
+        .function(
+            unsafe {
+                NativeFunction::from_closure_with_captures(
+                    move |_, args, _, context| {
+                        let (scope, offset) = runtime_scope(selector, args, context)?;
+                        let key = js_string_arg(
+                            args.get(offset).and_then(|value| value.as_string()),
+                            &format!("{label}.kv.increment requires a key"),
+                        )?;
+                        let amount = kv_increment_amount_arg(
+                            args.get(offset + 1),
+                            &format!("{label}.kv.increment"),
+                        )?;
+                        let expiry = kv_expiry_arg(
+                            args.get(offset + 2),
+                            context,
+                            puzzle_backend::PuzzleBackendKvExpiry::Preserve,
+                            &format!("{label}.kv.increment"),
+                        )?;
+                        let runtime = with_runtime_context(|ctx| ctx.clone())
+                            .map_err(|e| js_err(e.to_string()))?;
+                        check_runtime_deadline().map_err(|e| js_err(e.to_string()))?;
+                        let result = if let Some(result) = with_judge_conn(|conn| {
+                            block_on_db(puzzle_backend::increment_kv_conn(
+                                conn,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                amount,
+                                expiry,
+                            ))
+                        }) {
+                            result
+                        } else {
+                            block_on_db(puzzle_backend::increment_kv(
+                                &increment_db,
+                                runtime.game_id,
+                                scope,
+                                &key,
+                                amount,
+                                expiry,
+                            ))
+                        }
+                        .map_err(|e| js_err(e.to_string()))?;
+                        let value = kv_mutation_json(result);
+                        json_to_js(&value, context).map_err(|e| js_err(e.to_string()))
+                    },
+                    (),
+                )
+            },
+            js_string!("increment"),
+            4,
         )
         .function(
             unsafe {
@@ -3056,6 +3129,22 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn kv_increment_defaults_and_validates_amount() {
+        assert_eq!(
+            kv_increment_amount_arg(None, "$this.kv.increment")
+                .expect("omitted amount should default"),
+            1.0
+        );
+        assert_eq!(
+            kv_increment_amount_arg(Some(&JsValue::undefined()), "$this.kv.increment")
+                .expect("undefined amount should default"),
+            1.0
+        );
+        assert!(kv_increment_amount_arg(Some(&JsValue::nan()), "$this.kv.increment").is_err());
+        assert!(kv_increment_amount_arg(Some(&JsValue::null()), "$this.kv.increment").is_err());
     }
 
     #[test]

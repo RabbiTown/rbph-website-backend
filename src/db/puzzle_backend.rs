@@ -593,9 +593,10 @@ pub async fn set_kv(
     scope: BackendScope,
     key: &str,
     value: &Value,
-) -> Result<Value, RbInternalError> {
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
     let mut conn = db_pool.acquire().await?;
-    set_kv_conn(&mut conn, game_id, scope, key, value).await
+    set_kv_conn(&mut conn, game_id, scope, key, value, expiry).await
 }
 
 pub async fn set_kv_conn(
@@ -604,29 +605,128 @@ pub async fn set_kv_conn(
     scope: BackendScope,
     key: &str,
     value: &Value,
-) -> Result<Value, RbInternalError> {
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
     require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
-    let value = sqlx::query_scalar!(
-        r#"INSERT INTO rb_puzzle_kv (game_id, scope_type, team_id, puzzle_id, key, value)
-        VALUES ($1, $2, $3, $4, $5, $6)
+    let (preserve_expiry, ttl_ms) = match expiry {
+        PuzzleBackendKvExpiry::Preserve => (true, None),
+        PuzzleBackendKvExpiry::Permanent => (false, None),
+        PuzzleBackendKvExpiry::Ttl(ttl_ms) => (false, Some(ttl_ms)),
+    };
+    let entry = sqlx::query_as!(
+        PuzzleBackendKvValue,
+        r#"INSERT INTO rb_puzzle_kv (
+            game_id, scope_type, team_id, puzzle_id, key, value, expires_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6,
+            CASE WHEN $8::BIGINT IS NULL THEN NULL
+                ELSE statement_timestamp() + $8 * INTERVAL '1 millisecond' END
+        )
         ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)
         DO UPDATE SET value = EXCLUDED.value,
             version = rb_puzzle_kv.version + 1,
-            expires_at = NULL,
+            expires_at = CASE
+                WHEN $7 THEN rb_puzzle_kv.expires_at
+                ELSE EXCLUDED.expires_at
+            END,
             utime_at = CURRENT_TIMESTAMP
-        RETURNING value"#,
+        RETURNING value, version, expires_at"#,
         game_id,
         scope_type,
         team_id,
         puzzle_id,
         key,
-        value
+        value,
+        preserve_expiry,
+        ttl_ms
     )
     .fetch_one(&mut *conn)
     .await?;
 
-    Ok(value)
+    current_kv_mutation_conn(conn, game_id, scope, key, Some(entry)).await
+}
+
+pub async fn increment_kv(
+    db_pool: &DbPool,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    amount: f64,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let mut conn = db_pool.acquire().await?;
+    increment_kv_conn(&mut conn, game_id, scope, key, amount, expiry).await
+}
+
+pub async fn increment_kv_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+    key: &str,
+    amount: f64,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    if !amount.is_finite() {
+        return Err(RbInternalError::Other(
+            "KV increment amount must be a finite number".to_string(),
+        ));
+    }
+    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let (scope_type, team_id, puzzle_id) = scope.parts();
+    let (preserve_expiry, ttl_ms) = match expiry {
+        PuzzleBackendKvExpiry::Preserve => (true, None),
+        PuzzleBackendKvExpiry::Permanent => (false, None),
+        PuzzleBackendKvExpiry::Ttl(ttl_ms) => (false, Some(ttl_ms)),
+    };
+    let entry = sqlx::query_as!(
+        PuzzleBackendKvValue,
+        r#"INSERT INTO rb_puzzle_kv (
+            game_id, scope_type, team_id, puzzle_id, key, value, expires_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, to_jsonb($6::DOUBLE PRECISION),
+            CASE WHEN $8::BIGINT IS NULL THEN NULL
+                ELSE statement_timestamp() + $8 * INTERVAL '1 millisecond' END
+        )
+        ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)
+        DO UPDATE SET
+            value = CASE
+                WHEN rb_puzzle_kv.expires_at IS NOT NULL
+                    AND rb_puzzle_kv.expires_at <= statement_timestamp()
+                    THEN EXCLUDED.value
+                WHEN (rb_puzzle_kv.value #>> '{}')::DOUBLE PRECISION
+                    + $6 BETWEEN -1.7976931348623157e308::DOUBLE PRECISION
+                        AND 1.7976931348623157e308::DOUBLE PRECISION
+                    THEN to_jsonb(
+                        (rb_puzzle_kv.value #>> '{}')::DOUBLE PRECISION + $6
+                    )
+                ELSE NULL
+            END,
+            version = rb_puzzle_kv.version + 1,
+            expires_at = CASE
+                WHEN rb_puzzle_kv.expires_at IS NOT NULL
+                    AND rb_puzzle_kv.expires_at <= statement_timestamp()
+                    THEN EXCLUDED.expires_at
+                WHEN $7 THEN rb_puzzle_kv.expires_at
+                ELSE EXCLUDED.expires_at
+            END,
+            utime_at = CURRENT_TIMESTAMP
+        RETURNING value, version, expires_at"#,
+        game_id,
+        scope_type,
+        team_id,
+        puzzle_id,
+        key,
+        amount,
+        preserve_expiry,
+        ttl_ms
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+
+    current_kv_mutation_conn(conn, game_id, scope, key, Some(entry)).await
 }
 
 async fn current_kv_mutation_conn(
@@ -1483,14 +1583,211 @@ mod tests {
         assert_eq!(permanent_entry.version, 5);
         assert_eq!(permanent_entry.expires_at, None);
 
-        set_kv(&pool, game_id, scope, "concurrent", &json!({ "owner": 4 }))
-            .await
-            .expect("unconditional set should complete");
+        let set = set_kv(
+            &pool,
+            game_id,
+            scope,
+            "concurrent",
+            &json!({ "owner": 4 }),
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("unconditional set should complete");
+        assert!(set.applied);
+        assert_eq!(
+            set.entry
+                .as_ref()
+                .expect("set should return its entry")
+                .version,
+            6
+        );
         let final_entry = get_kv_entry(&pool, game_id, scope, "concurrent")
             .await
             .expect("final read should complete")
             .expect("final entry should exist");
         assert_eq!(final_entry.version, 6);
         assert_eq!(final_entry.expires_at, None);
+
+        let counter = set_kv(
+            &pool,
+            game_id,
+            scope,
+            "counter",
+            &json!(10),
+            PuzzleBackendKvExpiry::Ttl(60_000),
+        )
+        .await
+        .expect("counter set should complete");
+        let counter_expiry = counter
+            .entry
+            .expect("counter set should return its entry")
+            .expires_at;
+        let incremented = increment_kv(
+            &pool,
+            game_id,
+            scope,
+            "counter",
+            2.5,
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("increment should complete");
+        assert!(incremented.applied);
+        let incremented_entry = incremented
+            .entry
+            .expect("increment should return its entry");
+        assert_eq!(incremented_entry.value, json!(12.5));
+        assert_eq!(incremented_entry.version, 2);
+        assert_eq!(incremented_entry.expires_at, counter_expiry);
+
+        let overwritten = set_kv(
+            &pool,
+            game_id,
+            scope,
+            "counter",
+            &json!(20),
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("set without TTL should preserve expiry");
+        let overwritten_entry = overwritten
+            .entry
+            .expect("set should return the overwritten entry");
+        assert_eq!(overwritten_entry.version, 3);
+        assert_eq!(overwritten_entry.expires_at, counter_expiry);
+
+        let first_pool = pool.clone();
+        let second_pool = pool.clone();
+        let (first, second) = tokio::join!(
+            increment_kv(
+                &first_pool,
+                game_id,
+                scope,
+                "parallel_counter",
+                1.0,
+                PuzzleBackendKvExpiry::Preserve,
+            ),
+            increment_kv(
+                &second_pool,
+                game_id,
+                scope,
+                "parallel_counter",
+                1.0,
+                PuzzleBackendKvExpiry::Preserve,
+            ),
+        );
+        first.expect("first parallel increment should complete");
+        second.expect("second parallel increment should complete");
+        assert_eq!(
+            get_kv(&pool, game_id, scope, "parallel_counter")
+                .await
+                .expect("parallel counter read should complete"),
+            Some(json!(2))
+        );
+
+        sqlx::query!(
+            "UPDATE rb_puzzle_kv SET expires_at = statement_timestamp() - INTERVAL '1 second' WHERE game_id = $1 AND key = 'counter'",
+            game_id
+        )
+        .execute(&pool)
+        .await
+        .expect("counter should be expired");
+        let reset_counter = increment_kv(
+            &pool,
+            game_id,
+            scope,
+            "counter",
+            3.0,
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("expired counter increment should complete");
+        let reset_entry = reset_counter
+            .entry
+            .expect("reset increment should return its entry");
+        assert_eq!(reset_entry.value, json!(3));
+        assert_eq!(reset_entry.version, 4);
+        assert_eq!(reset_entry.expires_at, None);
+
+        let temporary_increment = increment_kv(
+            &pool,
+            game_id,
+            scope,
+            "parallel_counter",
+            1.0,
+            PuzzleBackendKvExpiry::Ttl(60_000),
+        )
+        .await
+        .expect("increment should set TTL");
+        assert!(
+            temporary_increment
+                .entry
+                .expect("increment should return its entry")
+                .expires_at
+                > Some(temporary_increment.server_time)
+        );
+        let permanent_increment = increment_kv(
+            &pool,
+            game_id,
+            scope,
+            "parallel_counter",
+            1.0,
+            PuzzleBackendKvExpiry::Permanent,
+        )
+        .await
+        .expect("increment should clear TTL");
+        assert_eq!(
+            permanent_increment
+                .entry
+                .expect("increment should return its entry")
+                .expires_at,
+            None
+        );
+
+        set_kv(
+            &pool,
+            game_id,
+            scope,
+            "not_a_number",
+            &json!({ "value": 1 }),
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("non-number set should complete");
+        assert!(
+            increment_kv(
+                &pool,
+                game_id,
+                scope,
+                "not_a_number",
+                1.0,
+                PuzzleBackendKvExpiry::Preserve,
+            )
+            .await
+            .is_err()
+        );
+
+        set_kv(
+            &pool,
+            game_id,
+            scope,
+            "overflow",
+            &json!(1e308),
+            PuzzleBackendKvExpiry::Preserve,
+        )
+        .await
+        .expect("finite number set should complete");
+        assert!(
+            increment_kv(
+                &pool,
+                game_id,
+                scope,
+                "overflow",
+                1e308,
+                PuzzleBackendKvExpiry::Preserve,
+            )
+            .await
+            .is_err()
+        );
     }
 }

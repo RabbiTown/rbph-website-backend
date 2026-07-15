@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_kv (\n            game_id, scope_type, team_id, puzzle_id, key, value, expires_at\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, $6,\n            CASE WHEN $8::BIGINT IS NULL THEN NULL\n                ELSE statement_timestamp() + $8 * INTERVAL '1 millisecond' END\n        )\n        ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)\n        DO UPDATE SET value = EXCLUDED.value,\n            version = rb_puzzle_kv.version + 1,\n            expires_at = CASE\n                WHEN $7 THEN rb_puzzle_kv.expires_at\n                ELSE EXCLUDED.expires_at\n            END,\n            utime_at = CURRENT_TIMESTAMP\n        RETURNING value, version, expires_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "version",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Text",
+        "Jsonb",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "012d621d889d673732335cbc58451575a394cfe1d72f570bc828dafc2a6d26e1"
+}

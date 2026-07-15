@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_puzzle_kv (\n            game_id, scope_type, team_id, puzzle_id, key, value, expires_at\n        )\n        VALUES (\n            $1, $2, $3, $4, $5, to_jsonb($6::DOUBLE PRECISION),\n            CASE WHEN $8::BIGINT IS NULL THEN NULL\n                ELSE statement_timestamp() + $8 * INTERVAL '1 millisecond' END\n        )\n        ON CONFLICT (game_id, scope_type, team_id, puzzle_id, key)\n        DO UPDATE SET\n            value = CASE\n                WHEN rb_puzzle_kv.expires_at IS NOT NULL\n                    AND rb_puzzle_kv.expires_at <= statement_timestamp()\n                    THEN EXCLUDED.value\n                WHEN (rb_puzzle_kv.value #>> '{}')::DOUBLE PRECISION\n                    + $6 BETWEEN -1.7976931348623157e308::DOUBLE PRECISION\n                        AND 1.7976931348623157e308::DOUBLE PRECISION\n                    THEN to_jsonb(\n                        (rb_puzzle_kv.value #>> '{}')::DOUBLE PRECISION + $6\n                    )\n                ELSE NULL\n            END,\n            version = rb_puzzle_kv.version + 1,\n            expires_at = CASE\n                WHEN rb_puzzle_kv.expires_at IS NOT NULL\n                    AND rb_puzzle_kv.expires_at <= statement_timestamp()\n                    THEN EXCLUDED.expires_at\n                WHEN $7 THEN rb_puzzle_kv.expires_at\n                ELSE EXCLUDED.expires_at\n            END,\n            utime_at = CURRENT_TIMESTAMP\n        RETURNING value, version, expires_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "version",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int2",
+        "Int4",
+        "Int4",
+        "Text",
+        "Float8",
+        "Bool",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "410f974df586dd76e22b0ca56201dd7963a7065098e16bffae571cc88ada72de"
+}

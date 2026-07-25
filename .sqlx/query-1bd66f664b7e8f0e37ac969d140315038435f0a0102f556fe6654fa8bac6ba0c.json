@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_puzzle_kv SET expires_at = statement_timestamp() - INTERVAL '1 second' WHERE game_id = $1 AND key = 'counter'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1bd66f664b7e8f0e37ac969d140315038435f0a0102f556fe6654fa8bac6ba0c"
+}

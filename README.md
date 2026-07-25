@@ -18,7 +18,7 @@ Before committing, make sure to run:
 
 ```shell
 sqlx database reset
-cargo sqlx prepare
+cargo sqlx prepare --workspace -- --all-targets --all-features
 cargo clippy --fix --allow-dirty
 cargo fmt --all
 ```

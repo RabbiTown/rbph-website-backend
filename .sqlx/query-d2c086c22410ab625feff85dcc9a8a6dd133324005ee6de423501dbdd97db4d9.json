@@ -1,0 +1,84 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NOW() AS \"server_time!\", tp.state,\n            GREATEST(tp.ctime_at, rp.release_at) AS \"unlock_at!\",\n            tp.solve_at, tp.cooldown_till,\n            tp.cooldown_till IS NOT NULL AND tp.cooldown_till > NOW() AS \"cooldown_active!\",\n            tp.max_submit + p.max_submit AS max_submit,\n            COUNT(fs.id) AS submit_count,\n            p.judge, p.submit_requirements,\n            t.is_banned\n        FROM rb_team_puzzle tp\n        JOIN rb_team t ON t.id = tp.team_id\n        JOIN rb_puzzle p ON p.id = tp.puzzle_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id\n            AND fs.team_id = tp.team_id\n            AND fs.saction = 0\n            AND NOT fs.ignored\n        WHERE p.game_id = $1 AND t.game_id = $1\n            AND tp.team_id = $2 AND tp.puzzle_id = $3\n        GROUP BY tp.state, GREATEST(tp.ctime_at, rp.release_at),\n            tp.solve_at, tp.cooldown_till, tp.max_submit, p.max_submit,\n            p.judge, p.submit_requirements, t.is_banned;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "server_time!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "unlock_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "solve_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "cooldown_till",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "cooldown_active!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "max_submit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "submit_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_banned",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      null,
+      true,
+      true,
+      null,
+      null,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d2c086c22410ab625feff85dcc9a8a6dd133324005ee6de423501dbdd97db4d9"
+}

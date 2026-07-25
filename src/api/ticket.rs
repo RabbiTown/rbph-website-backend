@@ -79,6 +79,14 @@ struct StaffPuzzleTeamPathInfo {
     team_id: i32,
 }
 
+#[derive(Deserialize)]
+struct StaffPuzzleHintPathInfo {
+    game_id: i32,
+    puzzle_id: i32,
+    team_id: i32,
+    hint_id: i32,
+}
+
 impl FromRequest for TicketUserInfo {
     type Error = Error;
     type Future = Ready<Result<Self, Error>>;
@@ -1189,6 +1197,68 @@ async fn get_staff_team_management_activity(
     Ok(HttpResponse::Ok().json(activity))
 }
 
+async fn get_staff_puzzle_team_status(
+    path: web::Path<StaffPuzzleTeamPathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let result = db::puzzle::get_staff_puzzle_team_status(
+        &app.db,
+        path.game_id,
+        path.team_id,
+        path.puzzle_id,
+    )
+    .await?;
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
+    Ok(HttpResponse::Ok().json(result))
+}
+
+#[derive(Deserialize)]
+struct StaffPuzzleSubmissionQuery {
+    page: Option<i64>,
+    only_ok: Option<bool>,
+}
+
+async fn get_staff_puzzle_submissions(
+    path: web::Path<StaffPuzzleTeamPathInfo>,
+    query: web::Query<StaffPuzzleSubmissionQuery>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let result = db::puzzle::get_staff_puzzle_submissions(
+        &app.db,
+        path.game_id,
+        path.team_id,
+        path.puzzle_id,
+        query.page.unwrap_or(0).max(0),
+        10,
+        query.only_ok.unwrap_or(false),
+    )
+    .await?;
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
+    Ok(HttpResponse::Ok().json(result))
+}
+
+async fn get_staff_puzzle_hint_content(
+    path: web::Path<StaffPuzzleHintPathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let result = db::puzzle::get_staff_puzzle_hint_content(
+        &app.db,
+        path.game_id,
+        path.team_id,
+        path.puzzle_id,
+        path.hint_id,
+    )
+    .await?;
+    let Some(result) = result else {
+        return RbError::not_found().http_err();
+    };
+    Ok(HttpResponse::Ok().json(result))
+}
+
 async fn list_staff_teams(
     path: web::Path<crate::api::game::GamePathInfo>,
     query: web::Query<StaffTeamListQuery>,
@@ -1432,6 +1502,18 @@ pub fn games_config(cfg: &mut web::ServiceConfig) {
             .route(
                 "/teams/{team_id}/management-activity",
                 web::get().to(get_staff_team_management_activity),
+            )
+            .route(
+                "/puzzle/{puzzle_id}/teams/{team_id}/status",
+                web::get().to(get_staff_puzzle_team_status),
+            )
+            .route(
+                "/puzzle/{puzzle_id}/teams/{team_id}/status/submissions",
+                web::get().to(get_staff_puzzle_submissions),
+            )
+            .route(
+                "/puzzle/{puzzle_id}/teams/{team_id}/status/hints/{hint_id}",
+                web::get().to(get_staff_puzzle_hint_content),
             )
             .route(
                 "/puzzle/{puzzle_id}/teams/{team_id}",

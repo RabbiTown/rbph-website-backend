@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.id, h.title, h.cooldown, h.cost_id,\n            c.cname AS \"cost_name?\", c.prec AS \"cost_prec?\", h.cost_amount,\n            GREATEST(tp.ctime_at, rp.release_at)\n                + (h.cooldown::BIGINT * INTERVAL '1 second') AS \"available_at!\",\n            COALESCE(th.unlocked, FALSE) AS \"unlocked!\",\n            CASE WHEN th.unlocked THEN th.utime_at ELSE NULL END AS unlocked_at\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = $2\n        LEFT JOIN rb_currency c ON c.id = h.cost_id\n        WHERE p.game_id = $1 AND p.id = $3\n        ORDER BY h.sort, h.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cost_name?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "cost_prec?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "available_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "unlocked!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "unlocked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "b52d01c88b71bf43789543f1161eb570cf3c67fdbc702ad6a87c5743355e3b48"
+}

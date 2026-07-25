@@ -828,6 +828,313 @@ pub async fn get_team_submissions(
     Ok(SubmissionPageData { data, total })
 }
 
+#[derive(Serialize)]
+pub struct StaffPuzzleHintStatus {
+    pub id: i32,
+    pub title: String,
+    pub cooldown: i32,
+    pub cost_id: Option<i32>,
+    pub cost_name: Option<String>,
+    pub cost_prec: Option<i32>,
+    pub cost_amount: i64,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub available_at: OffsetDateTime,
+    pub unlocked: bool,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub unlocked_at: Option<OffsetDateTime>,
+}
+
+#[derive(Serialize)]
+pub struct StaffPuzzleTeamStatus {
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub server_time: OffsetDateTime,
+    pub state: RbTeamPuzzleState,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub unlock_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub solve_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub cooldown_till: Option<OffsetDateTime>,
+    pub cooldown_active: bool,
+    pub submission_enabled: bool,
+    pub submit_requirements_met: bool,
+    pub can_submit: bool,
+    pub team_banned: bool,
+    pub max_submit: Option<i32>,
+    pub submit_count: i64,
+    pub remaining_submit: Option<i64>,
+    pub hints: Vec<StaffPuzzleHintStatus>,
+}
+
+pub async fn get_staff_puzzle_team_status(
+    pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    puzzle_id: i32,
+) -> Result<Option<StaffPuzzleTeamStatus>, RbInternalError> {
+    let row = sqlx::query!(
+        "SELECT NOW() AS \"server_time!\", tp.state,
+            GREATEST(tp.ctime_at, rp.release_at) AS \"unlock_at!\",
+            tp.solve_at, tp.cooldown_till,
+            tp.cooldown_till IS NOT NULL AND tp.cooldown_till > NOW() AS \"cooldown_active!\",
+            tp.max_submit + p.max_submit AS max_submit,
+            COUNT(fs.id) AS submit_count,
+            p.judge, p.submit_requirements,
+            t.is_banned
+        FROM rb_team_puzzle tp
+        JOIN rb_team t ON t.id = tp.team_id
+        JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
+        LEFT JOIN rb_submission fs ON fs.puzzle_id = tp.puzzle_id
+            AND fs.team_id = tp.team_id
+            AND fs.saction = 0
+            AND NOT fs.ignored
+        WHERE p.game_id = $1 AND t.game_id = $1
+            AND tp.team_id = $2 AND tp.puzzle_id = $3
+        GROUP BY tp.state, GREATEST(tp.ctime_at, rp.release_at),
+            tp.solve_at, tp.cooldown_till, tp.max_submit, p.max_submit,
+            p.judge, p.submit_requirements, t.is_banned;",
+        game_id,
+        team_id,
+        puzzle_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let submit_count = row.submit_count.unwrap_or(0);
+    let remaining_submit = row
+        .max_submit
+        .map(|maximum| (i64::from(maximum) - submit_count).max(0));
+    let submission_enabled =
+        game::judge::value_to_judge(row.judge).is_ok_and(|rules| !rules.is_empty());
+    let submit_requirements_met = match parse_submit_requirements(row.submit_requirements) {
+        Ok(requirements) => {
+            let mut met = true;
+            for requirement in requirements {
+                let PuzzleSubmitRequirement::CurrencyMinimum {
+                    currency_id,
+                    minimum,
+                } = requirement;
+                let current = sqlx::query_scalar!(
+                    r#"SELECT CASE WHEN gf.state = 1 THEN
+                                GREATEST(LEAST(tc.amount::NUMERIC, 0::NUMERIC), LEAST(
+                                    tc.amount::NUMERIC
+                                        + FLOOR(EXTRACT(EPOCH FROM (NOW() - tc.utime_at)) / 60)
+                                            * (c.growth + tc.growth)::NUMERIC,
+                                    c.max_amount::NUMERIC
+                                ))::BIGINT
+                            ELSE tc.amount END AS "current_amount!"
+                        FROM rb_team_currency tc
+                        JOIN rb_currency c ON c.id = tc.currency_id
+                        JOIN rb_game_feature gf
+                            ON gf.game_id = c.game_id AND gf.feature_type = 4
+                        WHERE tc.team_id = $1
+                            AND tc.currency_id = $2
+                            AND c.game_id = $3"#,
+                    team_id,
+                    currency_id,
+                    game_id,
+                )
+                .fetch_optional(pool)
+                .await?;
+                if current.is_none_or(|amount| amount < minimum) {
+                    met = false;
+                    break;
+                }
+            }
+            met
+        }
+        Err(_) => false,
+    };
+    let state: RbTeamPuzzleState = row.state.into();
+    let can_submit = state.accessible()
+        && !row.is_banned
+        && !row.cooldown_active
+        && remaining_submit != Some(0)
+        && submission_enabled
+        && submit_requirements_met;
+
+    let hints = sqlx::query!(
+        "SELECT h.id, h.title, h.cooldown, h.cost_id,
+            c.cname AS \"cost_name?\", c.prec AS \"cost_prec?\", h.cost_amount,
+            GREATEST(tp.ctime_at, rp.release_at)
+                + (h.cooldown::BIGINT * INTERVAL '1 second') AS \"available_at!\",
+            COALESCE(th.unlocked, FALSE) AS \"unlocked!\",
+            CASE WHEN th.unlocked THEN th.utime_at ELSE NULL END AS unlocked_at
+        FROM rb_hint h
+        JOIN rb_puzzle p ON p.id = h.puzzle_id
+        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
+        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
+        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = $2
+        LEFT JOIN rb_currency c ON c.id = h.cost_id
+        WHERE p.game_id = $1 AND p.id = $3
+        ORDER BY h.sort, h.id;",
+        game_id,
+        team_id,
+        puzzle_id,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|hint| StaffPuzzleHintStatus {
+        id: hint.id,
+        title: hint.title,
+        cooldown: hint.cooldown,
+        cost_id: hint.cost_id,
+        cost_name: hint.cost_name,
+        cost_prec: hint.cost_prec,
+        cost_amount: hint.cost_amount,
+        available_at: hint.available_at,
+        unlocked: hint.unlocked,
+        unlocked_at: hint.unlocked_at,
+    })
+    .collect();
+
+    Ok(Some(StaffPuzzleTeamStatus {
+        server_time: row.server_time,
+        state,
+        unlock_at: row.unlock_at,
+        solve_at: row.solve_at,
+        cooldown_till: row.cooldown_till,
+        cooldown_active: row.cooldown_active,
+        submission_enabled,
+        submit_requirements_met,
+        can_submit,
+        team_banned: row.is_banned,
+        max_submit: row.max_submit,
+        submit_count,
+        remaining_submit,
+        hints,
+    }))
+}
+
+#[derive(Serialize)]
+pub struct StaffPuzzleHintContent {
+    pub id: i32,
+    pub title: String,
+    pub content: String,
+    pub content_type: RbContentType,
+}
+
+pub async fn get_staff_puzzle_hint_content(
+    pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    puzzle_id: i32,
+    hint_id: i32,
+) -> Result<Option<StaffPuzzleHintContent>, RbInternalError> {
+    let result = sqlx::query_as!(
+        StaffPuzzleHintContent,
+        "SELECT h.id, h.title, h.content, h.content_type
+        FROM rb_hint h
+        JOIN rb_puzzle p ON p.id = h.puzzle_id
+        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
+        JOIN rb_team t ON t.id = tp.team_id
+        WHERE p.game_id = $1 AND t.game_id = $1
+            AND p.id = $3 AND h.id = $4;",
+        game_id,
+        team_id,
+        puzzle_id,
+        hint_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(result)
+}
+
+#[derive(Serialize)]
+pub struct StaffPuzzleSubmission {
+    pub id: i32,
+    pub user_id: i32,
+    pub user_name: String,
+    pub user_answer: String,
+    pub norm_answer: String,
+    pub saction: RbJudgeAction,
+    pub sresult: Option<String>,
+    pub real_answer: Option<String>,
+    pub ignored: bool,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub ctime_at: OffsetDateTime,
+}
+
+#[derive(Serialize)]
+pub struct StaffPuzzleSubmissionPage {
+    pub data: Vec<StaffPuzzleSubmission>,
+    pub total: i64,
+}
+
+pub async fn get_staff_puzzle_submissions(
+    pool: &DbPool,
+    game_id: i32,
+    team_id: i32,
+    puzzle_id: i32,
+    page: i64,
+    limit: i64,
+    only_ok: bool,
+) -> Result<Option<StaffPuzzleSubmissionPage>, RbInternalError> {
+    let exists = sqlx::query_scalar!(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM rb_team_puzzle tp
+            JOIN rb_team t ON t.id = tp.team_id
+            JOIN rb_puzzle p ON p.id = tp.puzzle_id
+            WHERE p.game_id = $1 AND t.game_id = $1
+                AND tp.team_id = $2 AND tp.puzzle_id = $3
+        ) AS \"exists!\";",
+        game_id,
+        team_id,
+        puzzle_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    if !exists {
+        return Ok(None);
+    }
+
+    let rows = sqlx::query!(
+        "SELECT s.id, s.user_id, u.nickname AS user_name,
+            s.user_answer, s.norm_answer, s.saction, s.sresult,
+            s.real_answer, s.ignored, s.ctime_at,
+            COUNT(*) OVER() AS total
+        FROM rb_submission s
+        JOIN rb_user u ON u.id = s.user_id
+        WHERE s.team_id = $1 AND s.puzzle_id = $2
+            AND (NOT $5 OR s.saction > 0)
+        ORDER BY s.ctime_at DESC, s.id DESC
+        LIMIT $3 OFFSET $4;",
+        team_id,
+        puzzle_id,
+        limit,
+        page.saturating_mul(limit),
+        only_ok,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let total = rows.first().and_then(|row| row.total).unwrap_or(0);
+    let data = rows
+        .into_iter()
+        .map(|row| StaffPuzzleSubmission {
+            id: row.id,
+            user_id: row.user_id,
+            user_name: row.user_name,
+            user_answer: row.user_answer,
+            norm_answer: row.norm_answer,
+            saction: row.saction.into(),
+            sresult: row.sresult,
+            real_answer: row.real_answer,
+            ignored: row.ignored,
+            ctime_at: row.ctime_at,
+        })
+        .collect();
+
+    Ok(Some(StaffPuzzleSubmissionPage { data, total }))
+}
+
 pub enum SubmitAnswerResult {
     Ok {
         result: JudgeResult,

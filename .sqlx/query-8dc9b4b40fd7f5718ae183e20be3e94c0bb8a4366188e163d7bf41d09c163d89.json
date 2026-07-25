@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id, s.user_id, u.nickname AS user_name,\n            s.user_answer, s.norm_answer, s.saction, s.sresult,\n            s.real_answer, s.ignored, s.ctime_at,\n            COUNT(*) OVER() AS total\n        FROM rb_submission s\n        JOIN rb_user u ON u.id = s.user_id\n        WHERE s.team_id = $1 AND s.puzzle_id = $2\n            AND (NOT $5 OR s.saction > 0)\n        ORDER BY s.ctime_at DESC, s.id DESC\n        LIMIT $3 OFFSET $4;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "user_answer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "norm_answer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "saction",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "sresult",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "real_answer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "ignored",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "total",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8",
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "8dc9b4b40fd7f5718ae183e20be3e94c0bb8a4366188e163d7bf41d09c163d89"
+}

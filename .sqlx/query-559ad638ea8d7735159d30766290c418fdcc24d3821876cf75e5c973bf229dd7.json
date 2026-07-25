@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS(\n            SELECT 1\n            FROM rb_team_puzzle tp\n            JOIN rb_team t ON t.id = tp.team_id\n            JOIN rb_puzzle p ON p.id = tp.puzzle_id\n            WHERE p.game_id = $1 AND t.game_id = $1\n                AND tp.team_id = $2 AND tp.puzzle_id = $3\n        ) AS \"exists!\";",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "559ad638ea8d7735159d30766290c418fdcc24d3821876cf75e5c973bf229dd7"
+}

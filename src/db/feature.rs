@@ -51,7 +51,7 @@ impl GameFeature {
                 GameFeatureState::Open
             }
             Self::Leaderboard => GameFeatureState::Live,
-            Self::Currency => GameFeatureState::Closed,
+            Self::Currency => GameFeatureState::Open,
         }
     }
 
@@ -514,6 +514,14 @@ pub async fn set_manual_state(
 #[cfg(test)]
 mod tests {
     use super::{FeatureChangeData, GameFeature, GameFeatureState, valid_changes};
+
+    #[test]
+    fn new_games_enable_currency_by_default() {
+        assert_eq!(
+            GameFeature::Currency.default_state(),
+            GameFeatureState::Open
+        );
+    }
 
     #[test]
     fn validates_feature_state_pairs_and_duplicates() {

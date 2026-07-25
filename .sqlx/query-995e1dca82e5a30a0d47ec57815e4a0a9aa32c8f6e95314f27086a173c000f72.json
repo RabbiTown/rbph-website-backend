@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,\n                m.unlocked, m.ctime_at, m.utime_at,\n                u.id AS u_id, u.nickname AS u_nickname,\n                CASE WHEN ($2 OR unlocked) THEN content ELSE NULL END AS content,\n                CASE WHEN ($2 OR unlocked) THEN content_type ELSE NULL END AS content_type\n        FROM rb_message m\n        JOIN rb_user u ON u.id = m.sender\n        WHERE m.id = $1",
+  "query": "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,\n                (m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) AS \"unlocked!\",\n                m.unlock_at, m.unlock_after_seconds, m.ctime_at, m.utime_at,\n                u.id AS u_id, u.nickname AS u_nickname,\n                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN content ELSE NULL END AS content,\n                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN content_type ELSE NULL END AS content_type\n        FROM rb_message m\n        JOIN rb_user u ON u.id = m.sender\n        WHERE m.id = $1",
   "describe": {
     "columns": [
       {
@@ -30,36 +30,46 @@
       },
       {
         "ordinal": 5,
-        "name": "unlocked",
+        "name": "unlocked!",
         "type_info": "Bool"
       },
       {
         "ordinal": 6,
-        "name": "ctime_at",
+        "name": "unlock_at",
         "type_info": "Timestamptz"
       },
       {
         "ordinal": 7,
+        "name": "unlock_after_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
         "name": "utime_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "u_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 9,
+        "ordinal": 11,
         "name": "u_nickname",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 13,
         "name": "content_type",
         "type_info": "Int2"
       }
@@ -76,6 +86,8 @@
       false,
       true,
       false,
+      null,
+      true,
       false,
       false,
       true,
@@ -85,5 +97,5 @@
       null
     ]
   },
-  "hash": "fe35b99de719855738ed782a420e5e8b211fa65fad9361178c0dd969fc79a5e7"
+  "hash": "995e1dca82e5a30a0d47ec57815e4a0a9aa32c8f6e95314f27086a173c000f72"
 }

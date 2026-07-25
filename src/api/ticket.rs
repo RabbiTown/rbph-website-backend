@@ -162,6 +162,8 @@ struct TicketSendRequest {
     #[serde(default)]
     cost_amount: i64,
     #[serde(default)]
+    unlock_after_seconds: i32,
+    #[serde(default)]
     force_assignee: bool,
 }
 
@@ -195,6 +197,58 @@ fn feature_access_error(
     }
 }
 
+fn normalize_unlock_values(req: &mut TicketSendRequest) -> bool {
+    if req.cost_amount < 0 || req.unlock_after_seconds < 0 {
+        return false;
+    }
+
+    if req.cost_amount == 0 {
+        req.cost_id = None;
+    } else if req.cost_id.is_none() {
+        return false;
+    }
+
+    if !matches!(req.sender_type, RbTicketSenderType::Host)
+        && (req.cost_id.is_some() || req.unlock_after_seconds > 0)
+    {
+        return false;
+    }
+    true
+}
+
+async fn normalize_unlock_requirements(
+    req: &mut TicketSendRequest,
+    team_id: i32,
+    app: &AppState,
+) -> Result<()> {
+    if !normalize_unlock_values(req) {
+        RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
+    }
+
+    if let Some(currency_id) = req.cost_id {
+        let valid = sqlx::query_scalar!(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM rb_team_currency tc
+                JOIN rb_currency c ON c.id = tc.currency_id
+                JOIN rb_game_feature gf ON gf.game_id = c.game_id AND gf.feature_type = 4
+                JOIN rb_team t ON t.id = tc.team_id AND t.game_id = c.game_id
+                WHERE tc.team_id = $1 AND c.id = $2 AND NOT tc.hidden AND gf.state = 1
+            ) AS \"valid!\"",
+            team_id,
+            currency_id,
+        )
+        .fetch_one(&app.db)
+        .await
+        .map_err(crate::error::RbInternalError::from)?;
+        if !valid {
+            RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct TicketSendResponse {
     code: TicketSendResult,
@@ -211,7 +265,7 @@ struct TicketAssigneeConflictResponse {
 }
 
 async fn do_send_ticket_message(
-    req: TicketSendRequest,
+    mut req: TicketSendRequest,
     info: &TicketUserInfo,
     user: &AuthUser,
     app: &AppState,
@@ -252,9 +306,14 @@ async fn do_send_ticket_message(
         }
     }
 
-    if req.cost_id.is_some() && !matches!(req.sender_type, RbTicketSenderType::Host) {
-        RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
-    }
+    let team_id = sqlx::query_scalar!(
+        "SELECT team_id FROM rb_ticket WHERE id = $1",
+        info.ticket_id
+    )
+    .fetch_one(&app.db)
+    .await
+    .map_err(crate::error::RbInternalError::from)?;
+    normalize_unlock_requirements(&mut req, team_id, app).await?;
 
     let force_assignee = req.force_assignee;
     let data = SendMessageData {
@@ -264,6 +323,7 @@ async fn do_send_ticket_message(
         sender_id: user.uid,
         cost_id: req.cost_id,
         cost_amount: req.cost_amount,
+        unlock_after_seconds: req.unlock_after_seconds,
     };
 
     let msg = match db::ticket::send_ticket_message(
@@ -413,8 +473,6 @@ async fn send_staff_dm_ticket_message(
         .ok_or(RbError::internal("Invalid ticket id"))?;
     let mut req = req.into_inner();
     req.sender_type = RbTicketSenderType::Host;
-    req.cost_id = None;
-    req.cost_amount = 0;
     do_send_ticket_message(req, &info, &user, &app, None).await
 }
 
@@ -426,8 +484,6 @@ async fn send_staff_dm_ticket_message_by_id(
 ) -> Result<HttpResponse> {
     let mut req = req.into_inner();
     req.sender_type = RbTicketSenderType::Host;
-    req.cost_id = None;
-    req.cost_amount = 0;
     do_send_ticket_message(req, &info, &user, &app, None).await
 }
 
@@ -459,11 +515,10 @@ async fn close_ticket(
         RbError::forbid().err()?
     }
 
-    let req = req.map(web::Json::into_inner);
+    let mut req = req.map(web::Json::into_inner);
     let force_assignee = req.as_ref().is_some_and(|req| req.force_assignee);
-    let message = req.filter(|req| !req.content.is_empty());
 
-    if let Some(message) = message.as_ref() {
+    if let Some(message) = req.as_mut().filter(|req| !req.content.is_empty()) {
         message
             .validate()
             .map_err(|e| RbError::bad_req(TicketSendResult::Invalid.into()).msg(e.to_string()))?;
@@ -474,19 +529,27 @@ async fn close_ticket(
         if !user.req_role()?.is_admin() && message.content_type.is_trusted() {
             RbError::unprocessable(TicketSendResult::BadContentType.into()).err()?
         }
-        if message.cost_id.is_some() {
-            RbError::unprocessable(TicketSendResult::BadCost.into()).err()?
-        }
+        let team_id = sqlx::query_scalar!(
+            "SELECT team_id FROM rb_ticket WHERE id = $1",
+            path.ticket_id
+        )
+        .fetch_one(&app.db)
+        .await
+        .map_err(crate::error::RbInternalError::from)?;
+        normalize_unlock_requirements(message, team_id, &app).await?;
     }
 
-    let message = message.map(|message| SendMessageData {
-        content: message.content,
-        content_type: message.content_type,
-        sender_type: RbTicketSenderType::Host,
-        sender_id: user.uid,
-        cost_id: None,
-        cost_amount: 0,
-    });
+    let message = req
+        .filter(|req| !req.content.is_empty())
+        .map(|message| SendMessageData {
+            content: message.content,
+            content_type: message.content_type,
+            sender_type: RbTicketSenderType::Host,
+            sender_id: user.uid,
+            cost_id: message.cost_id,
+            cost_amount: message.cost_amount,
+            unlock_after_seconds: message.unlock_after_seconds,
+        });
 
     let close_result = db::ticket::close_ticket(
         &app.db,
@@ -643,7 +706,7 @@ async fn open_ticket(
 }
 
 async fn open_ticket_for_team(
-    req: TicketSendRequest,
+    mut req: TicketSendRequest,
     team_id: i32,
     puzzle_id: i32,
     sender_type: RbTicketSenderType,
@@ -655,7 +718,6 @@ async fn open_ticket_for_team(
 
     if (matches!(sender_type, RbTicketSenderType::Team)
         && !matches!(req.sender_type, RbTicketSenderType::Team))
-        || req.cost_id.is_some()
     {
         RbError::unprocessable(TicketOpenResult::Invalid.into()).err()?
     }
@@ -663,14 +725,17 @@ async fn open_ticket_for_team(
     if !user.req_role()?.is_admin() && req.content_type.is_trusted() {
         RbError::unprocessable(TicketOpenResult::BadContentType.into()).err()?
     }
+    req.sender_type = sender_type;
+    normalize_unlock_requirements(&mut req, team_id, &app).await?;
 
     let data = SendMessageData {
         content: req.content,
         content_type: req.content_type,
         sender_type,
         sender_id: user.uid,
-        cost_id: None,
-        cost_amount: 0,
+        cost_id: req.cost_id,
+        cost_amount: req.cost_amount,
+        unlock_after_seconds: req.unlock_after_seconds,
     };
 
     let result = db::ticket::open_puzzle_ticket(&app.db, team_id, puzzle_id, &data).await?;
@@ -1416,6 +1481,73 @@ pub fn tickets_config(cfg: &mut web::ServiceConfig) {
             )
             .default_service(web::route().to(error_handler)),
     );
+}
+
+#[cfg(test)]
+mod ticket_unlock_tests {
+    use super::{TicketSendRequest, normalize_unlock_values};
+    use crate::model::game::{RbContentType, RbTicketSenderType};
+
+    fn request(
+        sender_type: RbTicketSenderType,
+        cost_id: Option<i32>,
+        cost_amount: i64,
+        unlock_after_seconds: i32,
+    ) -> TicketSendRequest {
+        TicketSendRequest {
+            content: "message".to_string(),
+            content_type: RbContentType::UnsafeMarkdown,
+            sender_type,
+            cost_id,
+            cost_amount,
+            unlock_after_seconds,
+            force_assignee: false,
+        }
+    }
+
+    #[test]
+    fn accepts_combined_staff_unlock_requirements() {
+        let mut req = request(RbTicketSenderType::Host, Some(2), 100, 60);
+        assert!(normalize_unlock_values(&mut req));
+        assert_eq!(req.cost_id, Some(2));
+        assert_eq!(req.cost_amount, 100);
+        assert_eq!(req.unlock_after_seconds, 60);
+    }
+
+    #[test]
+    fn normalizes_zero_cost_to_no_currency_requirement() {
+        let mut req = request(RbTicketSenderType::Host, Some(2), 0, 60);
+        assert!(normalize_unlock_values(&mut req));
+        assert_eq!(req.cost_id, None);
+    }
+
+    #[test]
+    fn rejects_invalid_or_team_unlock_requirements() {
+        assert!(!normalize_unlock_values(&mut request(
+            RbTicketSenderType::Host,
+            None,
+            100,
+            0,
+        )));
+        assert!(!normalize_unlock_values(&mut request(
+            RbTicketSenderType::Host,
+            None,
+            0,
+            -1,
+        )));
+        assert!(!normalize_unlock_values(&mut request(
+            RbTicketSenderType::Team,
+            Some(2),
+            100,
+            0,
+        )));
+        assert!(!normalize_unlock_values(&mut request(
+            RbTicketSenderType::Team,
+            None,
+            0,
+            60,
+        )));
+    }
 }
 
 #[cfg(test)]

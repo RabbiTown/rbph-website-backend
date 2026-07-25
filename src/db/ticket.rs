@@ -103,6 +103,9 @@ pub struct TicketMessage {
     cost_id: Option<i32>,
     cost_amount: i64,
     unlocked: bool,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    unlock_at: Option<OffsetDateTime>,
+    unlock_after_seconds: i32,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
@@ -530,6 +533,8 @@ fn make_message(
     cost_id: Option<i32>,
     cost_amount: Option<i64>,
     unlocked: Option<bool>,
+    unlock_at: Option<OffsetDateTime>,
+    unlock_after_seconds: Option<i32>,
     content: Option<String>,
     content_type: Option<i16>,
     ctime_at: Option<OffsetDateTime>,
@@ -548,6 +553,8 @@ fn make_message(
         cost_id,
         cost_amount: cost_amount?,
         unlocked: unlocked?,
+        unlock_at,
+        unlock_after_seconds: unlock_after_seconds?,
         content,
         content_type: content_type.map(RbContentType::from_primitive),
         ctime_at: ctime_at?,
@@ -583,10 +590,11 @@ async fn get_ticket_messages_page(
 
     let result = sqlx::query!(
         "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,
-                m.unlocked, m.ctime_at, m.utime_at,
+                (m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) AS \"unlocked!\",
+                m.unlock_at, m.unlock_after_seconds, m.ctime_at, m.utime_at,
                 u.id AS u_id, u.nickname AS u_nickname,
-                CASE WHEN ($2 OR m.unlocked) THEN m.content ELSE NULL END AS content,
-                CASE WHEN ($2 OR m.unlocked) THEN m.content_type ELSE NULL END AS content_type
+                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN m.content ELSE NULL END AS content,
+                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN m.content_type ELSE NULL END AS content_type
         FROM rb_message m
         JOIN rb_user u ON u.id = m.sender
         WHERE ticket_id = $1
@@ -634,6 +642,8 @@ async fn get_ticket_messages_page(
             cost_id: x.cost_id,
             cost_amount: x.cost_amount,
             unlocked: x.unlocked,
+            unlock_at: x.unlock_at,
+            unlock_after_seconds: x.unlock_after_seconds,
 
             content: x.content,
             content_type: x.content_type.map(RbContentType::from_primitive),
@@ -649,10 +659,11 @@ async fn get_ticket_messages_page(
         "SELECT o.id, o.action, o.actor_type, o.ctime_at, u.id AS u_id, u.nickname AS u_nickname,
             m.id AS \"m_id?\", m.sender_type AS \"m_st?\",
             m.cost_id AS \"m_ci?\", m.cost_amount AS \"m_ca?\",
-            m.unlocked AS \"m_ul?\", m.ctime_at AS \"m_c?\", m.utime_at AS \"m_u?\",
+            (m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) AS \"m_ul?\",
+            m.unlock_at AS \"m_ua?\", m.unlock_after_seconds AS \"m_uas?\", m.ctime_at AS \"m_c?\", m.utime_at AS \"m_u?\",
             mu.id AS \"mu_id?\", mu.nickname AS \"mu_n?\",
-            CASE WHEN ($2 OR m.unlocked) THEN m.content ELSE NULL END AS \"m_t?\",
-            CASE WHEN ($2 OR m.unlocked) THEN m.content_type ELSE NULL END AS \"m_ct?\"
+            CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN m.content ELSE NULL END AS \"m_t?\",
+            CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN m.content_type ELSE NULL END AS \"m_ct?\"
         FROM rb_ticket_operation o
         JOIN rb_user u ON u.id = o.actor
         LEFT JOIN rb_message m ON m.id = o.message_id
@@ -703,8 +714,8 @@ async fn get_ticket_messages_page(
             },
             actor_type: RbTicketSenderType::from_primitive(x.actor_type),
             message: make_message(
-                x.m_id, x.mu_id, x.mu_n, x.m_st, x.m_ci, x.m_ca, x.m_ul, x.m_t, x.m_ct, x.m_c,
-                x.m_u,
+                x.m_id, x.mu_id, x.mu_n, x.m_st, x.m_ci, x.m_ca, x.m_ul, x.m_ua,
+                x.m_uas, x.m_t, x.m_ct, x.m_c, x.m_u,
             ),
             ctime_at: x.ctime_at,
         })
@@ -836,10 +847,11 @@ pub async fn get_ticket_message(
 ) -> Result<Option<TicketMessage>, RbInternalError> {
     let result = sqlx::query!(
         "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,
-                m.unlocked, m.ctime_at, m.utime_at,
+                (m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) AS \"unlocked!\",
+                m.unlock_at, m.unlock_after_seconds, m.ctime_at, m.utime_at,
                 u.id AS u_id, u.nickname AS u_nickname,
-                CASE WHEN ($2 OR unlocked) THEN content ELSE NULL END AS content,
-                CASE WHEN ($2 OR unlocked) THEN content_type ELSE NULL END AS content_type
+                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN content ELSE NULL END AS content,
+                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN content_type ELSE NULL END AS content_type
         FROM rb_message m
         JOIN rb_user u ON u.id = m.sender
         WHERE m.id = $1",
@@ -862,6 +874,8 @@ pub async fn get_ticket_message(
         cost_id: x.cost_id,
         cost_amount: x.cost_amount,
         unlocked: x.unlocked,
+        unlock_at: x.unlock_at,
+        unlock_after_seconds: x.unlock_after_seconds,
 
         content: x.content,
         content_type: x.content_type.map(RbContentType::from_primitive),
@@ -1328,6 +1342,7 @@ pub struct SendMessageData {
     pub sender_type: RbTicketSenderType,
     pub cost_id: Option<i32>,
     pub cost_amount: i64,
+    pub unlock_after_seconds: i32,
 }
 
 async fn insert_ticket_message_conn(
@@ -1338,8 +1353,10 @@ async fn insert_ticket_message_conn(
     let result = sqlx::query_scalar!(
         "INSERT INTO rb_message
             (content, content_type, sender, sender_type,
-            cost_id, cost_amount, unlocked, ticket_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            cost_id, cost_amount, unlock_at, unlock_after_seconds, unlocked, ticket_id)
+        VALUES ($1, $2, $3, $4, $5, $6,
+            CASE WHEN $7 > 0 THEN NOW() + ($7::BIGINT * INTERVAL '1 second') ELSE NULL END,
+            $7, $8, $9)
         RETURNING id;",
         data.content,
         i16::from(data.content_type),
@@ -1347,8 +1364,9 @@ async fn insert_ticket_message_conn(
         i16::from(data.sender_type),
         data.cost_id,
         data.cost_amount,
-        data.cost_id.is_none(),
-        ticket_id
+        data.unlock_after_seconds,
+        data.cost_id.is_none() && data.unlock_after_seconds == 0,
+        ticket_id,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -1658,6 +1676,7 @@ pub async fn purchase_ticket_message(
         LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id
         WHERE m.id = $1 AND t.id = $2
             AND NOT m.unlocked
+            AND (m.unlock_at IS NULL OR m.unlock_at <= NOW())
         FOR UPDATE OF m;"#,
         message_id,
         ticket_id
@@ -1670,6 +1689,10 @@ pub async fn purchase_ticket_message(
     };
 
     let mut currency_event: Option<crate::db::event_log::CurrencyEventData> = None;
+
+    if needs_pay && info.cost_id.is_none() {
+        return Ok(PurchaseTicketMessageResult::Unavailable);
+    }
 
     if info.cost_id.is_some() && needs_pay {
         let result = sqlx::query!(

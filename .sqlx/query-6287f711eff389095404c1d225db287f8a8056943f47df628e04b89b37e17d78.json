@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.team_id, t.puzzle_id, tm.game_id,\n            p.round_id AS \"round_id?\", p.title AS \"puzzle_title?\",\n            m.cost_id, m.cost_amount\n        FROM rb_message m\n        JOIN rb_ticket t ON t.id = m.ticket_id\n        JOIN rb_team tm ON tm.id = t.team_id\n        LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id\n        WHERE m.id = $1 AND t.id = $2\n            AND NOT m.unlocked\n        FOR UPDATE OF m;",
+  "query": "SELECT t.team_id, t.puzzle_id, tm.game_id,\n            p.round_id AS \"round_id?\", p.title AS \"puzzle_title?\",\n            m.cost_id, m.cost_amount\n        FROM rb_message m\n        JOIN rb_ticket t ON t.id = m.ticket_id\n        JOIN rb_team tm ON tm.id = t.team_id\n        LEFT JOIN rb_puzzle p ON p.id = t.puzzle_id\n        WHERE m.id = $1 AND t.id = $2\n            AND NOT m.unlocked\n            AND (m.unlock_at IS NULL OR m.unlock_at <= NOW())\n        FOR UPDATE OF m;",
   "describe": {
     "columns": [
       {
@@ -55,5 +55,5 @@
       false
     ]
   },
-  "hash": "785850284a73e3555f78372eb3d8f943f30e004e0c722c39485ff48e9f524d83"
+  "hash": "6287f711eff389095404c1d225db287f8a8056943f47df628e04b89b37e17d78"
 }

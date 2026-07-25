@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.id, m.sender, m.sender_type, m.cost_id, m.cost_amount,\n                (m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) AS \"unlocked!\",\n                m.unlock_at, m.unlock_after_seconds, m.ctime_at, m.utime_at,\n                u.id AS u_id, u.nickname AS u_nickname,\n                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN m.content ELSE NULL END AS content,\n                CASE WHEN ($2 OR m.unlocked OR (m.cost_id IS NULL AND m.unlock_at IS NOT NULL AND m.unlock_at <= NOW())) THEN m.content_type ELSE NULL END AS content_type\n        FROM rb_message m\n        JOIN rb_user u ON u.id = m.sender\n        WHERE ticket_id = $1\n        AND NOT EXISTS (\n            SELECT 1\n            FROM rb_ticket_operation o\n            WHERE o.message_id = m.id\n        )\n        AND ($3::TIMESTAMPTZ IS NULL OR\n            ($4 AND (m.ctime_at > $3 OR (m.ctime_at = $3 AND (1 > $5 OR (1 = $5 AND m.id > $6))))) OR\n            (NOT $4 AND (m.ctime_at < $3 OR (m.ctime_at = $3 AND (1 < $5 OR (1 = $5 AND m.id < $6))))))\n        AND ($7::TIMESTAMPTZ IS NULL OR m.ctime_at < $7 OR\n            (m.ctime_at = $7 AND (1 < $8 OR (1 = $8 AND m.id < $9))))\n        ORDER BY\n            CASE WHEN $4 THEN m.ctime_at END ASC,\n            CASE WHEN NOT $4 THEN m.ctime_at END DESC,\n            CASE WHEN $4 THEN m.id END ASC,\n            CASE WHEN NOT $4 THEN m.id END DESC\n        LIMIT $10",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "sender",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "sender_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "unlocked!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "unlock_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "unlock_after_seconds",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "utime_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "u_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "u_nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "content_type",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bool",
+        "Timestamptz",
+        "Bool",
+        "Int4",
+        "Int4",
+        "Timestamptz",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "70263adc306eaca7141d5f2198dacf3e35e60a43ab74396b529e1bc73315a693"
+}

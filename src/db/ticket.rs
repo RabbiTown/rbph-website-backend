@@ -1993,15 +1993,20 @@ pub async fn get_team_puzzle_tickets(
             FROM rb_message m
             ORDER BY m.ticket_id, m.ctime_at DESC, m.id DESC
         )
-        SELECT tk.id, tk.state, stats.msg_count, stats.last_at,
-            last_msg.sender_type AS \"last_by?\"
+        SELECT tk.id, tk.state, p.game_id,
+            p.id AS puzzle_id, p.slug AS puzzle_slug, p.title AS puzzle_title,
+            COALESCE(tp.state, -1)::SMALLINT AS \"puzzle_state!\",
+            r.id AS round_id, r.slug AS round_slug, r.title AS round_title,
+            stats.msg_count, stats.last_at, last_msg.sender_type AS \"last_by?\"
         FROM rb_ticket tk
+        JOIN rb_puzzle p ON p.id = tk.puzzle_id
+        JOIN rb_round r ON r.id = p.round_id
+        LEFT JOIN rb_team_puzzle tp ON tp.team_id = tk.team_id AND tp.puzzle_id = p.id
         LEFT JOIN stats ON stats.ticket_id = tk.id
         LEFT JOIN last_msg ON last_msg.ticket_id = tk.id
-        WHERE tk.team_id = $1 AND tk.puzzle_id = $2
+        WHERE tk.team_id = $1
         ORDER BY tk.id DESC",
-        team_id,
-        puzzle_id
+        team_id
     )
     .fetch_all(db_pool)
     .await?;
@@ -2100,9 +2105,19 @@ pub async fn get_team_puzzle_tickets(
         .map(|x| TicketSummary {
             id: x.id,
             state: RbTicketState::from_primitive(x.state),
-            game_id: None,
+            game_id: Some(x.game_id),
             team: None,
-            puzzle: None,
+            puzzle: Some(TicketAggreInfoPuzzle {
+                id: x.puzzle_id,
+                slug: x.puzzle_slug,
+                title: x.puzzle_title,
+                state: RbTeamPuzzleState::from_primitive(x.puzzle_state),
+                round: RbRoundSimpleData {
+                    id: x.round_id,
+                    slug: x.round_slug,
+                    title: x.round_title,
+                },
+            }),
             msg_count: x.msg_count,
             last_at: x.last_at,
             last_by: x.last_by.map(RbTicketSenderType::from_primitive),

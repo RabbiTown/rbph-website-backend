@@ -1,0 +1,94 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH stats AS (\n            SELECT m.ticket_id, COUNT(*) AS msg_count, MAX(m.ctime_at) AS last_at\n            FROM rb_message m\n            GROUP BY m.ticket_id\n        ),\n        last_msg AS (\n            SELECT DISTINCT ON (m.ticket_id) m.ticket_id, m.sender_type\n            FROM rb_message m\n            ORDER BY m.ticket_id, m.ctime_at DESC, m.id DESC\n        )\n        SELECT tk.id, tk.state, p.game_id,\n            p.id AS puzzle_id, p.slug AS puzzle_slug, p.title AS puzzle_title,\n            COALESCE(tp.state, -1)::SMALLINT AS \"puzzle_state!\",\n            r.id AS round_id, r.slug AS round_slug, r.title AS round_title,\n            stats.msg_count, stats.last_at, last_msg.sender_type AS \"last_by?\"\n        FROM rb_ticket tk\n        JOIN rb_puzzle p ON p.id = tk.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = tk.team_id AND tp.puzzle_id = p.id\n        LEFT JOIN stats ON stats.ticket_id = tk.id\n        LEFT JOIN last_msg ON last_msg.ticket_id = tk.id\n        WHERE tk.team_id = $1\n        ORDER BY tk.id DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "puzzle_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "puzzle_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "puzzle_state!",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "round_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "round_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "msg_count",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "last_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "last_by?",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      false,
+      true,
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "ca19895382d9ec6d53be7450c5fa3420d62fa6830b40f3765b9f9f908271a9e6"
+}

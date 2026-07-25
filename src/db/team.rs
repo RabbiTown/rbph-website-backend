@@ -168,7 +168,7 @@ pub enum TeamJoinResult {
     NotOpen = -5,
     WrongPwd = -4,
     TeamFull = -3,
-    Locked = -2,
+    Banned = -2,
     ToMany = -1,
     Ok = 0,
 }
@@ -182,7 +182,7 @@ pub async fn join(
     let mut tx = app.db.begin().await?;
 
     let verify = sqlx::query!(
-        "SELECT t.is_banned, t.is_locked, t.pass, t.game_id,
+        "SELECT t.is_banned, t.pass, t.game_id,
             COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf
                 WHERE gf.game_id = t.game_id AND gf.feature_type = 0), TRUE) AS \"team_open!\"
         FROM rb_team t
@@ -202,8 +202,8 @@ pub async fn join(
         return Ok(TeamJoinResult::NotOpen);
     }
 
-    if verify.is_banned || verify.is_locked {
-        return Ok(TeamJoinResult::Locked);
+    if verify.is_banned {
+        return Ok(TeamJoinResult::Banned);
     }
 
     if verify.pass != password {
@@ -485,7 +485,13 @@ pub async fn user_update(
     .push_bind(user_id)
     .push(" AND game_id = ")
     .push_bind(game_id)
-    .push(" AND is_captain) RETURNING id;");
+    .push(" AND is_captain)");
+
+    if data.name.is_some() {
+        qb.push(" AND NOT is_locked");
+    }
+
+    qb.push(" RETURNING id;");
 
     let result = qb
         .build_query_scalar::<i32>()

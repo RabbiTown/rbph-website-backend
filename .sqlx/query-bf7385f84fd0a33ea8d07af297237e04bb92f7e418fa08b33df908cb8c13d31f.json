@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.is_banned, t.is_locked, t.pass, t.game_id,\n            COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf\n                WHERE gf.game_id = t.game_id AND gf.feature_type = 0), TRUE) AS \"team_open!\"\n        FROM rb_team t\n        WHERE id = $1\n        FOR UPDATE;",
+  "query": "SELECT t.is_banned, t.pass, t.game_id,\n            COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf\n                WHERE gf.game_id = t.game_id AND gf.feature_type = 0), TRUE) AS \"team_open!\"\n        FROM rb_team t\n        WHERE id = $1\n        FOR UPDATE;",
   "describe": {
     "columns": [
       {
@@ -10,21 +10,16 @@
       },
       {
         "ordinal": 1,
-        "name": "is_locked",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 2,
         "name": "pass",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "game_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 4,
+        "ordinal": 3,
         "name": "team_open!",
         "type_info": "Bool"
       }
@@ -38,9 +33,8 @@
       false,
       false,
       false,
-      false,
       null
     ]
   },
-  "hash": "aa8017a817a408274304be64a4582923325121b943726f823c8b48c27a52d1e3"
+  "hash": "bf7385f84fd0a33ea8d07af297237e04bb92f7e418fa08b33df908cb8c13d31f"
 }

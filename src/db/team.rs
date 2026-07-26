@@ -26,7 +26,7 @@ async fn init_team_puzzles_conn(
         SELECT $1 AS team_id, p.id AS puzzle_id
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id AND r.game_id = $2
-        WHERE p.unlock_cond = 'default'
+        WHERE p.unlock_cond IS NULL
         ON CONFLICT DO NOTHING;",
         team_id,
         game_id
@@ -337,6 +337,7 @@ pub async fn user_create(
     .await?;
 
     tx.commit().await?;
+    db::puzzle::refresh_team_hint_enablements(db_pool, team_id, None).await?;
     Ok(TeamCreateResult::Ok(team_id))
 }
 
@@ -1909,6 +1910,7 @@ pub async fn admin_create(
     .await?;
     init_team_puzzles_conn(&mut tx, team_id, game_id).await?;
     tx.commit().await?;
+    db::puzzle::refresh_team_hint_enablements(pool, team_id, None).await?;
     Ok(AdminTeamCreateResult::Ok(team_id))
 }
 

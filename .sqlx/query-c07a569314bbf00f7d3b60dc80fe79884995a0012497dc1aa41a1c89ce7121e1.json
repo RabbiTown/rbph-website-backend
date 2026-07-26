@@ -1,0 +1,84 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.id, h.title, h.cooldown, h.cost_id,\n            c.cname AS \"cost_name?\", c.prec AS \"cost_prec?\", h.cost_amount,\n            (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL\n                OR COALESCE(th.unlocked, FALSE)) AS \"enabled!\",\n            CASE\n                WHEN h.enable_cond IS NOT NULL\n                    AND enabled.hint_id IS NULL\n                    AND NOT COALESCE(th.unlocked, FALSE)\n                THEN NULL\n                ELSE (CASE\n                    WHEN h.cooldown_after_enable\n                        THEN COALESCE(enabled.enabled_at, th.utime_at)\n                    ELSE GREATEST(tp.ctime_at, rp.release_at)\n                END) + (h.cooldown::BIGINT * INTERVAL '1 second')\n            END AS available_at,\n            COALESCE(th.unlocked, FALSE) AS \"unlocked!\",\n            CASE WHEN th.unlocked THEN th.utime_at ELSE NULL END AS unlocked_at\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = $2\n        LEFT JOIN rb_team_hint_enable enabled\n            ON enabled.hint_id = h.id AND enabled.team_id = $2\n        LEFT JOIN rb_currency c ON c.id = h.cost_id\n        WHERE p.game_id = $1 AND p.id = $3\n        ORDER BY h.sort, h.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "cost_name?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "cost_prec?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "enabled!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "available_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "unlocked!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "unlocked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c07a569314bbf00f7d3b60dc80fe79884995a0012497dc1aa41a1c89ce7121e1"
+}

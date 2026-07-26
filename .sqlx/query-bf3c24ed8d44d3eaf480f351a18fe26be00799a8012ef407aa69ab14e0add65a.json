@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT tp.team_id\n        FROM rb_team_puzzle tp\n        JOIN rb_puzzle p ON p.id = tp.puzzle_id\n        LEFT JOIN rb_release_event_puzzle_team event_team\n            ON event_team.event_id = $1\n            AND event_team.puzzle_id = p.id\n            AND event_team.team_id = tp.team_id\n        WHERE tp.state >= 0\n            AND (($2::INT IS NOT NULL AND p.release_phase_id = $2)\n                OR event_team.event_id IS NOT NULL)\n        ORDER BY tp.team_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "team_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bf3c24ed8d44d3eaf480f351a18fe26be00799a8012ef407aa69ab14e0add65a"
+}

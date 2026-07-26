@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n                cost_amount, backend_function, puzzle_id, ctime_at\n            FROM rb_hint\n            ORDER BY puzzle_id, sort, id;",
+  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, puzzle_id, ctime_at\n        FROM rb_hint\n        WHERE id = $1;",
   "describe": {
     "columns": [
       {
@@ -40,32 +40,44 @@
       },
       {
         "ordinal": 7,
+        "name": "enable_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "cooldown_after_enable",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
         "name": "cost_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "cost_amount",
         "type_info": "Int8"
       },
       {
-        "ordinal": 9,
+        "ordinal": 11,
         "name": "backend_function",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 13,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Int4"
+      ]
     },
     "nullable": [
       false,
@@ -79,8 +91,10 @@
       false,
       true,
       false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "0f185ec3a3d15707e76ea307a412398a64f089cbdbfdd02cd02ad1fa0f19992e"
+  "hash": "eaee228d46c874dff14ca4e4d8f2f92d1fbe0ba624e637f8671fc26b6cdd8d1b"
 }

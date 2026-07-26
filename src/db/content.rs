@@ -27,7 +27,7 @@ pub struct RbContentBlockAdminData {
     pub cdn_relative_path: Option<String>,
     pub cdn_sha256: Option<String>,
     pub cdn_size: Option<i64>,
-    pub visibility_cond: String,
+    pub visibility_cond: Option<String>,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
@@ -56,7 +56,7 @@ pub struct ContentBlockUpdate<'a> {
     pub name: &'a str,
     pub content: &'a str,
     pub content_type: i16,
-    pub visibility_cond: &'a str,
+    pub visibility_cond: Option<&'a str>,
     pub update_artifact: bool,
     pub artifact: Option<ContentBlockArtifact<'a>>,
 }
@@ -221,7 +221,7 @@ pub async fn admin_update_conn(
     )
     .fetch_optional(&mut *conn)
     .await?;
-    if result.is_some() && previous_condition.as_deref() != Some(data.visibility_cond) {
+    if result.is_some() && previous_condition.flatten().as_deref() != data.visibility_cond {
         sqlx::query!(
             "UPDATE rb_team SET content_blocks_dirty = TRUE
             WHERE game_id = (
@@ -496,7 +496,7 @@ async fn refresh_team_unlocks_if_dirty(
         LEFT JOIN rb_puzzle p ON p.id = cb.puzzle_id
         LEFT JOIN rb_round r ON r.id = cb.round_id
         WHERE COALESCE(p.game_id, r.game_id) = $1
-            AND cb.visibility_cond != 'default'
+            AND cb.visibility_cond IS NOT NULL
             AND (
                 (cb.puzzle_id IS NOT NULL AND EXISTS (
                     SELECT 1 FROM rb_team_puzzle tp
@@ -535,8 +535,10 @@ async fn refresh_team_unlocks_if_dirty(
     if !pending.is_empty() {
         let states = team_states_conn(&mut tx, team_id, game_id, team.is_locked).await?;
         for block in pending {
-            let allowed = expr::compile_gate_expr(&block.visibility_cond)
-                .ok()
+            let allowed = block
+                .visibility_cond
+                .as_deref()
+                .and_then(|condition| expr::compile_gate_expr(condition).ok())
                 .is_some_and(|cond| expr::ast::eval_compiled(&states, &cond));
             if allowed {
                 sqlx::query!(
@@ -583,7 +585,7 @@ pub async fn visible_for_team(
     .collect::<HashSet<_>>();
     let mut visible = Vec::new();
     for block in blocks {
-        if block.visibility_cond != "default" && !unlocked.contains(&block.id) {
+        if block.visibility_cond.is_some() && !unlocked.contains(&block.id) {
             continue;
         }
         let mut hasher = Sha256::new();

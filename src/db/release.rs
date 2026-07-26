@@ -380,6 +380,30 @@ pub async fn mark_content_blocks_dirty(
     Ok(())
 }
 
+pub async fn released_team_ids(
+    pool: &DbPool,
+    event_id: i64,
+    phase_id: Option<i32>,
+) -> Result<Vec<i32>, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT DISTINCT tp.team_id
+        FROM rb_team_puzzle tp
+        JOIN rb_puzzle p ON p.id = tp.puzzle_id
+        LEFT JOIN rb_release_event_puzzle_team event_team
+            ON event_team.event_id = $1
+            AND event_team.puzzle_id = p.id
+            AND event_team.team_id = tp.team_id
+        WHERE tp.state >= 0
+            AND (($2::INT IS NOT NULL AND p.release_phase_id = $2)
+                OR event_team.event_id IS NOT NULL)
+        ORDER BY tp.team_id",
+        event_id,
+        phase_id
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn next_delay_seconds(pool: &DbPool) -> Result<Option<u64>, RbInternalError> {
     let seconds = sqlx::query_scalar!(
         "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(rp.release_at) - NOW())))::BIGINT

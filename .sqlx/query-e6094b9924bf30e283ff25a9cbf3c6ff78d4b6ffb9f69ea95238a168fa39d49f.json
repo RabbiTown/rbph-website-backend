@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_hint_enable (team_id, hint_id)\n                    VALUES ($1, $2) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e6094b9924bf30e283ff25a9cbf3c6ff78d4b6ffb9f69ea95238a168fa39d49f"
+}

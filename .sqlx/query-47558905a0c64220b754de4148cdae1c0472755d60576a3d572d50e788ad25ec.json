@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_hint (\n            sort, title, title_hidden, content, content_type, cooldown, cost_id, cost_amount,\n            backend_function, puzzle_id\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, p.id\n        FROM rb_puzzle p\n        WHERE p.id = $1\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,\n            cost_amount, backend_function, puzzle_id, ctime_at;",
+  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown,\n                enable_cond, cooldown_after_enable, cost_id,\n                cost_amount, backend_function, puzzle_id, ctime_at\n            FROM rb_hint\n            WHERE puzzle_id = $1\n            ORDER BY sort, id;",
   "describe": {
     "columns": [
       {
@@ -40,42 +40,43 @@
       },
       {
         "ordinal": 7,
+        "name": "enable_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "cooldown_after_enable",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
         "name": "cost_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "cost_amount",
         "type_info": "Int8"
       },
       {
-        "ordinal": 9,
+        "ordinal": 11,
         "name": "backend_function",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 10,
+        "ordinal": 12,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 13,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4",
-        "Int4",
-        "Varchar",
-        "Bool",
-        "Text",
-        "Int2",
-        "Int4",
-        "Int4",
-        "Int8",
-        "Varchar"
+        "Int4"
       ]
     },
     "nullable": [
@@ -90,8 +91,10 @@
       false,
       true,
       false,
+      true,
+      false,
       false
     ]
   },
-  "hash": "ff45bfc348804e098bc2693f1bb7c14bf7c3e8a5b2cd0b2523900c3661dabd62"
+  "hash": "47558905a0c64220b754de4148cdae1c0472755d60576a3d572d50e788ad25ec"
 }

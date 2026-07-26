@@ -128,6 +128,18 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
             let head = atom(&items[0])?;
 
             match head {
+                "true" => {
+                    if items.len() != 1 {
+                        return Err(CompileError::BadForm("true expects 0 arg"));
+                    }
+                    Ok(GateExpr::True)
+                }
+                "false" => {
+                    if items.len() != 1 {
+                        return Err(CompileError::BadForm("false expects 0 arg"));
+                    }
+                    Ok(GateExpr::False)
+                }
                 "and" => Ok(GateExpr::And(
                     items[1..]
                         .iter()

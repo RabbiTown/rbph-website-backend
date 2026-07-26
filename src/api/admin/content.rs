@@ -41,7 +41,7 @@ struct UpdateBlockRequest {
     name: String,
     content: String,
     content_type: i16,
-    visibility_cond: String,
+    visibility_cond: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -106,8 +106,8 @@ fn valid_content_type(value: i16) -> bool {
     )
 }
 
-fn valid_condition(value: &str) -> bool {
-    value == "default" || expr::compile_gate_expr(value).is_ok()
+fn valid_condition(value: Option<&str>) -> bool {
+    value.is_none_or(|condition| expr::compile_gate_expr(condition).is_ok())
 }
 
 async fn upload_content_artifact(
@@ -278,7 +278,7 @@ async fn update_owner(
         block.name.trim().is_empty()
             || block.name.chars().count() > 120
             || !valid_content_type(block.content_type)
-            || !valid_condition(&block.visibility_cond)
+            || !valid_condition(block.visibility_cond.as_deref())
     }) {
         return RbError::bad_req(-2).http_err();
     }
@@ -323,7 +323,7 @@ async fn update_owner(
                     name: block.request.name.trim(),
                     content: &block.request.content,
                     content_type: block.request.content_type,
-                    visibility_cond: &block.request.visibility_cond,
+                    visibility_cond: block.request.visibility_cond.as_deref(),
                     update_artifact: block.clear_artifact,
                     artifact: None,
                 },

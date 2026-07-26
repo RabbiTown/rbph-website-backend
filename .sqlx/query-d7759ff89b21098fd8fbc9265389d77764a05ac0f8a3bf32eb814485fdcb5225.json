@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT puzzle_id FROM rb_team_puzzle WHERE team_id = $1 AND state >= 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7759ff89b21098fd8fbc9265389d77764a05ac0f8a3bf32eb814485fdcb5225"
+}

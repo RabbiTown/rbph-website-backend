@@ -1,0 +1,115 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            title_hidden = COALESCE($4, h.title_hidden),\n            content = COALESCE($5, h.content),\n            content_type = COALESCE($6, h.content_type),\n            cooldown = COALESCE($7, h.cooldown),\n            cost_id = CASE WHEN $8 THEN $9 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $8 AND $9::INT IS NULL THEN 0\n                ELSE COALESCE($10, h.cost_amount)\n            END,\n            backend_function = CASE WHEN $11 THEN $12 ELSE h.backend_function END,\n            enable_cond = CASE WHEN $13 THEN $14 ELSE h.enable_cond END,\n            cooldown_after_enable = CASE\n                WHEN $13 AND $14::TEXT IS NULL THEN FALSE\n                ELSE COALESCE($15, h.cooldown_after_enable)\n            END,\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $16::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($16::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $16::INT\n            ))\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, puzzle_id, ctime_at;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "sort",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "title_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "content",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "content_type",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 6,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "enable_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "cooldown_after_enable",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "backend_function",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Bool",
+        "Text",
+        "Int2",
+        "Int4",
+        "Bool",
+        "Int4",
+        "Int8",
+        "Bool",
+        "Varchar",
+        "Bool",
+        "Text",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "a9df0744e91f3812faff9a1c188e917dc143bc928b297f75064c0a62f78f7a6f"
+}

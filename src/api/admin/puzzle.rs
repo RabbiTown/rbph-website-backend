@@ -160,8 +160,8 @@ fn validate_content_type(value: i16) -> bool {
     )
 }
 
-fn validate_unlock_cond(value: &str) -> bool {
-    value == "default" || expr::compile_gate_expr(value).is_ok()
+fn validate_unlock_cond(value: Option<&str>) -> bool {
+    value.is_none_or(|condition| expr::compile_gate_expr(condition).is_ok())
 }
 
 fn validate_slug(value: &str) -> bool {
@@ -183,7 +183,7 @@ fn validate_create(data: &RbPuzzleCreateData) -> bool {
         && validate_slug_option(&data.slug)
         && data.ticket_cooldown >= 0
         && data.max_submit.is_none_or(|value| value >= 0)
-        && validate_unlock_cond(&data.unlock_cond)
+        && validate_unlock_cond(data.unlock_cond.as_deref())
         && validate_json_shape(data)
         && validate_judge_action(&data.judge)
         && data.penalty.is_array()
@@ -240,7 +240,7 @@ fn validate_update(data: &RbPuzzleUpdateData) -> bool {
     }
 
     if let Some(unlock_cond) = &data.unlock_cond
-        && !validate_unlock_cond(unlock_cond)
+        && !validate_unlock_cond(unlock_cond.as_deref())
     {
         return false;
     }
@@ -564,7 +564,7 @@ async fn unlock_check(
         &app,
         puzzle.id,
         puzzle.game_id,
-        &puzzle.unlock_cond,
+        puzzle.unlock_cond.as_deref(),
     )
     .await?;
 
@@ -607,7 +607,7 @@ async fn clear_states(
             &app,
             puzzle.id,
             puzzle.game_id,
-            &puzzle.unlock_cond,
+            puzzle.unlock_cond.as_deref(),
         )
         .await?
     } else {

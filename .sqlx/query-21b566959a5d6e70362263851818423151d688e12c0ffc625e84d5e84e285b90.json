@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT available.id,\n            CASE\n                WHEN available.title_hidden AND NOW() < available.available_at\n                THEN NULL\n                ELSE available.title\n            END AS \"title?\",\n            available.title_hidden, available.cooldown,\n            available.available_at AS \"available_at!\",\n            available.cost_id, available.cost_amount\n        FROM (\n            SELECT h.id, h.sort, h.title, h.title_hidden, h.cooldown,\n                h.cost_id, h.cost_amount,\n                (CASE\n                    WHEN h.cooldown_after_enable\n                        THEN COALESCE(enabled.enabled_at, purchased.utime_at)\n                    ELSE GREATEST(tp.ctime_at, release.release_at)\n                END) + (h.cooldown * INTERVAL '1 second') AS available_at\n            FROM rb_hint h\n            JOIN rb_puzzle p ON p.id = h.puzzle_id\n            JOIN rb_puzzle_effective_release release ON release.puzzle_id = p.id\n            JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1\n            LEFT JOIN rb_team_hint_enable enabled\n                ON enabled.hint_id = h.id AND enabled.team_id = $1\n            LEFT JOIN rb_team_hint purchased\n                ON purchased.hint_id = h.id AND purchased.team_id = $1 AND purchased.unlocked\n            WHERE p.id = $2 AND tp.state >= 0 AND release.release_at <= NOW()\n                AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL\n                    OR purchased.hint_id IS NOT NULL)\n        ) available\n        ORDER BY available.sort, available.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "cooldown",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "available_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "21b566959a5d6e70362263851818423151d688e12c0ffc625e84d5e84e285b90"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.id, h.enable_cond AS \"enable_cond!\"\n        FROM rb_hint h\n        JOIN rb_puzzle_effective_release release ON release.puzzle_id = h.puzzle_id\n        JOIN rb_team_puzzle tp\n            ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1 AND tp.state >= 0\n        LEFT JOIN rb_team_hint_enable enabled\n            ON enabled.team_id = $1 AND enabled.hint_id = h.id\n        LEFT JOIN rb_team_hint purchased\n            ON purchased.team_id = $1 AND purchased.hint_id = h.id AND purchased.unlocked\n        WHERE h.enable_cond IS NOT NULL\n            AND enabled.hint_id IS NULL\n            AND purchased.hint_id IS NULL\n            AND release.release_at <= NOW()\n            AND ($2::INT IS NULL OR h.puzzle_id = $2)\n        ORDER BY h.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "enable_cond!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "bb878b4e2a5e981a61118390699306984c89a4c073bbd0d5806020157727b720"
+}

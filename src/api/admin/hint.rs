@@ -10,6 +10,7 @@ use crate::{
         puzzle::{RbHintAdminData, RbHintCreateData, RbHintUpdateData},
     },
     error::{RbError, RbInternalError},
+    expr,
     model::game::RbContentType,
 };
 
@@ -89,6 +90,10 @@ fn validate_backend_function(value: &str) -> bool {
         && value.len() <= 64
 }
 
+fn validate_enable_condition(value: Option<&str>) -> bool {
+    value.is_none_or(|condition| expr::compile_gate_expr(condition).is_ok())
+}
+
 async fn get_hint_game(app: &AppState, puzzle_id: i32) -> Result<Option<i32>, RbInternalError> {
     db::puzzle::get_puzzle_game(&app.db, puzzle_id).await
 }
@@ -102,6 +107,11 @@ async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool
         Some(data.cost_amount),
         data.backend_function.as_deref(),
     ) {
+        return Ok(false);
+    }
+    if !validate_enable_condition(data.enable_cond.as_deref())
+        || (data.enable_cond.is_none() && data.cooldown_after_enable)
+    {
         return Ok(false);
     }
 
@@ -136,6 +146,21 @@ async fn validate_update(
             .map(|value| value.as_deref())
             .unwrap_or(current.backend_function.as_deref()),
     ) {
+        return Ok(false);
+    }
+
+    let enable_cond = data
+        .enable_cond
+        .as_ref()
+        .map(|condition| condition.as_deref())
+        .unwrap_or(current.enable_cond.as_deref());
+    let cooldown_after_enable = if matches!(data.enable_cond, Some(None)) {
+        false
+    } else {
+        data.cooldown_after_enable
+            .unwrap_or(current.cooldown_after_enable)
+    };
+    if !validate_enable_condition(enable_cond) || (enable_cond.is_none() && cooldown_after_enable) {
         return Ok(false);
     }
 

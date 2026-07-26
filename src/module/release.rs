@@ -18,6 +18,9 @@ pub async fn process_due_releases(app: &AppState) -> Result<(), RbInternalError>
         let (puzzles, rounds) =
             db::release::event_cache_targets(&app.db, event.id, event.phase_id).await?;
         db::release::mark_content_blocks_dirty(&app.db, event.id, event.phase_id).await?;
+        for team_id in db::release::released_team_ids(&app.db, event.id, event.phase_id).await? {
+            db::puzzle::refresh_team_hint_enablements(&app.db, team_id, None).await?;
+        }
         for puzzle_id in puzzles {
             db::cache::del_pattern(&app.kv, &format!("puzzle:{puzzle_id}:team:*:full_state"))
                 .await?;

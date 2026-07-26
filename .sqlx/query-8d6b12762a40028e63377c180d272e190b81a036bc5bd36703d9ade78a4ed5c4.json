@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN((CASE\n                WHEN h.cooldown_after_enable THEN enabled.enabled_at\n                ELSE GREATEST(tp.ctime_at, release.release_at)\n            END) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_puzzle_effective_release release ON release.puzzle_id = p.id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1\n        LEFT JOIN rb_team_hint_enable enabled\n            ON enabled.hint_id = h.id AND enabled.team_id = $1\n        WHERE h.puzzle_id = $2\n            AND tp.state >= 0\n            AND release.release_at <= NOW()\n            AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL)\n            AND h.title_hidden\n            AND (CASE\n                    WHEN h.cooldown_after_enable THEN enabled.enabled_at\n                    ELSE GREATEST(tp.ctime_at, release.release_at)\n                END) + (h.cooldown * INTERVAL '1 second') > NOW();",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "next_unlock_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8d6b12762a40028e63377c180d272e190b81a036bc5bd36703d9ade78a4ed5c4"
+}

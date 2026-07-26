@@ -750,10 +750,8 @@ pub async fn get_unlock_conds_by_game(
     let exprs: Vec<(i32, GateExpr)> = raw_exprs
         .iter()
         .filter_map(|r| {
-            if r.unlock_cond == "default" {
-                return None;
-            }
-            match expr::compile_gate_expr(&r.unlock_cond) {
+            let unlock_cond = r.unlock_cond.as_deref()?;
+            match expr::compile_gate_expr(unlock_cond) {
                 Ok(expr) => Some((r.id, expr)),
                 Err(e) => {
                     log::warn!("Failed to parse unlock_cond for puzzle {}: {}", r.id, e);
@@ -837,8 +835,9 @@ pub struct StaffPuzzleHintStatus {
     pub cost_name: Option<String>,
     pub cost_prec: Option<i32>,
     pub cost_amount: i64,
-    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
-    pub available_at: OffsetDateTime,
+    pub enabled: bool,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub available_at: Option<OffsetDateTime>,
     pub unlocked: bool,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub unlocked_at: Option<OffsetDateTime>,
@@ -872,6 +871,7 @@ pub async fn get_staff_puzzle_team_status(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Option<StaffPuzzleTeamStatus>, RbInternalError> {
+    refresh_team_hint_enablements(pool, team_id, Some(puzzle_id)).await?;
     let row = sqlx::query!(
         "SELECT NOW() AS \"server_time!\", tp.state,
             GREATEST(tp.ctime_at, rp.release_at) AS \"unlock_at!\",
@@ -961,8 +961,19 @@ pub async fn get_staff_puzzle_team_status(
     let hints = sqlx::query!(
         "SELECT h.id, h.title, h.cooldown, h.cost_id,
             c.cname AS \"cost_name?\", c.prec AS \"cost_prec?\", h.cost_amount,
-            GREATEST(tp.ctime_at, rp.release_at)
-                + (h.cooldown::BIGINT * INTERVAL '1 second') AS \"available_at!\",
+            (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL
+                OR COALESCE(th.unlocked, FALSE)) AS \"enabled!\",
+            CASE
+                WHEN h.enable_cond IS NOT NULL
+                    AND enabled.hint_id IS NULL
+                    AND NOT COALESCE(th.unlocked, FALSE)
+                THEN NULL
+                ELSE (CASE
+                    WHEN h.cooldown_after_enable
+                        THEN COALESCE(enabled.enabled_at, th.utime_at)
+                    ELSE GREATEST(tp.ctime_at, rp.release_at)
+                END) + (h.cooldown::BIGINT * INTERVAL '1 second')
+            END AS available_at,
             COALESCE(th.unlocked, FALSE) AS \"unlocked!\",
             CASE WHEN th.unlocked THEN th.utime_at ELSE NULL END AS unlocked_at
         FROM rb_hint h
@@ -970,6 +981,8 @@ pub async fn get_staff_puzzle_team_status(
         JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = $2
+        LEFT JOIN rb_team_hint_enable enabled
+            ON enabled.hint_id = h.id AND enabled.team_id = $2
         LEFT JOIN rb_currency c ON c.id = h.cost_id
         WHERE p.game_id = $1 AND p.id = $3
         ORDER BY h.sort, h.id;",
@@ -988,6 +1001,7 @@ pub async fn get_staff_puzzle_team_status(
         cost_name: hint.cost_name,
         cost_prec: hint.cost_prec,
         cost_amount: hint.cost_amount,
+        enabled: hint.enabled,
         available_at: hint.available_at,
         unlocked: hint.unlocked,
         unlocked_at: hint.unlocked_at,
@@ -1770,6 +1784,9 @@ pub async fn submit_answer(
     } else {
         vec![]
     };
+    if do_unlock {
+        refresh_team_hint_enablements(&app.db, team_id, None).await?;
+    }
     content_changed = content_changed || !unlocks.is_empty();
     let has_custom_judge = rules
         .iter()
@@ -1839,6 +1856,136 @@ impl PuzzleStates for RbPuzzleStates {
         self.triggers
             .contains(&(id.try_into().unwrap_or(i32::MAX), key.to_string()))
     }
+}
+
+async fn team_gate_state_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+) -> Result<Option<RbPuzzleStates>, RbInternalError> {
+    let team = sqlx::query!(
+        "SELECT game_id, is_locked FROM rb_team WHERE id = $1",
+        team_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(team) = team else {
+        return Ok(None);
+    };
+
+    let solved = sqlx::query_scalar!(
+        "SELECT puzzle_id FROM rb_team_puzzle WHERE team_id = $1 AND state >= 1",
+        team_id
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .collect();
+    let triggers = sqlx::query!(
+        "SELECT puzzle_id, trigger_key FROM rb_team_puzzle_trigger WHERE team_id = $1",
+        team_id
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|row| (row.puzzle_id, row.trigger_key))
+    .collect();
+    let round_rows = sqlx::query!(
+        "SELECT id, slug FROM rb_round WHERE game_id = $1",
+        team.game_id
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let puzzle_rows = sqlx::query!(
+        "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id
+        FROM rb_puzzle p
+        JOIN rb_round r ON r.id = p.round_id
+        WHERE p.game_id = $1
+        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
+        team.game_id
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    let round_slugs = round_rows
+        .into_iter()
+        .filter_map(|row| Some((row.slug?, row.id.try_into().ok()?)))
+        .collect();
+    let mut puzzle_slugs = HashMap::new();
+    let mut round_puzzles: HashMap<u32, Vec<u32>> = HashMap::new();
+    for row in puzzle_rows {
+        let Ok(id) = row.id.try_into() else {
+            continue;
+        };
+        if let Some(slug) = row.slug {
+            puzzle_slugs.insert(slug, id);
+        }
+        if row.round_puzzle_id != Some(row.id)
+            && let Ok(round_id) = row.round_id.try_into()
+        {
+            round_puzzles.entry(round_id).or_default().push(id);
+        }
+    }
+
+    Ok(Some(RbPuzzleStates {
+        solved,
+        puzzle_slugs,
+        round_slugs,
+        round_puzzles,
+        triggers,
+        game_started: team.is_locked,
+    }))
+}
+
+pub async fn refresh_team_hint_enablements(
+    pool: &DbPool,
+    team_id: i32,
+    puzzle_id: Option<i32>,
+) -> Result<(), RbInternalError> {
+    let mut tx = pool.begin().await?;
+    let pending = sqlx::query!(
+        r#"SELECT h.id, h.enable_cond AS "enable_cond!"
+        FROM rb_hint h
+        JOIN rb_puzzle_effective_release release ON release.puzzle_id = h.puzzle_id
+        JOIN rb_team_puzzle tp
+            ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1 AND tp.state >= 0
+        LEFT JOIN rb_team_hint_enable enabled
+            ON enabled.team_id = $1 AND enabled.hint_id = h.id
+        LEFT JOIN rb_team_hint purchased
+            ON purchased.team_id = $1 AND purchased.hint_id = h.id AND purchased.unlocked
+        WHERE h.enable_cond IS NOT NULL
+            AND enabled.hint_id IS NULL
+            AND purchased.hint_id IS NULL
+            AND release.release_at <= NOW()
+            AND ($2::INT IS NULL OR h.puzzle_id = $2)
+        ORDER BY h.id"#,
+        team_id,
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if !pending.is_empty()
+        && let Some(state) = team_gate_state_conn(&mut tx, team_id).await?
+    {
+        for hint in pending {
+            let enabled = expr::compile_gate_expr(&hint.enable_cond)
+                .ok()
+                .is_some_and(|condition| expr::ast::eval_compiled(&state, &condition));
+            if enabled {
+                sqlx::query!(
+                    "INSERT INTO rb_team_hint_enable (team_id, hint_id)
+                    VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    team_id,
+                    hint.id
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+    }
+
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
@@ -1996,7 +2143,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
     app: &AppState,
     puzzle_id: i32,
     game_id: i32,
-    unlock_cond: &str,
+    unlock_cond: Option<&str>,
 ) -> Result<Vec<i32>, RbInternalError> {
     let round_rows = sqlx::query!(
         "SELECT id, slug
@@ -2041,11 +2188,10 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
         }
     }
 
-    let compiled_unlock_cond = if unlock_cond == "default" {
-        None
-    } else {
-        Some(expr::compile_gate_expr(unlock_cond).map_err(RbInternalError::Other)?)
-    };
+    let compiled_unlock_cond = unlock_cond
+        .map(expr::compile_gate_expr)
+        .transpose()
+        .map_err(RbInternalError::Other)?;
 
     let trigger_rows = sqlx::query!(
         "SELECT tpt.team_id, tpt.puzzle_id, tpt.trigger_key
@@ -2141,6 +2287,10 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
         )
         .execute(&app.db)
         .await?;
+
+        for team_id in &inserted_team_ids {
+            refresh_team_hint_enablements(&app.db, *team_id, Some(puzzle_id)).await?;
+        }
     }
 
     Ok(inserted_team_ids)
@@ -2194,7 +2344,7 @@ pub async fn admin_clear_puzzle_team_states(
     .fetch_all(&mut *tx)
     .await?;
 
-    let hint_team_ids = sqlx::query_scalar!(
+    let mut hint_team_ids = sqlx::query_scalar!(
         "DELETE FROM rb_team_hint th
         USING rb_hint h
         WHERE th.hint_id = h.id AND h.puzzle_id = $1
@@ -2203,6 +2353,18 @@ pub async fn admin_clear_puzzle_team_states(
     )
     .fetch_all(&mut *tx)
     .await?;
+
+    hint_team_ids.extend(
+        sqlx::query_scalar!(
+            "DELETE FROM rb_team_hint_enable enabled
+            USING rb_hint h
+            WHERE enabled.hint_id = h.id AND h.puzzle_id = $1
+            RETURNING enabled.team_id;",
+            puzzle_id
+        )
+        .fetch_all(&mut *tx)
+        .await?,
+    );
 
     let ticket_team_ids = sqlx::query_scalar!(
         "DELETE FROM rb_ticket
@@ -2260,6 +2422,8 @@ pub struct RbHintShowData {
     pub title: Option<String>,
     pub title_hidden: bool,
     pub cooldown: i32,
+    #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
+    pub available_at: OffsetDateTime,
     pub cost_id: Option<i32>,
     pub cost_amount: i64,
 }
@@ -2269,23 +2433,39 @@ pub async fn get_hints_show_for_team(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Vec<RbHintShowData>, RbInternalError> {
+    refresh_team_hint_enablements(db_pool, team_id, Some(puzzle_id)).await?;
     let result = sqlx::query_as!(
         RbHintShowData,
-        "SELECT h.id,
+        "SELECT available.id,
             CASE
-                WHEN h.title_hidden
-                    AND NOW() < GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')
+                WHEN available.title_hidden AND NOW() < available.available_at
                 THEN NULL
-                ELSE h.title
+                ELSE available.title
             END AS \"title?\",
-            h.title_hidden,
-            h.cooldown, h.cost_id, h.cost_amount
-        FROM rb_hint h
-        JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
-        JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
-        WHERE p.id = $2 AND tp.state >= 0 AND rp.release_at <= NOW()
-        ORDER BY h.sort, h.id;",
+            available.title_hidden, available.cooldown,
+            available.available_at AS \"available_at!\",
+            available.cost_id, available.cost_amount
+        FROM (
+            SELECT h.id, h.sort, h.title, h.title_hidden, h.cooldown,
+                h.cost_id, h.cost_amount,
+                (CASE
+                    WHEN h.cooldown_after_enable
+                        THEN COALESCE(enabled.enabled_at, purchased.utime_at)
+                    ELSE GREATEST(tp.ctime_at, release.release_at)
+                END) + (h.cooldown * INTERVAL '1 second') AS available_at
+            FROM rb_hint h
+            JOIN rb_puzzle p ON p.id = h.puzzle_id
+            JOIN rb_puzzle_effective_release release ON release.puzzle_id = p.id
+            JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
+            LEFT JOIN rb_team_hint_enable enabled
+                ON enabled.hint_id = h.id AND enabled.team_id = $1
+            LEFT JOIN rb_team_hint purchased
+                ON purchased.hint_id = h.id AND purchased.team_id = $1 AND purchased.unlocked
+            WHERE p.id = $2 AND tp.state >= 0 AND release.release_at <= NOW()
+                AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL
+                    OR purchased.hint_id IS NOT NULL)
+        ) available
+        ORDER BY available.sort, available.id;",
         team_id,
         puzzle_id
     )
@@ -2355,16 +2535,25 @@ pub async fn sync_due_hints(
     let _ = get_hints_view_for_team(db_pool, team_id, puzzle_id).await?;
 
     let next_unlock_at = sqlx::query!(
-        "SELECT MIN(GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
+        "SELECT MIN((CASE
+                WHEN h.cooldown_after_enable THEN enabled.enabled_at
+                ELSE GREATEST(tp.ctime_at, release.release_at)
+            END) + (h.cooldown * INTERVAL '1 second')) AS next_unlock_at
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
-        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
+        JOIN rb_puzzle_effective_release release ON release.puzzle_id = p.id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
+        LEFT JOIN rb_team_hint_enable enabled
+            ON enabled.hint_id = h.id AND enabled.team_id = $1
         WHERE h.puzzle_id = $2
             AND tp.state >= 0
-            AND rp.release_at <= NOW()
+            AND release.release_at <= NOW()
+            AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL)
             AND h.title_hidden
-            AND GREATEST(tp.ctime_at, rp.release_at) + (h.cooldown * INTERVAL '1 second') > NOW();",
+            AND (CASE
+                    WHEN h.cooldown_after_enable THEN enabled.enabled_at
+                    ELSE GREATEST(tp.ctime_at, release.release_at)
+                END) + (h.cooldown * INTERVAL '1 second') > NOW();",
         team_id,
         puzzle_id
     )
@@ -2389,6 +2578,22 @@ pub async fn purchase_hint(
     user_id: i32,
     hint_id: i32,
 ) -> Result<PurchaseHintResult, RbInternalError> {
+    let target = sqlx::query!(
+        "SELECT tm.team_id, h.puzzle_id
+        FROM rb_hint h
+        JOIN rb_puzzle p ON p.id = h.puzzle_id
+        JOIN rb_team_member tm ON tm.game_id = p.game_id
+        WHERE tm.user_id = $1 AND h.id = $2",
+        user_id,
+        hint_id
+    )
+    .fetch_optional(&app.db)
+    .await?;
+    let Some(target) = target else {
+        return Ok(PurchaseHintResult::Unavailable);
+    };
+    refresh_team_hint_enablements(&app.db, target.team_id, Some(target.puzzle_id)).await?;
+
     let info = sqlx::query!(
         "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,
             h.puzzle_id, p.round_id, p.title AS puzzle_title,
@@ -2402,10 +2607,16 @@ pub async fn purchase_hint(
         JOIN rb_user u ON u.id = tm.user_id
         JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
+        LEFT JOIN rb_team_hint_enable enabled
+            ON enabled.hint_id = h.id AND enabled.team_id = tm.team_id
         WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
             AND rp.release_at <= NOW()
             AND NOT COALESCE(th.unlocked, FALSE)
-            AND GREATEST(tp.ctime_at, rp.release_at) <= NOW() - (h.cooldown * INTERVAL '1 second');",
+            AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL)
+            AND (CASE
+                    WHEN h.cooldown_after_enable THEN enabled.enabled_at
+                    ELSE GREATEST(tp.ctime_at, rp.release_at)
+                END) <= NOW() - (h.cooldown * INTERVAL '1 second');",
         user_id,
         hint_id
     )
@@ -2626,7 +2837,7 @@ pub struct RbPuzzleAdminData {
     pub penalty: serde_json::Value,
     pub submit_requirements: serde_json::Value,
     pub max_submit: Option<i32>,
-    pub unlock_cond: String,
+    pub unlock_cond: Option<String>,
     pub release_phase_id: Option<i32>,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub immediate_release_at: Option<OffsetDateTime>,
@@ -2655,7 +2866,7 @@ pub struct RbPuzzleCreateData {
     #[serde(default = "default_submit_requirements")]
     pub submit_requirements: serde_json::Value,
     pub max_submit: Option<i32>,
-    pub unlock_cond: String,
+    pub unlock_cond: Option<String>,
     pub release_phase_id: Option<i32>,
     #[serde(default)]
     pub release_immediately: bool,
@@ -2684,7 +2895,11 @@ pub struct RbPuzzleUpdateData {
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
     )]
     pub max_submit: Option<Option<i32>>,
-    pub unlock_cond: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
+    pub unlock_cond: Option<Option<String>>,
     #[serde(
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
@@ -2922,38 +3137,38 @@ pub async fn admin_update(
             ptype = COALESCE($6, p.ptype),
             judge = COALESCE($7, p.judge),
             penalty = COALESCE($8, p.penalty),
-            submit_requirements = COALESCE($18, p.submit_requirements),
+            submit_requirements = COALESCE($19, p.submit_requirements),
             max_submit = CASE WHEN $9 THEN $10 ELSE p.max_submit END,
-            unlock_cond = COALESCE($11, p.unlock_cond),
+            unlock_cond = CASE WHEN $11 THEN $12 ELSE p.unlock_cond END,
             release_phase_id = CASE
-                WHEN $14 THEN NULL
-                WHEN $12 THEN $13
+                WHEN $15 THEN NULL
+                WHEN $13 THEN $14
                 ELSE p.release_phase_id
             END,
             immediate_release_at = CASE
-                WHEN $14 THEN NOW()
-                WHEN $12 THEN NULL
+                WHEN $15 THEN NOW()
+                WHEN $13 THEN NULL
                 ELSE p.immediate_release_at
             END,
             round_id = COALESCE((
-                SELECT r.id FROM rb_round r WHERE r.id = $15::INT
+                SELECT r.id FROM rb_round r WHERE r.id = $16::INT
             ), p.round_id),
-            ticket_enabled = COALESCE($16, p.ticket_enabled),
-            ticket_cooldown = COALESCE($17, p.ticket_cooldown)
+            ticket_enabled = COALESCE($17, p.ticket_enabled),
+            ticket_cooldown = COALESCE($18, p.ticket_cooldown)
         WHERE p.id = $1
-            AND NOT ($14 AND $12)
-            AND (NOT $12 OR $13::INT IS NULL OR EXISTS (
+            AND NOT ($15 AND $13)
+            AND (NOT $13 OR $14::INT IS NULL OR EXISTS (
                 SELECT 1 FROM rb_release_phase target_phase
-                WHERE target_phase.id = $13::INT AND target_phase.game_id = p.game_id
+                WHERE target_phase.id = $14::INT AND target_phase.game_id = p.game_id
                     AND target_phase.release_at > NOW()
                     AND NOT EXISTS (SELECT 1 FROM rb_release_event target_event WHERE target_event.phase_id = target_phase.id)
             ))
-            AND ($15::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_round target_round WHERE target_round.id = $15::INT
+            AND ($16::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_round target_round WHERE target_round.id = $16::INT
             ))
-            AND ($15::INT IS NULL OR NOT EXISTS (
+            AND ($16::INT IS NULL OR NOT EXISTS (
                 SELECT 1 FROM rb_round owner_round
-                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $15::INT
+                WHERE owner_round.puzzle = p.id AND owner_round.id IS DISTINCT FROM $16::INT
             ))
         RETURNING p.id, p.game_id,
             p.slug, p.sort, p.title, p.ptype,
@@ -2970,7 +3185,8 @@ pub async fn admin_update(
         data.penalty,
         max_submit_is_set,
         max_submit,
-        data.unlock_cond,
+        data.unlock_cond.is_some(),
+        data.unlock_cond.clone().flatten(),
         release_phase_is_set,
         release_phase_id,
         release_immediately,
@@ -3066,6 +3282,8 @@ pub struct RbHintAdminData {
     pub content: String,
     pub content_type: i16,
     pub cooldown: i32,
+    pub enable_cond: Option<String>,
+    pub cooldown_after_enable: bool,
     pub cost_id: Option<i32>,
     pub cost_amount: i64,
     pub backend_function: Option<String>,
@@ -3086,6 +3304,9 @@ pub struct RbHintCreateData {
     pub content_type: i16,
     #[serde(default)]
     pub cooldown: i32,
+    pub enable_cond: Option<String>,
+    #[serde(default)]
+    pub cooldown_after_enable: bool,
     pub cost_id: Option<i32>,
     #[serde(default)]
     pub cost_amount: i64,
@@ -3101,6 +3322,12 @@ pub struct RbHintUpdateData {
     pub content: Option<String>,
     pub content_type: Option<i16>,
     pub cooldown: Option<i32>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
+    pub enable_cond: Option<Option<String>>,
+    pub cooldown_after_enable: Option<bool>,
     #[serde(
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
@@ -3122,7 +3349,8 @@ pub async fn admin_list_hints(
     let result = if let Some(puzzle_id) = puzzle_id {
         sqlx::query_as!(
             RbHintAdminData,
-            "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
+            "SELECT id, sort, title, title_hidden, content, content_type, cooldown,
+                enable_cond, cooldown_after_enable, cost_id,
                 cost_amount, backend_function, puzzle_id, ctime_at
             FROM rb_hint
             WHERE puzzle_id = $1
@@ -3134,7 +3362,8 @@ pub async fn admin_list_hints(
     } else {
         sqlx::query_as!(
             RbHintAdminData,
-            "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
+            "SELECT id, sort, title, title_hidden, content, content_type, cooldown,
+                enable_cond, cooldown_after_enable, cost_id,
                 cost_amount, backend_function, puzzle_id, ctime_at
             FROM rb_hint
             ORDER BY puzzle_id, sort, id;"
@@ -3152,7 +3381,8 @@ pub async fn admin_get_hint(
 ) -> Result<Option<RbHintAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbHintAdminData,
-        "SELECT id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
+        "SELECT id, sort, title, title_hidden, content, content_type, cooldown,
+            enable_cond, cooldown_after_enable, cost_id,
             cost_amount, backend_function, puzzle_id, ctime_at
         FROM rb_hint
         WHERE id = $1;",
@@ -3171,13 +3401,15 @@ pub async fn admin_create_hint(
     let result = sqlx::query_as!(
         RbHintAdminData,
         "INSERT INTO rb_hint (
-            sort, title, title_hidden, content, content_type, cooldown, cost_id, cost_amount,
+            sort, title, title_hidden, content, content_type, cooldown,
+            enable_cond, cooldown_after_enable, cost_id, cost_amount,
             backend_function, puzzle_id
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, p.id
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, p.id
         FROM rb_puzzle p
         WHERE p.id = $1
-        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
+        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,
+            enable_cond, cooldown_after_enable, cost_id,
             cost_amount, backend_function, puzzle_id, ctime_at;",
         data.puzzle_id,
         data.sort,
@@ -3186,6 +3418,8 @@ pub async fn admin_create_hint(
         data.content,
         data.content_type,
         data.cooldown,
+        data.enable_cond,
+        data.cooldown_after_enable,
         data.cost_id,
         data.cost_amount,
         data.backend_function,
@@ -3205,6 +3439,8 @@ pub async fn admin_update_hint(
     let cost_id = data.cost_id.flatten();
     let backend_function_is_set = data.backend_function.is_some();
     let backend_function = data.backend_function.clone().flatten();
+    let enable_cond_is_set = data.enable_cond.is_some();
+    let enable_cond = data.enable_cond.clone().flatten();
 
     let result = sqlx::query_as!(
         RbHintAdminData,
@@ -3221,14 +3457,20 @@ pub async fn admin_update_hint(
                 ELSE COALESCE($10, h.cost_amount)
             END,
             backend_function = CASE WHEN $11 THEN $12 ELSE h.backend_function END,
+            enable_cond = CASE WHEN $13 THEN $14 ELSE h.enable_cond END,
+            cooldown_after_enable = CASE
+                WHEN $13 AND $14::TEXT IS NULL THEN FALSE
+                ELSE COALESCE($15, h.cooldown_after_enable)
+            END,
             puzzle_id = COALESCE((
-                SELECT p.id FROM rb_puzzle p WHERE p.id = $13::INT
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $16::INT
             ), h.puzzle_id)
         WHERE h.id = $1
-            AND ($13::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_puzzle p WHERE p.id = $13::INT
+            AND ($16::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $16::INT
             ))
-        RETURNING id, sort, title, title_hidden, content, content_type, cooldown, cost_id,
+        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,
+            enable_cond, cooldown_after_enable, cost_id,
             cost_amount, backend_function, puzzle_id, ctime_at;",
         hint_id,
         data.sort,
@@ -3242,6 +3484,9 @@ pub async fn admin_update_hint(
         data.cost_amount,
         backend_function_is_set,
         backend_function,
+        enable_cond_is_set,
+        enable_cond,
+        data.cooldown_after_enable,
         data.puzzle_id
     )
     .fetch_optional(pool)

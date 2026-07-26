@@ -31,6 +31,8 @@ pub enum ValueExpr {
 
 #[derive(Debug, Clone)]
 pub enum GateExpr {
+    True,
+    False,
     And(Vec<GateExpr>),
     Or(Vec<GateExpr>),
     Not(Box<GateExpr>),
@@ -106,6 +108,8 @@ pub fn eval_value<S: PuzzleStates>(state: &S, expr: &ValueExpr) -> CountSize {
 
 pub fn eval_compiled<S: PuzzleStates>(state: &S, expr: &GateExpr) -> bool {
     match expr {
+        GateExpr::True => true,
+        GateExpr::False => false,
         GateExpr::And(xs) => xs.iter().all(|e| eval_compiled(state, e)),
         GateExpr::Or(xs) => xs.iter().any(|e| eval_compiled(state, e)),
         GateExpr::Not(x) => !eval_compiled(state, x),

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,\n            h.puzzle_id, p.round_id, p.title AS puzzle_title,\n            h.title AS hint_title, h.cost_id, h.cost_amount, h.backend_function\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team t ON t.id = tm.team_id\n        JOIN rb_user u ON u.id = tm.user_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0\n            AND rp.release_at <= NOW()\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND GREATEST(tp.ctime_at, rp.release_at) <= NOW() - (h.cooldown * INTERVAL '1 second');",
+  "query": "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,\n            h.puzzle_id, p.round_id, p.title AS puzzle_title,\n            h.title AS hint_title, h.cost_id, h.cost_amount, h.backend_function\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team t ON t.id = tm.team_id\n        JOIN rb_user u ON u.id = tm.user_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        LEFT JOIN rb_team_hint_enable enabled\n            ON enabled.hint_id = h.id AND enabled.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0\n            AND rp.release_at <= NOW()\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL)\n            AND (CASE\n                    WHEN h.cooldown_after_enable THEN enabled.enabled_at\n                    ELSE GREATEST(tp.ctime_at, rp.release_at)\n                END) <= NOW() - (h.cooldown * INTERVAL '1 second');",
   "describe": {
     "columns": [
       {
@@ -79,5 +79,5 @@
       true
     ]
   },
-  "hash": "8baf835ca97a6642a68ec9807c6d659fcfce676b002828bcf62fe1d3383edfa5"
+  "hash": "6d419f30d6df1e21485bb9d236746f3da0d7a219bc57f759df1b530a5c02b011"
 }

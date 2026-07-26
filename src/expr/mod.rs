@@ -24,7 +24,7 @@ pub fn eval<S: PuzzleStates>(state: &S, expr: &str) -> bool {
 
 mod test {
     use crate::expr::{
-        eval,
+        compile_gate_expr, eval,
         types::{PuzzleId, PuzzleStates},
     };
 
@@ -118,6 +118,11 @@ mod test {
 
         assert!(eval(&state, "(triggered 2 extra-content)"));
         assert!(eval(&state, "(triggered alpha extra-content)"));
+        assert!(eval(&state, "(true)"));
+        assert!(!eval(&state, "(false)"));
+        assert!(compile_gate_expr("(true unexpected)").is_err());
+        assert!(compile_gate_expr("(false unexpected)").is_err());
+        assert!(compile_gate_expr("default").is_err());
         assert!(!eval(&state, "(triggered 2 missing)"));
 
         let expr = "

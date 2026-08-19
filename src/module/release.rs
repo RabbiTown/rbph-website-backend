@@ -12,8 +12,8 @@ pub async fn process_due_releases(app: &AppState) -> Result<(), RbInternalError>
                 .await?
         {
             db::board::LEADER_BOARD_CACHE
-                .invalidate_game(event.game_id)
-                .await;
+                .invalidate_game(&app.db, event.game_id)
+                .await?;
         }
         let (puzzles, rounds) =
             db::release::event_cache_targets(&app.db, event.id, event.phase_id).await?;

@@ -88,8 +88,8 @@ async fn update(
     };
     if leaderboard_changed {
         db::board::LEADER_BOARD_CACHE
-            .invalidate_game(path.game_id)
-            .await;
+            .invalidate_game(&app.db, path.game_id)
+            .await?;
     }
     app.sync_hub.notify_game_release_updated(
         path.game_id,

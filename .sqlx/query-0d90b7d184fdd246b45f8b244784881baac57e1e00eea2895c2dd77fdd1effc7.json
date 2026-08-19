@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH target AS (\n                SELECT game_id, id AS team_id FROM rb_team WHERE id = $1\n            ), state AS (\n                INSERT INTO rb_leaderboard_refresh_state (game_id, board_type)\n                SELECT game_id, $2 FROM target\n                ON CONFLICT (game_id, board_type) DO NOTHING\n            )\n            INSERT INTO rb_leaderboard_dirty_team (game_id, board_type, team_id, affects_order)\n            SELECT game_id, $2, team_id, $3 FROM target\n            ON CONFLICT (game_id, board_type, team_id) DO UPDATE SET\n                revision = nextval('rb_leaderboard_dirty_revision_seq'),\n                affects_order = rb_leaderboard_dirty_team.affects_order OR EXCLUDED.affects_order,\n                updated_at = CURRENT_TIMESTAMP;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d90b7d184fdd246b45f8b244784881baac57e1e00eea2895c2dd77fdd1effc7"
+}

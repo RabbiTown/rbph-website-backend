@@ -11,6 +11,7 @@ pub struct SystemSettings {
     pub captcha_registration_required: bool,
     pub max_sessions: i16,
     pub max_websocket_connections: i16,
+    pub leaderboard_refresh_interval_seconds: i32,
     pub maintenance_enabled: bool,
     pub maintenance_message: String,
     pub updated_by: Option<i32>,
@@ -25,6 +26,7 @@ pub struct SystemSettingsUpdate<'a> {
     pub captcha_registration_required: bool,
     pub max_sessions: i16,
     pub max_websocket_connections: i16,
+    pub leaderboard_refresh_interval_seconds: i32,
     pub maintenance_enabled: bool,
     pub maintenance_message: &'a str,
     pub updated_by: i32,
@@ -35,7 +37,7 @@ pub async fn get(pool: &DbPool) -> Result<SystemSettings, RbInternalError> {
         SystemSettings,
         "SELECT registration_open, require_email_verification,
             captcha_login_required, captcha_registration_required, max_sessions,
-            max_websocket_connections,
+            max_websocket_connections, leaderboard_refresh_interval_seconds,
             maintenance_enabled, maintenance_message, updated_by, updated_at
         FROM rb_system_settings WHERE singleton = TRUE"
     )
@@ -80,14 +82,15 @@ pub async fn update(
             captcha_registration_required = $4,
             max_sessions = $5,
             max_websocket_connections = $6,
-            maintenance_enabled = $7,
-            maintenance_message = $8,
-            updated_by = $9,
+            leaderboard_refresh_interval_seconds = $7,
+            maintenance_enabled = $8,
+            maintenance_message = $9,
+            updated_by = $10,
             updated_at = CURRENT_TIMESTAMP
         WHERE singleton = TRUE
         RETURNING registration_open, require_email_verification,
             captcha_login_required, captcha_registration_required, max_sessions,
-            max_websocket_connections,
+            max_websocket_connections, leaderboard_refresh_interval_seconds,
             maintenance_enabled, maintenance_message, updated_by, updated_at",
         data.registration_open,
         data.require_email_verification,
@@ -95,6 +98,7 @@ pub async fn update(
         data.captcha_registration_required,
         data.max_sessions,
         data.max_websocket_connections,
+        data.leaderboard_refresh_interval_seconds,
         data.maintenance_enabled,
         data.maintenance_message,
         data.updated_by,

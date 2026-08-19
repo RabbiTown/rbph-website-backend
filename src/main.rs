@@ -197,6 +197,21 @@ async fn main() -> std::io::Result<()> {
         tokio::spawn(module::release::run_scheduler(state, changed));
     }
 
+    {
+        let state = app_state_data.get_ref().clone();
+        tokio::spawn(module::leaderboard::run_scheduler(state));
+    }
+
+    {
+        let state = app_state_data.get_ref().clone();
+        tokio::spawn(module::system_settings::run_reconciler(state));
+    }
+
+    {
+        let state = app_state_data.get_ref().clone();
+        tokio::spawn(module::system_settings::run_subscriber(state));
+    }
+
     log::info!(
         "Running on http://{}:{} ({})",
         host,

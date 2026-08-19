@@ -210,7 +210,7 @@ async fn get_rounds(
 
 #[derive(Deserialize)]
 struct LeaderBoardQuery {
-    version: Option<u32>,
+    version: Option<i64>,
     offset: Option<usize>,
     limit: Option<usize>,
 }
@@ -220,11 +220,10 @@ async fn get_leaderboard(
     req: web::Query<LeaderBoardQuery>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let offset = req.offset.unwrap_or(0);
     let limit = req.limit.unwrap_or(50).clamp(1, 100);
     let result = db::board::LEADER_BOARD_CACHE
-        .get_info(&app.db, path.game_id, req.version, offset, limit)
+        .get_info(&app.db, &app.kv, path.game_id, req.version, offset, limit)
         .await?;
 
     match result {

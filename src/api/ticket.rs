@@ -1110,8 +1110,8 @@ async fn update_staff_team_access(
     };
     db::cache::invalidate_team_info(&app, path.team_id).await?;
     db::board::LEADER_BOARD_CACHE
-        .invalidate_game(path.game_id)
-        .await;
+        .invalidate_game(&app.db, path.game_id)
+        .await?;
     Ok(HttpResponse::Ok().json(staff_team_access_response(team, role)))
 }
 
@@ -1171,7 +1171,9 @@ async fn adjust_staff_team_currency(
         }
         db::team::StaffCurrencyAdjustResult::Updated(currency) => {
             db::cache::invalidate_team_info(&app, team_id).await?;
-            db::board::LEADER_BOARD_CACHE.invalidate_game(game_id).await;
+            db::board::LEADER_BOARD_CACHE
+                .invalidate_game(&app.db, game_id)
+                .await?;
             return Ok(HttpResponse::Ok().json(StaffCurrencyResponse {
                 code: StaffCurrencyAdjustCode::Ok,
                 currency,

@@ -48,8 +48,7 @@ pub mod serialize_offset_datetime {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
-            .map_err(serde::de::Error::custom)
+        parse_offset_datetime(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -73,12 +72,23 @@ pub mod serialize_option_offset_datetime {
         D: Deserializer<'de>,
     {
         Option::<String>::deserialize(deserializer)?
-            .map(|s| {
-                OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
-                    .map_err(serde::de::Error::custom)
-            })
+            .map(|s| parse_offset_datetime(&s).map_err(serde::de::Error::custom))
             .transpose()
     }
+}
+
+fn parse_offset_datetime(value: &str) -> Result<OffsetDateTime, time::error::Parse> {
+    if let Ok(dt) = OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339) {
+        return Ok(dt);
+    }
+    let format = time::format_description::parse(
+        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:6][offset_hour sign:mandatory]:[offset_minute]",
+    )
+    .map_err(|_| {
+        OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+            .unwrap_err()
+    })?;
+    OffsetDateTime::parse(value, &format)
 }
 
 pub fn deserialize_nullable_string_patch<'de, D>(

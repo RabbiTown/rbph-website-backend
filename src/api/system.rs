@@ -8,6 +8,7 @@ struct SystemStatusResponse {
     code: i32,
     registration_open: bool,
     require_email_verification: bool,
+    leaderboard_refresh_interval_seconds: i32,
     maintenance_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     maintenance_message: Option<String>,
@@ -19,6 +20,7 @@ async fn status(app: web::Data<AppState>) -> Result<HttpResponse> {
         code: 0,
         registration_open: settings.registration_open,
         require_email_verification: settings.require_email_verification,
+        leaderboard_refresh_interval_seconds: settings.leaderboard_refresh_interval_seconds,
         maintenance_enabled: settings.maintenance_enabled,
         maintenance_message: settings
             .maintenance_enabled

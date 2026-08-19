@@ -17,6 +17,7 @@ struct SystemSettingsRequest {
     captcha_registration_required: bool,
     max_sessions: i16,
     max_websocket_connections: i16,
+    leaderboard_refresh_interval_seconds: i32,
     maintenance_enabled: bool,
     maintenance_message: String,
 }
@@ -43,6 +44,7 @@ fn valid_request(
 ) -> bool {
     (1..=20).contains(&body.max_sessions)
         && (1..=20).contains(&body.max_websocket_connections)
+        && (1..=86_400).contains(&body.leaderboard_refresh_interval_seconds)
         && body.maintenance_message.chars().count() <= 500
         && (!body.require_email_verification || email_delivery_enabled)
         && (!(body.captcha_login_required || body.captcha_registration_required)
@@ -85,6 +87,10 @@ async fn update(
             captcha_registration_required: body.captcha_registration_required,
             max_sessions: body.max_sessions,
             max_websocket_connections: body.max_websocket_connections,
+            leaderboard_refresh_interval_seconds:
+                crate::module::leaderboard::normalize_refresh_interval(
+                    body.leaderboard_refresh_interval_seconds,
+                ),
             maintenance_enabled: body.maintenance_enabled,
             maintenance_message: &body.maintenance_message,
             updated_by: actor.uid,
@@ -99,6 +105,7 @@ async fn update(
     {
         app.sync_hub.notify_system_status_updated();
     }
+    crate::module::system_settings::publish_updated(&app).await;
 
     db::event_log::insert_pool(
         &app.db,
@@ -115,6 +122,7 @@ async fn update(
                     "captcha_registration_required": previous.captcha_registration_required != settings.captcha_registration_required,
                     "max_sessions": previous.max_sessions != settings.max_sessions,
                     "max_websocket_connections": previous.max_websocket_connections != settings.max_websocket_connections,
+                    "leaderboard_refresh_interval_seconds": previous.leaderboard_refresh_interval_seconds != settings.leaderboard_refresh_interval_seconds,
                     "maintenance_enabled": previous.maintenance_enabled != settings.maintenance_enabled,
                     "maintenance_message": previous.maintenance_message != settings.maintenance_message,
                 }
@@ -153,6 +161,7 @@ mod tests {
             captcha_registration_required: false,
             max_sessions: 3,
             max_websocket_connections: 5,
+            leaderboard_refresh_interval_seconds: 5,
             maintenance_enabled: false,
             maintenance_message: String::new(),
         }
@@ -172,6 +181,11 @@ mod tests {
         body.max_websocket_connections = 21;
         assert!(!valid_request(&body, false, false));
         body.max_websocket_connections = 20;
+        body.leaderboard_refresh_interval_seconds = 0;
+        assert!(!valid_request(&body, false, false));
+        body.leaderboard_refresh_interval_seconds = 86_401;
+        assert!(!valid_request(&body, false, false));
+        body.leaderboard_refresh_interval_seconds = 86_400;
         body.maintenance_enabled = true;
         assert!(valid_request(&body, false, false));
         body.maintenance_message = "x".repeat(500);

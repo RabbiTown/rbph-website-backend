@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_leaderboard_dirty_team\n                    WHERE game_id = $1 AND board_type = $2 AND revision <= $3;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d7dfcbc54fa88350e076f5a9c88846f2135e7ab4ec3e4310e9f919d561baeea"
+}

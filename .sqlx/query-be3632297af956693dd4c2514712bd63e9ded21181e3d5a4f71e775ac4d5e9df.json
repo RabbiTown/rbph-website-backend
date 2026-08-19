@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT q.game_id AS \"game_id!\"\n            FROM (\n                SELECT DISTINCT game_id FROM rb_leaderboard_dirty_team WHERE board_type = 'main'\n                UNION\n                SELECT game_id FROM rb_leaderboard_refresh_state WHERE board_type = 'main' AND full_rebuild\n            ) q\n            ORDER BY q.game_id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "be3632297af956693dd4c2514712bd63e9ded21181e3d5a4f71e775ac4d5e9df"
+}

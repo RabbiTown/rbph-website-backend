@@ -421,7 +421,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
 
         tx.commit().await?;
 
-        db::cache::remove_team_info(game_id, team_id).await?;
+        db::cache::remove_team_info(app, game_id).await?;
 
         app.sync_hub.notify_team_disbanded(&members);
 
@@ -2231,7 +2231,7 @@ pub async fn admin_delete(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    db::cache::remove_team_info(game_id, team_id).await?;
+    db::cache::remove_team_info(app, game_id).await?;
     app.sync_hub.notify_team_disbanded(&members);
     Ok(Some(members))
 }

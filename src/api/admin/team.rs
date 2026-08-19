@@ -207,8 +207,8 @@ async fn update(
     };
     db::cache::invalidate_team_info(&app, path.team_id).await?;
     db::board::LEADER_BOARD_CACHE
-        .invalidate_game(path.game_id)
-        .await;
+        .invalidate_game(&app.db, path.game_id)
+        .await?;
     Ok(HttpResponse::Ok().json(TeamResponse {
         code: TeamAdminResult::Ok,
         team,
@@ -315,8 +315,8 @@ async fn update_currency(
     }
     db::cache::invalidate_team_info(&app, path.team_id).await?;
     db::board::LEADER_BOARD_CACHE
-        .invalidate_game(path.game_id)
-        .await;
+        .invalidate_game(&app.db, path.game_id)
+        .await?;
     let team = db::team::admin_get(&app.db, path.game_id, path.team_id)
         .await?
         .ok_or(RbError::not_found())?;

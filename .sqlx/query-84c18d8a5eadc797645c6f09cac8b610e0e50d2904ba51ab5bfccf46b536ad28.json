@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MAX(revision) FROM rb_leaderboard_dirty_team\n                WHERE game_id = $1 AND board_type = $2;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "max",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "84c18d8a5eadc797645c6f09cac8b610e0e50d2904ba51ab5bfccf46b536ad28"
+}

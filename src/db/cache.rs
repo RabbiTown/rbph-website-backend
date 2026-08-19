@@ -71,9 +71,9 @@ pub async fn invalidate_team_info(app: &AppState, team_id: i32) -> Result<(), Rb
     Ok(())
 }
 
-pub async fn remove_team_info(game_id: i32, team_id: i32) -> Result<(), RbInternalError> {
+pub async fn remove_team_info(app: &AppState, game_id: i32) -> Result<(), RbInternalError> {
     db::board::LEADER_BOARD_CACHE
-        .remove_team(game_id, team_id)
+        .remove_team(&app.db, game_id)
         .await?;
 
     Ok(())

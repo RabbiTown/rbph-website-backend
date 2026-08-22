@@ -271,6 +271,7 @@ fn engine_request(
         argument,
         bootstrap_metadata: bootstrap_metadata(runtime),
         result_mode,
+        wall_time_limit: runtime.timeout.saturating_sub(runtime.started_at.elapsed()),
     }
 }
 

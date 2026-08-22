@@ -131,6 +131,7 @@ impl JsEngine for BoaEngine {
         request: EngineRequest,
         host: Arc<dyn HostBridge>,
     ) -> Result<HostValue, RbInternalError> {
+        let _wall_time_limit = request.wall_time_limit;
         let mut context = Context::default();
         configure_runtime_limits(&mut context, request.execution_kind);
         install_bootstrap(&mut context, &request.bootstrap_metadata, host)?;
@@ -214,6 +215,7 @@ mod tests {
             argument: Value::Null,
             bootstrap_metadata: metadata(),
             result_mode: mode,
+            wall_time_limit: std::time::Duration::from_secs(5),
         }
     }
 

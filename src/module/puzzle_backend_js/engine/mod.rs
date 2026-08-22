@@ -1,6 +1,11 @@
+#[cfg(any(not(feature = "v8-engine"), test))]
 mod boa;
+#[cfg(test)]
+mod tests;
+#[cfg(feature = "v8-engine")]
+mod v8;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +37,7 @@ pub(super) struct EngineRequest {
     pub argument: Value,
     pub bootstrap_metadata: Value,
     pub result_mode: ResultMode,
+    pub wall_time_limit: Duration,
 }
 
 pub(super) trait JsEngine: Send + Sync {
@@ -42,10 +48,20 @@ pub(super) trait JsEngine: Send + Sync {
     ) -> Result<HostValue, RbInternalError>;
 }
 
+#[cfg(not(feature = "v8-engine"))]
 static BOA_ENGINE: boa::BoaEngine = boa::BoaEngine;
+#[cfg(feature = "v8-engine")]
+static V8_ENGINE: v8::V8Engine = v8::V8Engine;
 
 pub(super) fn active_engine() -> &'static dyn JsEngine {
-    &BOA_ENGINE
+    #[cfg(feature = "v8-engine")]
+    {
+        &V8_ENGINE
+    }
+    #[cfg(not(feature = "v8-engine"))]
+    {
+        &BOA_ENGINE
+    }
 }
 
 pub(super) fn internal_err(message: impl Into<String>) -> RbInternalError {

@@ -94,6 +94,7 @@ async fn update(
     app.sync_hub.notify_game_release_updated(
         path.game_id,
         db::release::release_cursor(&app.db, path.game_id).await?,
+        true,
     );
     Ok(HttpResponse::Ok().json(FeatureListResponse {
         code: FeatureResult::Ok,

@@ -101,7 +101,7 @@ impl SyncHub {
         Ok(())
     }
 
-    pub fn notify_game_release_updated(&self, game_id: i32, cursor: i64) {
+    pub fn notify_game_release_updated(&self, game_id: i32, cursor: i64, force: bool) {
         let users = self
             .users
             .iter()
@@ -110,7 +110,7 @@ impl SyncHub {
         self.push_users(
             &users,
             SyncMessageType::GameReleaseUpdated,
-            json!({ "game_id": game_id, "cursor": cursor }),
+            json!({ "game_id": game_id, "cursor": cursor, "force": force }),
         );
     }
 

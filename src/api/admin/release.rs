@@ -98,6 +98,11 @@ async fn append(
         Err(error) => return Err(error.into()),
     };
     app.release_schedule_changed.notify_one();
+    app.sync_hub.notify_game_release_updated(
+        path.game_id,
+        release::release_cursor(&app.db, path.game_id).await?,
+        true,
+    );
     Ok(HttpResponse::Ok().json(ReleaseResponse {
         code: ReleaseAdminResult::Ok,
         phase,
@@ -150,6 +155,7 @@ async fn edit(
     app.sync_hub.notify_game_release_updated(
         path.game_id,
         release::release_cursor(&app.db, path.game_id).await?,
+        true,
     );
     Ok(HttpResponse::Ok().json(ReleaseResponse {
         code: ReleaseAdminResult::Ok,
@@ -165,6 +171,7 @@ async fn delete(path: web::Path<PhasePathInfo>, app: web::Data<AppState>) -> Res
     app.sync_hub.notify_game_release_updated(
         path.game_id,
         release::release_cursor(&app.db, path.game_id).await?,
+        true,
     );
     Ok(HttpResponse::Ok().json(ReleaseDeleteResponse {
         code: ReleaseAdminResult::Ok,

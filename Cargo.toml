@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["v8-engine"]
+boa-engine = ["dep:boa_engine"]
 v8-engine = ["dep:v8"]
 
 [dependencies]
@@ -61,16 +62,12 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1.18.1", features = ["v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 zip = "8.6.0"
-boa_engine = "0.21.1"
+boa_engine = { version = "0.22.0", optional = true }
 futures = "0.3.32"
-v8 = { version = "=152.1.0", optional = true }
-# Keep ICU 2.0 compatible with the zerovec version selected by V8 Temporal.
-zerovec = { version = "0.11.8", features = ["alloc"] }
+v8 = { version = "152.1.0", optional = true }
 
-[build-dependencies]
-# V8's Temporal dependency updates zerovec in the shared lockfile. Keep the
-# existing host-side ICU 2.0 graph buildable under Cargo's host/target split.
-zerovec = { version = "0.11.8", features = ["alloc"] }
+[dev-dependencies]
+boa_engine = "0.22.0"
 
 [profile.dev.package.v8]
 opt-level = 1

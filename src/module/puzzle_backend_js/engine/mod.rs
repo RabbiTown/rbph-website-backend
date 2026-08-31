@@ -1,4 +1,9 @@
-#[cfg(any(not(feature = "v8-engine"), test))]
+#[cfg(all(feature = "boa-engine", feature = "v8-engine"))]
+compile_error!("features `boa-engine` and `v8-engine` are mutually exclusive");
+#[cfg(not(any(feature = "boa-engine", feature = "v8-engine")))]
+compile_error!("either feature `boa-engine` or `v8-engine` must be enabled");
+
+#[cfg(any(feature = "boa-engine", test))]
 mod boa;
 #[cfg(test)]
 mod tests;
@@ -48,7 +53,7 @@ pub(super) trait JsEngine: Send + Sync {
     ) -> Result<HostValue, RbInternalError>;
 }
 
-#[cfg(not(feature = "v8-engine"))]
+#[cfg(feature = "boa-engine")]
 static BOA_ENGINE: boa::BoaEngine = boa::BoaEngine;
 #[cfg(feature = "v8-engine")]
 static V8_ENGINE: v8::V8Engine = v8::V8Engine;
@@ -58,7 +63,7 @@ pub(super) fn active_engine() -> &'static dyn JsEngine {
     {
         &V8_ENGINE
     }
-    #[cfg(not(feature = "v8-engine"))]
+    #[cfg(feature = "boa-engine")]
     {
         &BOA_ENGINE
     }

@@ -11,14 +11,13 @@ This project is in the very early stages of development. Version migrations are 
 3. Copy `.env.example` to `.env` and change the required configuration values.
 4. Edit `config.toml` and adjust the necessary options.  
    Ensure `[db].addr` matches `DATABASE_URL` in `.env`.
-5. `sqlx migrate run` - Run database migrations.
-6. `cargo run` - Start the application.
+5. `cargo run` - Start the application.
 
 Before committing, make sure to run:
 
 ```shell
 sqlx database reset
-cargo sqlx prepare --workspace -- --all-targets --all-features
+cargo sqlx prepare --workspace -- --all-targets
 cargo clippy --fix --allow-dirty
 cargo fmt --all
 ```

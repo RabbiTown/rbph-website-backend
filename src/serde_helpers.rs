@@ -81,7 +81,7 @@ fn parse_offset_datetime(value: &str) -> Result<OffsetDateTime, time::error::Par
     if let Ok(dt) = OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339) {
         return Ok(dt);
     }
-    let format = time::format_description::parse(
+    let format = time::format_description::parse_borrowed::<1>(
         "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:6][offset_hour sign:mandatory]:[offset_minute]",
     )
     .map_err(|_| {

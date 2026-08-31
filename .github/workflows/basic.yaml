@@ -14,7 +14,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check
-        run: cargo check --workspace --all-targets --all-features
+        run: |
+          cargo check --workspace --all-targets
+          cargo check --workspace --all-targets --no-default-features --features boa-engine
 
   test:
     runs-on: ubuntu-latest
@@ -40,7 +42,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Test
-        run: cargo test --workspace --all-features --locked
+        run: |
+          cargo test --workspace --locked
+          cargo test --workspace --locked --no-default-features --features boa-engine
 
   clippy:
     runs-on: ubuntu-latest
@@ -52,7 +56,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy --workspace --all-targets --no-default-features --features boa-engine -- -D warnings
 
   fmt:
     runs-on: ubuntu-latest

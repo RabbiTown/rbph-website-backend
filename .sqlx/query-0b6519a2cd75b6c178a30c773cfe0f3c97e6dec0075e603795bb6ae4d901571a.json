@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT revision\n             FROM rb_frontend_revision r\n             WHERE r.game_id=$1 AND r.status='published'\n               AND (EXISTS(SELECT 1 FROM rb_frontend_binding b WHERE b.revision_id=r.id AND b.package_id=$2)\n                 OR EXISTS(SELECT 1 FROM rb_frontend_feature_activation f WHERE f.revision_id=r.id AND f.package_id=$2))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0b6519a2cd75b6c178a30c773cfe0f3c97e6dec0075e603795bb6ae4d901571a"
+}

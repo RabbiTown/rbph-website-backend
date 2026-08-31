@@ -670,6 +670,11 @@ async fn patch(
     let mut group = db::asset::admin_get_group(&app.db, path.group_id)
         .await?
         .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    if db::frontend::asset_group_locked(&app.db, group.id).await? {
+        return RbError::conflict(AssetAdminResult::Invalid.into())
+            .msg("registered theme packages are immutable")
+            .http_err();
+    }
 
     if let Some(original_name) = &body.original_name {
         let original_name = original_name.trim();
@@ -695,6 +700,11 @@ async fn patch_file(
     let group = db::asset::admin_get_group(&app.db, path.group_id)
         .await?
         .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    if db::frontend::asset_group_locked(&app.db, group.id).await? {
+        return RbError::conflict(AssetAdminResult::Invalid.into())
+            .msg("registered theme packages are immutable")
+            .http_err();
+    }
     let file = db::asset::admin_get_file(&app.db, path.group_id, path.file_id)
         .await?
         .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
@@ -812,6 +822,11 @@ async fn patch_folder(
     let group = db::asset::admin_get_group(&app.db, path.group_id)
         .await?
         .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    if db::frontend::asset_group_locked(&app.db, group.id).await? {
+        return RbError::conflict(AssetAdminResult::Invalid.into())
+            .msg("registered theme packages are immutable")
+            .http_err();
+    }
     let Some(folder_path) = normalize_asset_relative_path(&body.path) else {
         return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
     };
@@ -975,6 +990,11 @@ async fn delete_file(
     let group = db::asset::admin_get_group(&app.db, path.group_id)
         .await?
         .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
+    if db::frontend::asset_group_locked(&app.db, group.id).await? {
+        return RbError::conflict(AssetAdminResult::Invalid.into())
+            .msg("registered theme packages are immutable")
+            .http_err();
+    }
     let file = db::asset::admin_get_file(&app.db, path.group_id, path.file_id)
         .await?
         .ok_or_else(|| RbError::not_found().code(AssetAdminResult::NotFound.into()))?;
@@ -1060,6 +1080,11 @@ async fn delete(path: web::Path<AssetPathInfo>, app: web::Data<AppState>) -> Res
             .code(AssetAdminResult::NotFound.into())
             .http_err();
     };
+    if db::frontend::asset_group_locked(&app.db, group.id).await? {
+        return RbError::conflict(AssetAdminResult::Invalid.into())
+            .msg("registered theme packages are immutable")
+            .http_err();
+    }
     let files = db::asset::list_files(&app.db, group.id).await?;
 
     let mut tx = app.db.begin().await.map_err(RbInternalError::from)?;

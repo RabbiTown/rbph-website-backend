@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_frontend_binding (revision_id,surface,scope_kind,scope_id,package_id,renderer_id)\n             SELECT $1,surface,scope_kind,scope_id,package_id,renderer_id FROM rb_frontend_binding WHERE revision_id=$2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "03796d7ae3700cc437b143fa1304e932bdd40b25ae56cf38ac06ec9f23e9cfc5"
+}

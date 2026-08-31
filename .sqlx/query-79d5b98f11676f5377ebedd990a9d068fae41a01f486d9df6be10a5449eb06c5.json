@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_frontend_feature_activation WHERE package_id=$1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "79d5b98f11676f5377ebedd990a9d068fae41a01f486d9df6be10a5449eb06c5"
+}

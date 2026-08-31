@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_frontend_feature_activation old_feature\n         USING rb_frontend_revision r, rb_frontend_package old, rb_frontend_package active\n         WHERE old_feature.revision_id=r.id AND r.id=$1 AND old_feature.package_id=old.id AND old.delete_pending\n           AND active.game_id=old.game_id AND active.name=old.name AND NOT active.delete_pending\n           AND EXISTS(SELECT 1 FROM rb_frontend_feature_activation current_feature\n                      WHERE current_feature.revision_id=old_feature.revision_id\n                        AND current_feature.package_id=active.id AND current_feature.feature=old_feature.feature)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "048807ae843e74b0f341c161303fddda9aadd563c1e047c3db203941ad10516a"
+}

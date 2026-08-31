@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.revision, p.id AS \"package_id?\", b.renderer_id,\n                p.asset_group_id AS \"asset_group_id?\",\n                p.manifest_path AS \"manifest_path?\",\n                p.manifest AS \"manifest?\",\n                a.object_key AS \"object_key?\",\n                a.backend AS \"backend?\"\n         FROM rb_frontend_revision r JOIN rb_frontend_binding b ON b.revision_id=r.id\n         LEFT JOIN rb_frontend_package source_package ON source_package.id=b.package_id\n         LEFT JOIN rb_frontend_package p ON p.id=CASE\n             WHEN r.status='draft' AND source_package.delete_pending THEN\n                 (SELECT active.id FROM rb_frontend_package active\n                  WHERE active.game_id=source_package.game_id AND active.name=source_package.name AND NOT active.delete_pending\n                  LIMIT 1)\n             ELSE source_package.id\n         END\n         LEFT JOIN rb_asset_group a ON a.id=p.asset_group_id\n         WHERE r.game_id=$1 AND b.surface=$2\n           AND (($5::BIGINT IS NULL AND r.status='published') OR r.id=$5)\n           AND (b.package_id IS NULL OR p.id IS NOT NULL)\n           AND ((b.scope_kind='puzzle' AND b.scope_id=$4) OR (b.scope_kind='round' AND b.scope_id=$3) OR (b.scope_kind='game' AND b.scope_id=0))\n         ORDER BY CASE b.scope_kind WHEN 'puzzle' THEN 3 WHEN 'round' THEN 2 ELSE 1 END DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "package_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "renderer_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "asset_group_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "manifest_path?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "manifest?",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "object_key?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "backend?",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b3ffe78f33cc2d1058df8d7921adcd6c931ee294661358c6f9984cf5f59e1636"
+}

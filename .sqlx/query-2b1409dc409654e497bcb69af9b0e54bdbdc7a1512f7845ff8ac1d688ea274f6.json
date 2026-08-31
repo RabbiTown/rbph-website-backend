@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_frontend_package SET delete_pending=TRUE WHERE id=$1 AND game_id=$2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2b1409dc409654e497bcb69af9b0e54bdbdc7a1512f7845ff8ac1d688ea274f6"
+}

@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, game_id, asset_group_id, name, version, manifest_path, manifest, sha256, delete_pending, ctime_at\n         FROM rb_frontend_package WHERE game_id = $1 AND name = $2 AND NOT delete_pending FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "asset_group_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "version",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "manifest_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "manifest",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "sha256",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "delete_pending",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5e15b8e05f0b7aa4dbffdb72503ceb7a3b0fe47078349f4300788c97152cb79f"
+}

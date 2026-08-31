@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT revision_id,surface,scope_kind,scope_id,package_id,renderer_id FROM rb_frontend_binding WHERE revision_id=$1 ORDER BY surface,scope_kind,scope_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "surface",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "scope_kind",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "scope_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "package_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "renderer_id",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "fcf8c47733f0d0ab8b6ad70c567c0fc5ae923690a8846eef8c0509fd2ad069f5"
+}

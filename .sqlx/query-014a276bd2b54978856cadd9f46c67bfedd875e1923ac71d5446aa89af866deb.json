@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_frontend_package SET delete_pending=TRUE WHERE id=$1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "014a276bd2b54978856cadd9f46c67bfedd875e1923ac71d5446aa89af866deb"
+}

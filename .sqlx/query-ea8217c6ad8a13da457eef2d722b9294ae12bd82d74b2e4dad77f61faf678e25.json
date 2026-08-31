@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_frontend_binding (revision_id,surface,scope_kind,scope_id,package_id,renderer_id)\n         VALUES ($1,$2,$3,$4,$5,$6)\n         ON CONFLICT (revision_id,surface,scope_kind,scope_id)\n         DO UPDATE SET package_id=EXCLUDED.package_id,renderer_id=EXCLUDED.renderer_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea8217c6ad8a13da457eef2d722b9294ae12bd82d74b2e4dad77f61faf678e25"
+}

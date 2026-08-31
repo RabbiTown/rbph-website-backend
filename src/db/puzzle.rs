@@ -45,6 +45,18 @@ pub async fn get_puzzle_game(
     Ok(result)
 }
 
+pub async fn get_puzzle_round(
+    db_pool: &DbPool,
+    puzzle_id: i32,
+) -> Result<Option<i32>, RbInternalError> {
+    let result = sqlx::query_scalar::<_, i32>("SELECT round_id FROM rb_puzzle WHERE id = $1;")
+        .bind(puzzle_id)
+        .fetch_optional(db_pool)
+        .await?;
+
+    Ok(result)
+}
+
 #[derive(FromRow)]
 pub struct PuzzleJudgeInfo {
     pub id: i32,

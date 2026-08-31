@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_frontend_feature_activation (revision_id,package_id,feature)\n             SELECT $1,package_id,feature FROM rb_frontend_feature_activation WHERE revision_id=$2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c8d828e258542cf15ff7513670025ec5c7401a05d06cf5d4cd849c3784b4fce3"
+}

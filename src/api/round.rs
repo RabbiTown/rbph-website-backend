@@ -3,7 +3,6 @@ use actix_web::{
     HttpMessage, HttpResponse, Result,
     body::MessageBody,
     dev::{ServiceRequest, ServiceResponse},
-    http::header::ContentType,
     middleware::{self, Next},
     web,
 };
@@ -70,10 +69,26 @@ pub(super) async fn get_round_response_for_user_team(
     let Some(result) = result else {
         return RbError::not_found().http_err();
     };
-
-    Ok(HttpResponse::Ok()
-        .content_type(ContentType::json())
-        .body(result))
+    let mut response = serde_json::from_str::<serde_json::Value>(&result)?;
+    let game_id = response
+        .pointer("/data/game_id")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+        .ok_or_else(RbError::not_found)?;
+    let renderer = super::game::resolve_frontend_renderer(
+        app,
+        game_id,
+        db::frontend::ROUND_PAGE,
+        Some(round_id),
+        None,
+        None,
+    )
+    .await?;
+    response
+        .as_object_mut()
+        .ok_or_else(RbError::not_found)?
+        .insert("renderer".to_owned(), serde_json::to_value(renderer)?);
+    Ok(HttpResponse::Ok().json(response))
 }
 
 async fn check_round_middleware(

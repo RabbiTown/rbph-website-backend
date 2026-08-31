@@ -7,7 +7,10 @@ use crate::{
     AppState,
     db::{
         self,
-        game::{RbCurrencyAdminData, RbCurrencyCreateData, RbCurrencyUpdateData, RbGameUpdateData},
+        game::{
+            RbAdminPageTitle, RbCurrencyAdminData, RbCurrencyCreateData, RbCurrencyUpdateData,
+            RbGameUpdateData,
+        },
     },
     error::RbError,
     model::game::{RbGame, RbGameSettings},
@@ -33,6 +36,13 @@ enum GameAdminResult {
     Ok = 0,
 }
 
+#[repr(i32)]
+#[derive(IntoPrimitive, Serialize_repr)]
+enum GamePageTitlesResult {
+    NotFound = -1,
+    Ok = 0,
+}
+
 #[derive(Serialize)]
 struct GameAdminResponse {
     code: GameAdminResult,
@@ -43,6 +53,13 @@ struct GameAdminResponse {
 struct GameAdminListResponse {
     code: GameAdminResult,
     games: Vec<RbGame>,
+}
+
+#[derive(Serialize)]
+struct GamePageTitlesResponse {
+    code: GamePageTitlesResult,
+    rounds: Vec<RbAdminPageTitle>,
+    puzzles: Vec<RbAdminPageTitle>,
 }
 
 #[derive(Serialize)]
@@ -96,6 +113,24 @@ async fn get(path: web::Path<PathInfo>, app: web::Data<AppState>) -> Result<Http
     Ok(HttpResponse::Ok().json(GameAdminResponse {
         code: GameAdminResult::Ok,
         game,
+    }))
+}
+
+async fn list_page_titles(
+    path: web::Path<PathInfo>,
+    app: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    if !db::game::exists(&app.db, path.game_id, crate::model::user::RbUserRole::Admin).await? {
+        return RbError::not_found()
+            .code(GamePageTitlesResult::NotFound.into())
+            .http_err();
+    }
+
+    let (rounds, puzzles) = db::game::list_admin_page_titles(&app.db, path.game_id).await?;
+    Ok(HttpResponse::Ok().json(GamePageTitlesResponse {
+        code: GamePageTitlesResult::Ok,
+        rounds,
+        puzzles,
     }))
 }
 
@@ -271,6 +306,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.route("", web::get().to(list))
         .route("", web::post().to(append))
         .route("/{game_id}", web::get().to(get))
+        .route("/{game_id}/page-titles", web::get().to(list_page_titles))
         .route("/{game_id}/currencies", web::get().to(list_currency))
         .route("/{game_id}/currencies", web::post().to(create_currency))
         .route(

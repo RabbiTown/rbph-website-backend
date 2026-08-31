@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_frontend_package\n         SET asset_group_id=$2, version=$3, manifest_path=$4, manifest=$5, sha256=$6, ctime_at=CURRENT_TIMESTAMP\n         WHERE id=$1 AND game_id=$7\n         RETURNING id, game_id, asset_group_id, name, version, manifest_path, manifest, sha256, delete_pending, ctime_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "asset_group_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "version",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "manifest_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "manifest",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "sha256",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "delete_pending",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Text",
+        "Jsonb",
+        "Bpchar",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "19caac19daeeb241f61a61c44e6704913fc536489e65bf84bba35779a7325601"
+}

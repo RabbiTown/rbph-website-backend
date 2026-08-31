@@ -127,6 +127,19 @@ impl SyncHub {
         );
     }
 
+    pub fn notify_game_frontend_updated(&self, game_id: i32, revision: i64) {
+        let users = self
+            .users
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        self.push_users(
+            &users,
+            SyncMessageType::GameFrontendUpdated,
+            json!({ "game_id": game_id, "revision": revision }),
+        );
+    }
+
     pub fn notify_system_status_updated(&self) {
         let users = self
             .users
@@ -644,6 +657,7 @@ pub enum SyncMessageType {
     // 100 - game
     GameNewAnnouncement = 101,
     GameReleaseUpdated = 102,
+    GameFrontendUpdated = 103,
 
     // 200 - team
     TeamInfoUpdated = 201,

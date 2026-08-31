@@ -57,6 +57,36 @@ pub struct RbCurrencyAdminData {
     pub max_amount: i64,
 }
 
+#[derive(Serialize)]
+pub struct RbAdminPageTitle {
+    pub id: i32,
+    pub title: String,
+}
+
+pub async fn list_admin_page_titles(
+    pool: &DbPool,
+    game_id: i32,
+) -> Result<(Vec<RbAdminPageTitle>, Vec<RbAdminPageTitle>), RbInternalError> {
+    let rounds = sqlx::query_as!(
+        RbAdminPageTitle,
+        "SELECT id, title FROM rb_round WHERE game_id = $1 ORDER BY sort, id",
+        game_id,
+    )
+    .fetch_all(pool);
+    let puzzles = sqlx::query_as!(
+        RbAdminPageTitle,
+        "SELECT p.id, p.title
+         FROM rb_puzzle p
+         JOIN rb_round r ON r.id = p.round_id
+         WHERE r.game_id = $1
+         ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
+        game_id,
+    )
+    .fetch_all(pool);
+
+    Ok(tokio::try_join!(rounds, puzzles)?)
+}
+
 #[derive(Deserialize)]
 pub struct RbCurrencyCreateData {
     pub name: String,

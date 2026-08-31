@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT r.revision, p.id AS \"package_id!\", f.feature AS \"feature: FrontendFeature\", p.manifest_path, a.object_key, a.backend\n         FROM rb_frontend_revision r\n         JOIN rb_frontend_feature_activation f ON f.revision_id=r.id\n         JOIN rb_frontend_package source_package ON source_package.id=f.package_id AND source_package.game_id=r.game_id\n         JOIN rb_frontend_package p ON p.id=CASE\n             WHEN r.status='draft' AND source_package.delete_pending THEN\n                 (SELECT active.id FROM rb_frontend_package active\n                  WHERE active.game_id=source_package.game_id AND active.name=source_package.name AND NOT active.delete_pending\n                  LIMIT 1)\n             ELSE source_package.id\n         END\n         JOIN rb_asset_group a ON a.id=p.asset_group_id\n         WHERE r.game_id=$1 AND (($2::BIGINT IS NULL AND r.status='published') OR r.id=$2)\n         ORDER BY p.id,f.feature",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "package_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "feature: FrontendFeature",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "manifest_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "object_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "backend",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "26dbcd9b40e8962c3171af691dcb28daa251a84bd59a5fa8db05e511551cee8b"
+}

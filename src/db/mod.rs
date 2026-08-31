@@ -5,6 +5,7 @@ pub mod cache;
 pub mod content;
 pub mod event_log;
 pub mod feature;
+pub mod frontend;
 pub mod game;
 pub mod notification;
 pub mod puzzle;

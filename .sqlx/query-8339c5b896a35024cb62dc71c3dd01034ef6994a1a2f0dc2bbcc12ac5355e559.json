@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_frontend_binding b USING rb_frontend_package p\n         WHERE b.revision_id=$1 AND b.package_id=p.id AND p.delete_pending",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8339c5b896a35024cb62dc71c3dd01034ef6994a1a2f0dc2bbcc12ac5355e559"
+}

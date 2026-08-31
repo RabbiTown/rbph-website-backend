@@ -2,6 +2,7 @@ mod announcement;
 mod asset;
 mod content;
 mod feature;
+mod frontend;
 mod game;
 mod hint;
 mod log;
@@ -21,6 +22,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("games")
             .configure(feature::config)
+            .configure(frontend::config)
             .configure(game::config)
             .configure(release::config)
             .configure(team::config)

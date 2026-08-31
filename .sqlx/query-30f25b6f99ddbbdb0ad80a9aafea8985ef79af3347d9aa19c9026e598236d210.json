@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_frontend_binding b SET package_id=active.id\n         FROM rb_frontend_revision r, rb_frontend_package old, rb_frontend_package active\n         WHERE b.revision_id=r.id AND r.id=$1 AND b.package_id=old.id AND old.delete_pending\n           AND active.game_id=old.game_id AND active.name=old.name AND NOT active.delete_pending",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "30f25b6f99ddbbdb0ad80a9aafea8985ef79af3347d9aa19c9026e598236d210"
+}

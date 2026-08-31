@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_frontend_package p WHERE p.id=$1 AND p.game_id=$2\n         AND NOT EXISTS(SELECT 1 FROM rb_frontend_binding WHERE package_id=p.id)\n         AND NOT EXISTS(SELECT 1 FROM rb_frontend_feature_activation WHERE package_id=p.id)\n         RETURNING p.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "10a809f68ecd608dea9df53ee8b5ddf54ac6b4483dba416063403bc144c61c45"
+}

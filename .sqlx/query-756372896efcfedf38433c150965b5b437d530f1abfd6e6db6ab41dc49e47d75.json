@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_frontend_package p SET delete_pending=FALSE\n         WHERE p.id=$1 AND p.game_id=$2 AND p.delete_pending\n           AND NOT EXISTS(SELECT 1 FROM rb_frontend_package active\n                          WHERE active.game_id=p.game_id AND active.name=p.name AND active.id<>p.id AND NOT active.delete_pending)\n         RETURNING p.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "756372896efcfedf38433c150965b5b437d530f1abfd6e6db6ab41dc49e47d75"
+}

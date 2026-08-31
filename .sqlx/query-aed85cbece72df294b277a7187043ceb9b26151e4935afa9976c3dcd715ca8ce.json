@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT revision_id,package_id,feature AS \"feature: FrontendFeature\"\n           FROM rb_frontend_feature_activation WHERE revision_id=$1 ORDER BY package_id,feature",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "package_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "feature: FrontendFeature",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "aed85cbece72df294b277a7187043ceb9b26151e4935afa9976c3dcd715ca8ce"
+}

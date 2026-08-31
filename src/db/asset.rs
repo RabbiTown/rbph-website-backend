@@ -134,6 +134,22 @@ pub async fn list_files(
     Ok(result)
 }
 
+pub async fn list_files_conn(
+    conn: &mut PgConnection,
+    group_id: i32,
+) -> Result<Vec<RbAssetFileAdminData>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbAssetFileAdminData,
+        "SELECT id, group_id, relative_path, mime_type, size, sha256, ctime_at
+         FROM rb_asset_file
+         WHERE group_id = $1
+         ORDER BY relative_path ASC, id ASC;",
+        group_id,
+    )
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
 pub async fn list_readable_files_by_object_key(
     pool: &DbPool,
     game_id: i32,
@@ -468,6 +484,21 @@ pub async fn admin_get_group(
     .await?;
 
     Ok(result)
+}
+
+pub async fn admin_get_group_conn(
+    conn: &mut PgConnection,
+    group_id: i32,
+) -> Result<Option<RbAssetGroupAdminData>, RbInternalError> {
+    Ok(sqlx::query_as!(
+        RbAssetGroupAdminData,
+        "SELECT id, game_id, puzzle_id, round_id, backend, object_key, original_name, mime_type, size, sha256, ctime_at
+         FROM rb_asset_group
+         WHERE id = $1;",
+        group_id,
+    )
+    .fetch_optional(&mut *conn)
+    .await?)
 }
 
 pub async fn admin_update_group_name<'e, E>(

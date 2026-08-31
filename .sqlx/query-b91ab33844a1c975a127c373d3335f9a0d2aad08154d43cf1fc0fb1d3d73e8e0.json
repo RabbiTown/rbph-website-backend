@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, group_id, relative_path, mime_type, size, sha256, ctime_at\n         FROM rb_asset_file\n         WHERE group_id = $1\n         ORDER BY relative_path ASC, id ASC;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "relative_path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "mime_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "sha256",
+        "type_info": "Bpchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "ctime_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b91ab33844a1c975a127c373d3335f9a0d2aad08154d43cf1fc0fb1d3d73e8e0"
+}

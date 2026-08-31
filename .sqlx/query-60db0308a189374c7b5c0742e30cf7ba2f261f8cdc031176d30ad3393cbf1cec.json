@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_team\n        SET name = COALESCE($3, name),\n            pass = COALESCE($4, pass),\n            bio = COALESCE($5, bio),\n            is_banned = COALESCE($6, is_banned),\n            is_locked = COALESCE($7, is_locked),\n            is_beta = COALESCE($8, is_beta)\n        WHERE game_id = $1 AND id = $2\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "60db0308a189374c7b5c0742e30cf7ba2f261f8cdc031176d30ad3393cbf1cec"
+}

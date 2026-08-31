@@ -60,6 +60,7 @@ pub struct RbTeamFullData {
     pub name: String,
     pub is_banned: bool,
     pub is_locked: bool,
+    pub is_beta: bool,
     pub pass: String,
     pub bio: String,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
@@ -152,6 +153,7 @@ pub async fn get_by_user_game(
         name: team.name,
         is_banned: team.is_banned,
         is_locked: team.is_locked,
+        is_beta: team.is_beta,
         pass: team.pass,
         bio: team.bio,
         ctime_at: team.ctime_at,
@@ -1582,6 +1584,7 @@ pub struct AdminTeamListItem {
     pub name: String,
     pub is_banned: bool,
     pub is_locked: bool,
+    pub is_beta: bool,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
     pub member_count: i64,
@@ -1624,6 +1627,7 @@ pub struct AdminTeamDetail {
     pub bio: String,
     pub is_banned: bool,
     pub is_locked: bool,
+    pub is_beta: bool,
     pub game_id: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -1655,6 +1659,7 @@ pub struct AdminTeamUpdateData {
     pub bio: Option<String>,
     pub is_banned: Option<bool>,
     pub is_locked: Option<bool>,
+    pub is_beta: Option<bool>,
     pub features: Option<Vec<AdminTeamFeatureDataInput>>,
     #[validate(length(max = 500))]
     pub reason: Option<String>,
@@ -1689,6 +1694,7 @@ pub struct AdminTeamListFilter<'a> {
     pub is_banned: Option<bool>,
     pub is_locked: Option<bool>,
     pub is_finished: Option<bool>,
+    pub is_beta: Option<bool>,
     pub limit: i64,
     pub offset: i64,
 }
@@ -1700,7 +1706,7 @@ pub async fn admin_list(
 ) -> Result<Vec<AdminTeamListItem>, RbInternalError> {
     let rows = sqlx::query_as!(
         AdminTeamListItem,
-        "SELECT t.id, t.name, t.is_banned, t.is_locked, t.finish_at,
+        "SELECT t.id, t.name, t.is_banned, t.is_locked, t.is_beta, t.finish_at,
             COUNT(tm.user_id) AS \"member_count!\",
             captain.user_id AS \"captain_id?\",
             captain_user.nickname AS \"captain_name?\"
@@ -1713,14 +1719,16 @@ pub async fn admin_list(
             AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)
             AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)
             AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5)
+            AND ($6::BOOLEAN IS NULL OR t.is_beta = $6)
         GROUP BY t.id, captain.user_id, captain_user.nickname
         ORDER BY t.id
-        LIMIT $6 OFFSET $7;",
+        LIMIT $7 OFFSET $8;",
         game_id,
         filter.search,
         filter.is_banned,
         filter.is_locked,
         filter.is_finished,
+        filter.is_beta,
         filter.limit,
         filter.offset
     )
@@ -1741,12 +1749,14 @@ pub async fn admin_count(
             AND ($2 = '' OR t.name ILIKE '%' || $2 || '%')
             AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)
             AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)
-            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5);",
+            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5)
+            AND ($6::BOOLEAN IS NULL OR t.is_beta = $6);",
         game_id,
         filter.search,
         filter.is_banned,
         filter.is_locked,
-        filter.is_finished
+        filter.is_finished,
+        filter.is_beta
     )
     .fetch_one(pool)
     .await?;
@@ -1840,6 +1850,7 @@ pub async fn admin_get(
         bio: team.bio,
         is_banned: team.is_banned,
         is_locked: team.is_locked,
+        is_beta: team.is_beta,
         game_id: team.game_id,
         ctime_at: team.ctime_at,
         finish_at: team.finish_at,
@@ -1935,7 +1946,7 @@ pub async fn admin_update(
 
     let mut tx = pool.begin().await?;
     let current = sqlx::query!(
-        "SELECT is_banned, is_locked
+        "SELECT is_banned, is_locked, is_beta
         FROM rb_team
         WHERE game_id = $1 AND id = $2
         FOR UPDATE;",
@@ -1973,6 +1984,14 @@ pub async fn admin_update(
             "action": if is_locked { "locked" } else { "unlocked" }
         }));
     }
+    if let Some(is_beta) = data.is_beta
+        && is_beta != current.is_beta
+    {
+        changes.push(json!({
+            "target": "team",
+            "action": if is_beta { "beta_enabled" } else { "beta_disabled" }
+        }));
+    }
     if let Some(features) = &data.features {
         for feature in features {
             let current_enabled = current_features
@@ -1996,7 +2015,8 @@ pub async fn admin_update(
             pass = COALESCE($4, pass),
             bio = COALESCE($5, bio),
             is_banned = COALESCE($6, is_banned),
-            is_locked = COALESCE($7, is_locked)
+            is_locked = COALESCE($7, is_locked),
+            is_beta = COALESCE($8, is_beta)
         WHERE game_id = $1 AND id = $2
         RETURNING id;",
         game_id,
@@ -2005,7 +2025,8 @@ pub async fn admin_update(
         data.pass.as_deref(),
         data.bio.as_deref(),
         data.is_banned,
-        data.is_locked
+        data.is_locked,
+        data.is_beta
     )
     .fetch_optional(&mut *tx)
     .await?;

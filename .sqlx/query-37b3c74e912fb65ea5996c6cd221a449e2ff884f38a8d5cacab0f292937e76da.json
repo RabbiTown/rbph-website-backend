@@ -52,6 +52,11 @@
         "ordinal": 9,
         "name": "content_blocks_dirty",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "is_beta",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -69,6 +74,7 @@
       false,
       false,
       true,
+      false,
       false
     ]
   },

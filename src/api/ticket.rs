@@ -1092,6 +1092,7 @@ async fn update_staff_team_access(
         bio: None,
         is_banned: req.is_banned,
         is_locked: req.is_locked,
+        is_beta: None,
         features: req.features.as_ref().map(|features| {
             features
                 .iter()

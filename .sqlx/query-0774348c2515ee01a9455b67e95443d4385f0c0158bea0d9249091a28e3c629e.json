@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT g.id, g.title, g.cover\n        FROM rb_game g\n        LEFT JOIN rb_team_member tm\n            ON tm.game_id = g.id AND tm.user_id = $1\n        LEFT JOIN rb_team t ON t.id = tm.team_id\n        WHERE (g.is_listed AND g.is_active)\n            OR ($1::INT IS NOT NULL AND COALESCE(t.is_beta, FALSE))\n        ORDER BY g.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "cover",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "0774348c2515ee01a9455b67e95443d4385f0c0158bea0d9249091a28e3c629e"
+}

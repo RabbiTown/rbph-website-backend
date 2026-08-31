@@ -423,8 +423,8 @@ async fn sync_releases(
     }))
 }
 
-async fn list_active(app: web::Data<AppState>) -> Result<HttpResponse> {
-    let result = db::game::list_show(&app.db, true, true).await?;
+async fn list_active(user: Option<AuthUser>, app: web::Data<AppState>) -> Result<HttpResponse> {
+    let result = db::game::list_accessible_show(&app.db, user.map(|user| user.uid)).await?;
 
     Ok(HttpResponse::Ok().json(result))
 }

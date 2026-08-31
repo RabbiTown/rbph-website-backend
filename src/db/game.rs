@@ -45,6 +45,10 @@ pub fn game_accessible_for_role(is_active: bool, role: RbUserRole) -> bool {
     is_active || role.is_admin()
 }
 
+fn game_accessible_for_user(is_active: bool, role: RbUserRole, is_beta: bool) -> bool {
+    game_accessible_for_role(is_active, role) || is_beta
+}
+
 #[derive(Serialize)]
 pub struct RbCurrencyAdminData {
     pub id: i32,
@@ -494,7 +498,7 @@ pub async fn list_all(
 mod tests {
     use crate::model::user::RbUserRole;
 
-    use super::{game_accessible_for_role, valid_game_title};
+    use super::{game_accessible_for_role, game_accessible_for_user, valid_game_title};
 
     #[test]
     fn validates_game_title_length() {
@@ -516,6 +520,13 @@ mod tests {
         assert!(!game_accessible_for_role(false, RbUserRole::User));
         assert!(!game_accessible_for_role(false, RbUserRole::Moderator));
         assert!(game_accessible_for_role(false, RbUserRole::Admin));
+    }
+
+    #[test]
+    fn beta_team_members_can_access_inactive_games() {
+        assert!(game_accessible_for_user(false, RbUserRole::User, true));
+        assert!(game_accessible_for_user(false, RbUserRole::Moderator, true));
+        assert!(!game_accessible_for_user(false, RbUserRole::User, false));
     }
 }
 
@@ -539,6 +550,28 @@ pub async fn list_show(
         .build_query_as::<RbGameShowData>()
         .fetch_all(pool)
         .await?;
+
+    Ok(result)
+}
+
+pub async fn list_accessible_show(
+    pool: &DbPool,
+    user_id: Option<i32>,
+) -> Result<Vec<RbGameShowData>, RbInternalError> {
+    let result = sqlx::query_as!(
+        RbGameShowData,
+        "SELECT DISTINCT g.id, g.title, g.cover
+        FROM rb_game g
+        LEFT JOIN rb_team_member tm
+            ON tm.game_id = g.id AND tm.user_id = $1
+        LEFT JOIN rb_team t ON t.id = tm.team_id
+        WHERE (g.is_listed AND g.is_active)
+            OR ($1::INT IS NOT NULL AND COALESCE(t.is_beta, FALSE))
+        ORDER BY g.id;",
+        user_id
+    )
+    .fetch_all(pool)
+    .await?;
 
     Ok(result)
 }
@@ -595,10 +628,25 @@ pub async fn get_game_user_info(
     game_id: i32,
     user_role: RbUserRole,
 ) -> Result<Option<GameUserInfo>, RbInternalError> {
-    if exists(db_pool, game_id, user_role).await? {
-        let team_id = db::team::get_id_by_user_game(db_pool, user_id, game_id).await?;
-        Ok(Some(GameUserInfo { game_id, team_id }))
-    } else {
-        Ok(None)
-    }
+    let row = sqlx::query!(
+        "SELECT g.is_active,
+            tm.team_id AS \"team_id?\",
+            COALESCE(t.is_beta, FALSE) AS \"is_beta!\"
+        FROM rb_game g
+        LEFT JOIN rb_team_member tm
+            ON tm.game_id = g.id AND tm.user_id = $2
+        LEFT JOIN rb_team t ON t.id = tm.team_id
+        WHERE g.id = $1;",
+        game_id,
+        user_id
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    Ok(row.and_then(|row| {
+        game_accessible_for_user(row.is_active, user_role, row.is_beta).then_some(GameUserInfo {
+            game_id,
+            team_id: row.team_id,
+        })
+    }))
 }

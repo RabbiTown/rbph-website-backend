@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COUNT(*) AS \"count!\"\n        FROM rb_team t\n        WHERE t.game_id = $1\n            AND ($2 = '' OR t.name ILIKE '%' || $2 || '%')\n            AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)\n            AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)\n            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5)\n            AND ($6::BOOLEAN IS NULL OR t.is_beta = $6);",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2dfc23e7fad7d2addc6a1de803ca8e87b43dbd051a2a0fa1d6c785e0e204deb8"
+}

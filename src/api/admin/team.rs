@@ -37,6 +37,7 @@ struct TeamListQuery {
     is_banned: Option<bool>,
     is_locked: Option<bool>,
     is_finished: Option<bool>,
+    is_beta: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
@@ -100,6 +101,7 @@ async fn list(
         is_banned: query.is_banned,
         is_locked: query.is_locked,
         is_finished: query.is_finished,
+        is_beta: query.is_beta,
         limit: query.limit.unwrap_or(50).clamp(1, 200),
         offset: query.offset.unwrap_or(0).max(0),
     };

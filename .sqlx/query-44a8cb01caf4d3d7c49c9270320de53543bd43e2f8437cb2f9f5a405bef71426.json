@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.is_active,\n            tm.team_id AS \"team_id?\",\n            COALESCE(t.is_beta, FALSE) AS \"is_beta!\"\n        FROM rb_game g\n        LEFT JOIN rb_team_member tm\n            ON tm.game_id = g.id AND tm.user_id = $2\n        LEFT JOIN rb_team t ON t.id = tm.team_id\n        WHERE g.id = $1;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_active",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_beta!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "44a8cb01caf4d3d7c49c9270320de53543bd43e2f8437cb2f9f5a405bef71426"
+}

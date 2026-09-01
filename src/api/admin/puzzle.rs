@@ -321,9 +321,7 @@ async fn validate_submit_requirements(
     Ok(true)
 }
 
-async fn invalidate_puzzle_cache(app: &AppState, game_id: i32, puzzle_id: i32) {
-    db::puzzle::invalidate_admin_cache(game_id, puzzle_id);
-
+async fn invalidate_puzzle_cache(app: &AppState, puzzle_id: i32) {
     if let Ok(mut conn) = app.kv.get().await {
         let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v3")).await;
     }
@@ -399,7 +397,7 @@ async fn append(
             .code(PuzzleAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_puzzle_cache(&app, puzzle.game_id, puzzle.id).await;
+    invalidate_puzzle_cache(&app, puzzle.id).await;
     invalidate_round_state_cache(&app, puzzle.round_id).await;
     crate::module::release::process_due_releases(app.get_ref()).await?;
 
@@ -440,7 +438,7 @@ async fn batch_update_release_phase(
 
     let mut round_ids = HashSet::new();
     for puzzle in &puzzles {
-        invalidate_puzzle_cache(&app, puzzle.game_id, puzzle.id).await;
+        invalidate_puzzle_cache(&app, puzzle.id).await;
         invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
         round_ids.insert(puzzle.round_id);
     }
@@ -511,7 +509,7 @@ async fn edit(
             .code(PuzzleAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_puzzle_cache(&app, puzzle.game_id, path.puzzle_id).await;
+    invalidate_puzzle_cache(&app, path.puzzle_id).await;
     invalidate_puzzle_team_state_cache(&app, path.puzzle_id).await;
     invalidate_round_state_cache(&app, puzzle.round_id).await;
     if let Some(previous) = previous
@@ -541,7 +539,7 @@ async fn delete(path: web::Path<PuzzlePathInfo>, app: web::Data<AppState>) -> Re
             .code(PuzzleAdminResult::NotFound.into())
             .http_err();
     }
-    invalidate_puzzle_cache(&app, puzzle.game_id, path.puzzle_id).await;
+    invalidate_puzzle_cache(&app, path.puzzle_id).await;
     invalidate_round_state_cache(&app, puzzle.round_id).await;
 
     Ok(HttpResponse::Ok().json(PuzzleAdminDeleteResponse {

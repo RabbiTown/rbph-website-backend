@@ -91,9 +91,7 @@ fn validate_update(data: &RbRoundUpdateData) -> bool {
     true
 }
 
-async fn invalidate_round_cache(app: &AppState, game_id: i32, round_id: i32) {
-    db::puzzle::invalidate_admin_cache(game_id, 0);
-
+async fn invalidate_round_cache(app: &AppState, round_id: i32) {
     if let Ok(mut conn) = app.kv.get().await {
         let _: Result<(), _> = conn.del(format!("round:{round_id}:show:v2")).await;
     }
@@ -146,7 +144,7 @@ async fn append(
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_round_cache(&app, round.game_id, round.id).await;
+    invalidate_round_cache(&app, round.id).await;
 
     Ok(HttpResponse::Ok().json(RoundAdminResponse {
         code: RoundAdminResult::Ok,
@@ -177,7 +175,7 @@ async fn edit(
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_round_cache(&app, round.game_id, path.round_id).await;
+    invalidate_round_cache(&app, path.round_id).await;
 
     Ok(HttpResponse::Ok().json(RoundAdminResponse {
         code: RoundAdminResult::Ok,
@@ -186,20 +184,13 @@ async fn edit(
 }
 
 async fn delete(path: web::Path<RoundPathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let round = db::round::admin_get(&app.db, path.round_id).await?;
-    let Some(round) = round else {
-        return RbError::not_found()
-            .code(RoundAdminResult::NotFound.into())
-            .http_err();
-    };
-
     let deleted = db::round::admin_delete(&app.db, path.round_id).await?;
     if !deleted {
         return RbError::not_found()
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     }
-    invalidate_round_cache(&app, round.game_id, path.round_id).await;
+    invalidate_round_cache(&app, path.round_id).await;
 
     Ok(HttpResponse::Ok().json(RoundAdminDeleteResponse {
         code: RoundAdminResult::Ok,

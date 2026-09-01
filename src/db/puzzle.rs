@@ -1,11 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
-use dashmap::DashMap;
 use deadpool_redis::redis::{AsyncCommands, RedisError};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, prelude::FromRow};
@@ -15,19 +10,17 @@ use crate::{
     AppState, DbPool, KvPool,
     db::{self, game::GameUserInfo},
     error::RbInternalError,
-    expr::{self, ast::GateExpr, types::PuzzleStates},
+    expr::{self, types::PuzzleStates},
     extractor::auth::AuthUser,
     game::{
         self,
-        judge::{JudgeResult, JudgeRule, normalize_answer},
+        judge::{JudgeResult, normalize_answer},
     },
     model::game::{
         RbContentType, RbJudgeAction, RbPuzzlePenaltyType, RbPuzzleType, RbTeamPuzzleState,
     },
     model::user::RbUserRole,
 };
-
-static JUDGE_CACHE: Lazy<DashMap<i32, Arc<Vec<JudgeRule>>>> = Lazy::new(DashMap::new);
 
 pub async fn get_puzzle_game(
     db_pool: &DbPool,
@@ -707,78 +700,6 @@ pub struct CurrencyPenaltyShowData {
     pub amount: i64,
 }
 
-pub async fn get_judge_rules(
-    pool: &DbPool,
-    puzzle_id: i32,
-) -> Result<Option<Arc<Vec<JudgeRule>>>, RbInternalError> {
-    if let Some(c) = JUDGE_CACHE.get(&puzzle_id) {
-        return Ok(Some(c.clone()));
-    }
-
-    let judge = sqlx::query_scalar!("SELECT judge FROM rb_puzzle WHERE id = $1;", puzzle_id)
-        .fetch_optional(pool)
-        .await?;
-
-    if judge.is_none() {
-        return Ok(None);
-    }
-
-    let rules = game::judge::value_to_judge(judge.unwrap())?;
-
-    let rules = Arc::new(rules);
-    JUDGE_CACHE.insert(puzzle_id, rules.clone());
-
-    Ok(Some(rules))
-}
-
-type UnlockCondMap = DashMap<i32, Arc<Vec<(i32, GateExpr)>>>;
-static UNLOCK_COND_CACHE: Lazy<UnlockCondMap> = Lazy::new(DashMap::new);
-
-pub fn invalidate_admin_cache(game_id: i32, puzzle_id: i32) {
-    JUDGE_CACHE.remove(&puzzle_id);
-    UNLOCK_COND_CACHE.remove(&game_id);
-}
-
-pub async fn get_unlock_conds_by_game(
-    pool: &DbPool,
-    game_id: i32,
-) -> Result<Arc<Vec<(i32, GateExpr)>>, RbInternalError> {
-    if let Some(c) = UNLOCK_COND_CACHE.get(&game_id) {
-        return Ok(c.clone());
-    }
-
-    let raw_exprs = sqlx::query!(
-        "SELECT p.id, p.unlock_cond
-        FROM rb_puzzle p
-        JOIN rb_round r ON r.id = p.round_id
-        JOIN rb_game g ON g.id = r.game_id
-        WHERE g.id = $1
-        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
-        game_id
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let exprs: Vec<(i32, GateExpr)> = raw_exprs
-        .iter()
-        .filter_map(|r| {
-            let unlock_cond = r.unlock_cond.as_deref()?;
-            match expr::compile_gate_expr(unlock_cond) {
-                Ok(expr) => Some((r.id, expr)),
-                Err(e) => {
-                    log::warn!("Failed to parse unlock_cond for puzzle {}: {}", r.id, e);
-                    None
-                }
-            }
-        })
-        .collect();
-
-    let arc_expr = Arc::new(exprs);
-    UNLOCK_COND_CACHE.insert(game_id, arc_expr.clone());
-
-    Ok(arc_expr)
-}
-
 #[derive(FromRow, Serialize)]
 pub struct SubmissionUserShowData {
     user_name: String,
@@ -1282,17 +1203,14 @@ pub async fn submit_answer(
     }
 
     let puzzle_info = sqlx::query!(
-        "SELECT id, game_id, round_id, title, submit_requirements
+        "SELECT id, game_id, round_id, title, submit_requirements, judge
         FROM rb_puzzle
         WHERE id = $1;",
         puzzle_id
     )
     .fetch_one(&mut *tx)
     .await?;
-    let judge = get_judge_rules(&app.db, puzzle_id).await?;
-    let Some(rules) = judge else {
-        return Ok(SubmitAnswerResult::NotFound);
-    };
+    let rules = game::judge::value_to_judge(puzzle_info.judge)?;
     if rules.is_empty() {
         return Ok(SubmitAnswerResult::Locked);
     }
@@ -2038,7 +1956,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
     .await?;
 
     let puzzle_rows = sqlx::query!(
-        "SELECT p.id, p.slug, p.round_id, r.puzzle AS round_puzzle_id
+        "SELECT p.id, p.slug, p.round_id, p.unlock_cond, r.puzzle AS round_puzzle_id
         FROM rb_puzzle p
         JOIN rb_round r ON r.id = p.round_id
         WHERE r.game_id = $1
@@ -2057,9 +1975,22 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
 
     let mut puzzle_slugs: HashMap<String, u32> = HashMap::new();
     let mut round_puzzles: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut conds = Vec::new();
     for row in puzzle_rows {
         let row_id = row.id;
         let puzzle_id = row_id.try_into().unwrap_or(0);
+        if let Some(unlock_cond) = row.unlock_cond.as_deref() {
+            match expr::compile_gate_expr(unlock_cond) {
+                Ok(expr) => conds.push((row_id, expr)),
+                Err(error) => {
+                    log::warn!(
+                        "Failed to parse unlock_cond for puzzle {}: {}",
+                        row_id,
+                        error
+                    );
+                }
+            }
+        }
         if let Some(slug) = row.slug {
             puzzle_slugs.insert(slug, puzzle_id);
         }
@@ -2079,8 +2010,6 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         triggers,
         game_started: info[0].is_locked,
     };
-
-    let conds = get_unlock_conds_by_game(&app.db, game_id).await?;
 
     let mut unlocks: Vec<i32> = Vec::new();
 

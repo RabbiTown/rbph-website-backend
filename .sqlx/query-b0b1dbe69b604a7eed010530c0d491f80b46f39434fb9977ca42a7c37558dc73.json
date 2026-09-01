@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id, p.slug, p.round_id, p.unlock_cond, r.puzzle AS round_puzzle_id\n        FROM rb_puzzle p\n        JOIN rb_round r ON r.id = p.round_id\n        WHERE r.game_id = $1\n        ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "unlock_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "round_puzzle_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "b0b1dbe69b604a7eed010530c0d491f80b46f39434fb9977ca42a7c37558dc73"
+}

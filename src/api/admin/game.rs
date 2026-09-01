@@ -258,7 +258,7 @@ async fn append(
     }
 
     let game = db::game::create(&app.db, &req).await?;
-    app.release_schedule_changed.notify_one();
+    crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(GameAdminResponse {
         code: GameAdminResult::Ok,

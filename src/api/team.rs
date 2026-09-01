@@ -63,7 +63,6 @@ async fn create_self(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let req = req.into_inner();
 
     let trimmed_pwd = req.pass.trim();
@@ -185,7 +184,6 @@ async fn join(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let result = db::team::join(&app, path.team_id, user.uid, &req.password).await?;
     if matches!(result, TeamJoinResult::NotFound) {
         RbError::not_found().err()?

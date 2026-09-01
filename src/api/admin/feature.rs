@@ -55,7 +55,6 @@ fn parse_feature(value: &str) -> Option<GameFeature> {
 }
 
 async fn list(path: web::Path<GamePath>, app: web::Data<AppState>) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     Ok(HttpResponse::Ok().json(FeatureListResponse {
         code: FeatureResult::Ok,
         features: db::feature::list_admin(&app.db, path.game_id).await?,
@@ -68,7 +67,7 @@ async fn update(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
+    crate::module::release::process_due_releases_wait(app.get_ref()).await?;
     let Some(feature) = parse_feature(&path.feature) else {
         return RbError::bad_req(FeatureResult::Invalid.into()).http_err();
     };

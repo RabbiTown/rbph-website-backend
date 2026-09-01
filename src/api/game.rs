@@ -362,7 +362,6 @@ async fn get_aggre_info(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let game = db::game::get_by_id(&app.db, path.game_id).await?;
     if game.is_none() {
         RbError::not_found().err()?;
@@ -412,7 +411,6 @@ async fn sync_releases(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?;
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let sync = db::release::sync_events(&app.db, path.game_id, team_id, body.after.max(0)).await?;
     Ok(HttpResponse::Ok().json(ReleaseSyncResponse {
         release_cursor: sync.cursor,

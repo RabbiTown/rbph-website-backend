@@ -97,7 +97,7 @@ async fn append(
         }
         Err(error) => return Err(error.into()),
     };
-    app.release_schedule_changed.notify_one();
+    crate::module::release::wake_scheduler(app.get_ref());
     app.sync_hub
         .notify_game_release_updated(
             path.game_id,
@@ -153,7 +153,7 @@ async fn edit(
         }
         Err(error) => return Err(error.into()),
     };
-    app.release_schedule_changed.notify_one();
+    crate::module::release::wake_scheduler(app.get_ref());
     app.sync_hub
         .notify_game_release_updated(
             path.game_id,
@@ -171,7 +171,7 @@ async fn delete(path: web::Path<PhasePathInfo>, app: web::Data<AppState>) -> Res
     if !release::delete_admin(&app.db, path.game_id, path.phase_id).await? {
         return RbError::bad_req(ReleaseAdminResult::Invalid.into()).http_err();
     }
-    app.release_schedule_changed.notify_one();
+    crate::module::release::wake_scheduler(app.get_ref());
     app.sync_hub
         .notify_game_release_updated(
             path.game_id,

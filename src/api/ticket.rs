@@ -107,7 +107,6 @@ async fn get_ticket(
     info: TicketUserInfo,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let page = ticket_page_request(&query)?;
     let result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info, &page).await?;
     if result.is_none() {
@@ -122,7 +121,6 @@ async fn get_dm_ticket(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let page = ticket_page_request(&query)?;
     let result = db::ticket::get_dm_ticket_thread(
@@ -279,7 +277,6 @@ async fn do_send_ticket_message(
     app: &AppState,
     max_pending: Option<i64>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app).await?;
     let accessible = match req.sender_type {
         RbTicketSenderType::Team => info.member_access,
         RbTicketSenderType::Host => info.mod_access,
@@ -428,7 +425,6 @@ async fn send_dm_ticket_message(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let has_existing = db::ticket::get_dm_ticket_id(&app.db, team_id)
         .await?
@@ -699,7 +695,6 @@ async fn open_ticket(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
 
     open_ticket_for_team(
@@ -867,7 +862,6 @@ async fn get_team_puzzle_tickets(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let result =
         db::ticket::get_team_puzzle_tickets(&app.db, team_id, path.puzzle_id, false).await?;

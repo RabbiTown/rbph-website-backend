@@ -149,7 +149,6 @@ async fn judge_puzzle(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    crate::module::release::process_due_releases(app.get_ref()).await?;
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let submit_result = db::puzzle::submit_answer(&app, &user, path.puzzle_id, &req.answer).await?;
 

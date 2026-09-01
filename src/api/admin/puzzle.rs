@@ -399,7 +399,7 @@ async fn append(
     };
     invalidate_puzzle_cache(&app, puzzle.id).await;
     invalidate_round_state_cache(&app, puzzle.round_id).await;
-    crate::module::release::process_due_releases(app.get_ref()).await?;
+    crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
         code: PuzzleAdminResult::Ok,
@@ -445,7 +445,7 @@ async fn batch_update_release_phase(
     for round_id in round_ids {
         invalidate_round_state_cache(&app, round_id).await;
     }
-    crate::module::release::process_due_releases(app.get_ref()).await?;
+    crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(PuzzleAdminListResponse {
         code: PuzzleAdminResult::Ok,
@@ -517,7 +517,7 @@ async fn edit(
     {
         invalidate_round_state_cache(&app, previous.round_id).await;
     }
-    crate::module::release::process_due_releases(app.get_ref()).await?;
+    crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
         code: PuzzleAdminResult::Ok,

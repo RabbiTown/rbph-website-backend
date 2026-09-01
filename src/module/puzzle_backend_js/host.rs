@@ -1388,7 +1388,7 @@ impl HostBridge for HostDispatcher {
                     ));
                 }
                 let input = Self::submission_input(&submission)?;
-                let row = block_on_db(crate::db::puzzle::add_backend_submission_and_invalidate(
+                let row = block_on_db(crate::db::puzzle::add_backend_submission(
                     &self.app,
                     self.runtime.team_id,
                     self.runtime.user_id,

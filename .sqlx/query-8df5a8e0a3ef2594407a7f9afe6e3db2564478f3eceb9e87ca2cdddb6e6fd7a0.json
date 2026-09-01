@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, title, cover, game_id, puzzle\n        FROM rb_round\n        WHERE id = $1",
+  "query": "SELECT id, slug, title, cover, game_id, puzzle\n         FROM rb_round\n         WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -48,5 +48,5 @@
       true
     ]
   },
-  "hash": "ac8a8f35e24a1b2cc674b9e5eedd4c7d11358cdac32b801952ece739eacbdb03"
+  "hash": "8df5a8e0a3ef2594407a7f9afe6e3db2564478f3eceb9e87ca2cdddb6e6fd7a0"
 }

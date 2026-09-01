@@ -1,0 +1,113 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id, p.slug, p.title, p.ptype, p.judge, p.submit_requirements,\n                  p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id,\n                  tp.state, tp.max_submit + p.max_submit AS max_submit,\n                  COALESCE(submission.submit_count, 0) AS \"submit_count!\",\n                  submission.answers,\n                  GREATEST(tp.ctime_at, release.release_at) AS \"utime_at!\",\n                  tp.cooldown_till\n           FROM rb_puzzle p\n           JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id\n           JOIN rb_team_puzzle tp\n             ON tp.puzzle_id = p.id AND tp.team_id = $1 AND tp.state >= 0\n           JOIN rb_team t ON t.id = tp.team_id AND NOT t.is_banned\n           JOIN rb_puzzle_effective_release release\n             ON release.puzzle_id = p.id AND release.release_at <= NOW()\n           LEFT JOIN LATERAL (\n               SELECT COUNT(*) FILTER (\n                          WHERE s.saction = 0 AND NOT s.ignored\n                      )::BIGINT AS submit_count,\n                      ARRAY_AGG(DISTINCT s.real_answer) FILTER (\n                          WHERE s.saction = 1 AND s.real_answer IS NOT NULL\n                      ) AS answers\n               FROM rb_submission s\n               WHERE s.team_id = tp.team_id AND s.puzzle_id = p.id\n           ) submission ON TRUE\n           WHERE p.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "ptype",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 4,
+        "name": "judge",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "submit_requirements",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "round_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "round_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 11,
+        "name": "max_submit",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "submit_count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "answers",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 14,
+        "name": "utime_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "cooldown_till",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "0149ab90eafa04385d4163f00949167825c94723d0a1b6f256f89109c3f90cb6"
+}

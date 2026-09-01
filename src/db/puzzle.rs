@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use deadpool_redis::redis::{AsyncCommands, RedisError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgConnection, prelude::FromRow};
@@ -212,6 +211,12 @@ pub enum PuzzleSubmitRequirement {
     CurrencyMinimum { currency_id: i32, minimum: i64 },
 }
 
+fn parse_submit_requirements(
+    value: serde_json::Value,
+) -> Result<Vec<PuzzleSubmitRequirement>, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
 #[derive(Serialize)]
 pub struct PuzzleSubmitRequirementShowData {
     #[serde(rename = "type")]
@@ -222,100 +227,23 @@ pub struct PuzzleSubmitRequirementShowData {
     pub minimum: i64,
 }
 
-fn parse_submit_requirements(
-    value: serde_json::Value,
-) -> Result<Vec<PuzzleSubmitRequirement>, serde_json::Error> {
-    serde_json::from_value(value)
-}
-
-pub async fn get_puzzle_show(
-    db_pool: &DbPool,
-    puzzle_id: i32,
-) -> Result<Option<RbPuzzleShowData>, RbInternalError> {
-    let result = sqlx::query!(
-        "SELECT p.id, p.slug, p.title, p.ptype, p.judge, p.submit_requirements,
-                p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id
-        FROM rb_puzzle p
-        JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id
-        WHERE p.id = $1;",
-        puzzle_id
-    )
-    .fetch_optional(db_pool)
-    .await?;
-
-    let Some(x) = result else {
-        return Ok(None);
-    };
-    let requirements = parse_submit_requirements(x.submit_requirements).unwrap_or_default();
-    let mut requirement_show = Vec::with_capacity(requirements.len());
-    for requirement in requirements {
-        let PuzzleSubmitRequirement::CurrencyMinimum {
-            currency_id,
-            minimum,
-        } = requirement;
-        if let Some(currency) = sqlx::query!(
-            "SELECT cname, prec FROM rb_currency WHERE id = $1 AND game_id = $2",
-            currency_id,
-            x.game_id
-        )
-        .fetch_optional(db_pool)
-        .await?
-        {
-            requirement_show.push(PuzzleSubmitRequirementShowData {
-                requirement_type: "currency_minimum",
-                currency_id,
-                currency_name: currency.cname,
-                currency_prec: currency.prec,
-                minimum,
-            });
-        }
-    }
-
-    Ok(Some(RbPuzzleShowData {
-        id: x.id,
-        slug: x.slug,
-        title: x.title,
-        ptype: x.ptype.into(),
-        round: RbPuzzleShowRoundData {
-            id: x.round_id,
-            slug: x.round_slug,
-            title: x.round_title,
-        },
-        game_id: x.game_id,
-        submission_enabled: game::judge::value_to_judge(x.judge)
-            .is_ok_and(|rules| !rules.is_empty()),
-        submit_requirements: requirement_show,
-        announcements: Vec::new(),
-    }))
-}
-
-pub async fn get_puzzle_show_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    puzzle_id: i32,
-) -> Result<Option<String>, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:show:v3");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok(Some(cache));
-    }
-
-    let result = get_puzzle_show(db_pool, puzzle_id)
-        .await?
-        .map(|x| serde_json::to_string(&x))
-        .transpose()?;
-
-    if result.is_some() {
-        let kv_pool = kv_pool.clone();
-        let result = result.clone();
-        tokio::spawn(async move {
-            let mut conn = kv_pool.get().await.unwrap();
-            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
-        });
-    }
-
-    Ok(result)
+struct PuzzleForTeamRow {
+    id: i32,
+    slug: Option<String>,
+    title: String,
+    ptype: i16,
+    judge: Value,
+    round_id: i32,
+    round_slug: Option<String>,
+    round_title: String,
+    game_id: i32,
+    submit_requirements: Value,
+    state: i16,
+    max_submit: Option<i32>,
+    submit_count: i64,
+    answers: Option<Vec<String>>,
+    utime_at: OffsetDateTime,
+    cooldown_till: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, FromRow, Serialize)]
@@ -377,84 +305,135 @@ pub async fn get_puzzle_team_state(
     }))
 }
 
-pub async fn get_puzzle_team_state_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    team_id: i32,
-    puzzle_id: i32,
-) -> Result<Option<String>, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("puzzle:{puzzle_id}:team:{team_id}:full_state");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok(Some(cache));
-    }
-
-    let result = get_puzzle_team_state(db_pool, team_id, puzzle_id)
-        .await?
-        .map(|x| serde_json::to_string(&x))
-        .transpose()?;
-
-    if result.is_some() {
-        let kv_pool = kv_pool.clone();
-        let result = result.clone();
-        tokio::spawn(async move {
-            let mut conn = kv_pool.get().await.unwrap();
-            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
-        });
-    }
-
-    Ok(result)
+#[derive(Serialize)]
+pub struct RbPuzzleForTeamData {
+    data: RbPuzzleShowData,
+    state: RbPuzzleTeamStateShowData,
 }
 
-async fn invalidate_team_puzzle_state_cache(
-    app: &AppState,
-    team_id: i32,
-    puzzle_id: i32,
-) -> Result<(), RbInternalError> {
-    let round_ids = sqlx::query_scalar!("SELECT id FROM rb_round WHERE puzzle = $1;", puzzle_id)
-        .fetch_all(&app.db)
-        .await?;
-
-    if round_ids.is_empty() {
-        db::cache::invalidate_team_puzzle(app, team_id, puzzle_id).await?;
-    } else {
-        for round_id in round_ids {
-            db::cache::invalidate_team_round(app, team_id, round_id).await?;
-        }
+async fn load_submit_requirements(
+    db_pool: &DbPool,
+    game_id: i32,
+    requirements: Vec<PuzzleSubmitRequirement>,
+) -> Result<Vec<PuzzleSubmitRequirementShowData>, RbInternalError> {
+    if requirements.is_empty() {
+        return Ok(Vec::new());
     }
 
-    Ok(())
+    let currency_ids = requirements
+        .iter()
+        .map(|requirement| match requirement {
+            PuzzleSubmitRequirement::CurrencyMinimum { currency_id, .. } => *currency_id,
+        })
+        .collect::<Vec<_>>();
+    let currencies = sqlx::query!(
+        "SELECT id, cname, prec
+         FROM rb_currency
+         WHERE game_id = $1 AND id = ANY($2)",
+        game_id,
+        &currency_ids
+    )
+    .fetch_all(db_pool)
+    .await?
+    .into_iter()
+    .map(|currency| (currency.id, (currency.cname, currency.prec)))
+    .collect::<HashMap<_, _>>();
+
+    Ok(requirements
+        .into_iter()
+        .filter_map(|requirement| match requirement {
+            PuzzleSubmitRequirement::CurrencyMinimum {
+                currency_id,
+                minimum,
+            } => currencies
+                .get(&currency_id)
+                .map(
+                    |(currency_name, currency_prec)| PuzzleSubmitRequirementShowData {
+                        requirement_type: "currency_minimum",
+                        currency_id,
+                        currency_name: currency_name.clone(),
+                        currency_prec: *currency_prec,
+                        minimum,
+                    },
+                ),
+        })
+        .collect())
 }
 
-pub async fn get_puzzle_show_str_for_team(
+pub async fn get_puzzle_for_team(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
     team_id: i32,
     puzzle_id: i32,
-) -> Result<Option<String>, RbInternalError> {
-    if !can_team_access_puzzle(db_pool, team_id, puzzle_id).await? {
+) -> Result<Option<RbPuzzleForTeamData>, RbInternalError> {
+    let row = sqlx::query_as!(
+        PuzzleForTeamRow,
+        r#"SELECT p.id, p.slug, p.title, p.ptype, p.judge, p.submit_requirements,
+                  p.round_id, r.slug AS round_slug, r.title AS round_title, r.game_id,
+                  tp.state, tp.max_submit + p.max_submit AS max_submit,
+                  COALESCE(submission.submit_count, 0) AS "submit_count!",
+                  submission.answers,
+                  GREATEST(tp.ctime_at, release.release_at) AS "utime_at!",
+                  tp.cooldown_till
+           FROM rb_puzzle p
+           JOIN rb_round r ON r.id = p.round_id AND r.puzzle IS DISTINCT FROM p.id
+           JOIN rb_team_puzzle tp
+             ON tp.puzzle_id = p.id AND tp.team_id = $1 AND tp.state >= 0
+           JOIN rb_team t ON t.id = tp.team_id AND NOT t.is_banned
+           JOIN rb_puzzle_effective_release release
+             ON release.puzzle_id = p.id AND release.release_at <= NOW()
+           LEFT JOIN LATERAL (
+               SELECT COUNT(*) FILTER (
+                          WHERE s.saction = 0 AND NOT s.ignored
+                      )::BIGINT AS submit_count,
+                      ARRAY_AGG(DISTINCT s.real_answer) FILTER (
+                          WHERE s.saction = 1 AND s.real_answer IS NOT NULL
+                      ) AS answers
+               FROM rb_submission s
+               WHERE s.team_id = tp.team_id AND s.puzzle_id = p.id
+           ) submission ON TRUE
+           WHERE p.id = $2"#,
+        team_id,
+        puzzle_id,
+    )
+    .fetch_optional(db_pool)
+    .await?;
+
+    let Some(row) = row else {
         return Ok(None);
-    }
+    };
+    let requirements =
+        parse_submit_requirements(row.submit_requirements.clone()).unwrap_or_default();
+    let (submit_requirements, announcements) = tokio::try_join!(
+        load_submit_requirements(db_pool, row.game_id, requirements),
+        db::anmt::list_for_team_puzzle(db_pool, team_id, puzzle_id),
+    )?;
 
-    if let Some(show_str) = get_puzzle_show_str(db_pool, kv_pool, puzzle_id).await? {
-        let mut show: Value = serde_json::from_str(&show_str)?;
-        let announcements = db::anmt::list_for_team_puzzle(db_pool, team_id, puzzle_id).await?;
-        if let Some(show) = show.as_object_mut() {
-            show.insert(
-                "announcements".to_owned(),
-                serde_json::to_value(announcements)?,
-            );
-        }
-        let show_str = serde_json::to_string(&show)?;
-        let json = match get_puzzle_team_state_str(db_pool, kv_pool, team_id, puzzle_id).await? {
-            Some(state_str) => format!("{{\"data\":{show_str},\"state\":{state_str}}}"),
-            None => format!("{{\"data\":{show_str}}}"),
-        };
-        Ok(Some(json))
-    } else {
-        Ok(None)
-    }
+    Ok(Some(RbPuzzleForTeamData {
+        data: RbPuzzleShowData {
+            id: row.id,
+            slug: row.slug,
+            title: row.title,
+            ptype: row.ptype.into(),
+            round: RbPuzzleShowRoundData {
+                id: row.round_id,
+                slug: row.round_slug,
+                title: row.round_title,
+            },
+            game_id: row.game_id,
+            submission_enabled: game::judge::value_to_judge(row.judge)
+                .is_ok_and(|rules| !rules.is_empty()),
+            submit_requirements,
+            announcements,
+        },
+        state: RbPuzzleTeamStateShowData {
+            state: row.state.into(),
+            max_submit: row.max_submit,
+            submit_count: row.submit_count,
+            answers: row.answers.unwrap_or_default(),
+            utime_at: row.utime_at,
+            cooldown_till: row.cooldown_till,
+        },
+    }))
 }
 
 #[derive(Clone, Serialize)]
@@ -500,7 +479,7 @@ pub struct BackendSubmissionShowData {
     pub ctime_at: OffsetDateTime,
 }
 
-pub async fn add_backend_submission(
+pub async fn insert_backend_submission(
     pool: &DbPool,
     team_id: i32,
     user_id: i32,
@@ -535,14 +514,14 @@ pub async fn add_backend_submission(
     Ok(row)
 }
 
-pub async fn add_backend_submission_and_invalidate(
+pub async fn add_backend_submission(
     app: &AppState,
     team_id: i32,
     user_id: i32,
     puzzle_id: i32,
     data: &BackendSubmissionInput,
 ) -> Result<BackendSubmissionShowData, RbInternalError> {
-    let row = add_backend_submission(&app.db, team_id, user_id, puzzle_id, data).await?;
+    let row = insert_backend_submission(&app.db, team_id, user_id, puzzle_id, data).await?;
     if let Some(puzzle_info) = get_puzzle_judge_info(&app.db, puzzle_id).await? {
         db::event_log::insert_pool(
             &app.db,
@@ -575,7 +554,6 @@ pub async fn add_backend_submission_and_invalidate(
         )
         .await?;
     }
-    invalidate_team_puzzle_state_cache(app, team_id, puzzle_id).await?;
     Ok(row)
 }
 
@@ -635,9 +613,10 @@ pub async fn solve_backend_puzzle(
 
     tx.commit().await?;
 
-    db::cache::invalidate_team_puzzle(app, team_id, puzzle_id).await?;
     if solved {
-        db::cache::invalidate_team_puzzle_solved(app, team_id, puzzle_id).await?;
+        db::board::LEADER_BOARD_CACHE
+            .update_team(&app.db, team_id, true)
+            .await?;
         if let Some(puzzle_info) = get_puzzle_judge_info(&app.db, puzzle_id).await? {
             db::event_log::insert_pool(
                 &app.db,
@@ -1414,7 +1393,6 @@ pub async fn submit_answer(
     let mut do_unlock = false;
     let mut currency_updated = false;
     let mut currency_penalty: Vec<CurrencyPenaltyShowData> = vec![];
-    let mut state_cache_invalidated = false;
 
     match result.action {
         RbJudgeAction::Correct | RbJudgeAction::FinishGame => {
@@ -1674,9 +1652,6 @@ pub async fn submit_answer(
                 .fetch_one(&mut *tx)
                 .await?;
             }
-
-            invalidate_team_puzzle_state_cache(app, team_id, info.puzzle_id).await?;
-            state_cache_invalidated = true;
         }
         _ => {}
     }
@@ -1701,12 +1676,10 @@ pub async fn submit_answer(
 
     tx.commit().await?;
 
-    if matches!(result.action, RbJudgeAction::Fail) && !state_cache_invalidated {
-        invalidate_team_puzzle_state_cache(app, team_id, puzzle_id).await?;
-    }
-
     if result.action.side_effect() {
-        db::cache::invalidate_team_puzzle_solved(app, team_id, puzzle_id).await?;
+        db::board::LEADER_BOARD_CACHE
+            .update_team(&app.db, team_id, true)
+            .await?;
     }
 
     let unlocks = if do_unlock {
@@ -2047,9 +2020,6 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
             )
             .execute(&app.db)
             .await?;
-
-            let round_ids: HashSet<i32> = inserted.iter().map(|puzzle| puzzle.round_id).collect();
-            db::cache::invalidate_team_rounds_now(app, team_id, round_ids).await?;
         }
 
         for puzzle in inserted {

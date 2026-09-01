@@ -79,68 +79,6 @@ pub async fn remove_team_info(app: &AppState, game_id: i32) -> Result<(), RbInte
     Ok(())
 }
 
-pub async fn invalidate_team_puzzle(
-    app: &AppState,
-    team_id: i32,
-    puzzle_id: i32,
-) -> Result<(), RbInternalError> {
-    invalidate_cache!(
-        app.kv,
-        keys = [format!("puzzle:{puzzle_id}:team:{team_id}:full_state")]
-    );
-
-    Ok(())
-}
-
-pub async fn invalidate_team_round(
-    app: &AppState,
-    team_id: i32,
-    round_id: i32,
-) -> Result<(), RbInternalError> {
-    invalidate_cache!(
-        app.kv,
-        keys = [format!("round:{round_id}:team:{team_id}:full_state")]
-    );
-
-    Ok(())
-}
-
-pub async fn invalidate_team_rounds_now(
-    app: &AppState,
-    team_id: i32,
-    round_ids: impl IntoIterator<Item = i32>,
-) -> Result<(), RbInternalError> {
-    let keys: Vec<String> = round_ids
-        .into_iter()
-        .map(|round_id| format!("round:{round_id}:team:{team_id}:full_state"))
-        .collect();
-    if keys.is_empty() {
-        return Ok(());
-    }
-
-    let mut conn = app.kv.get().await?;
-    let _: () = conn.del(keys).await?;
-    Ok(())
-}
-
-pub async fn invalidate_team_puzzle_solved(
-    app: &AppState,
-    team_id: i32,
-    puzzle_id: i32,
-) -> Result<(), RbInternalError> {
-    invalidate_cache!(
-        app.kv,
-        keys = [format!("puzzle:{puzzle_id}:team:{team_id}:full_state")],
-        patterns = [format!("round:*:team:{team_id}:full_state")]
-    );
-
-    db::board::LEADER_BOARD_CACHE
-        .update_team(&app.db, team_id, true)
-        .await?;
-
-    Ok(())
-}
-
 pub async fn invalidate_team_hints(
     app: &AppState,
     team_id: i32,

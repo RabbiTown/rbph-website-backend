@@ -72,9 +72,8 @@ pub(super) async fn get_puzzle_response_for_user_team(
     user: &AuthUser,
     puzzle_id: i32,
 ) -> Result<HttpResponse> {
-    let result = db::puzzle::get_puzzle_show_str_for_team(
+    let result = db::puzzle::get_puzzle_for_team(
         &app.db,
-        &app.kv,
         user.req_team_id()?.ok_or(RbError::forbid())?,
         puzzle_id,
     )
@@ -82,7 +81,7 @@ pub(super) async fn get_puzzle_response_for_user_team(
     let Some(result) = result else {
         return RbError::not_found().http_err();
     };
-    let mut response = serde_json::from_str::<serde_json::Value>(&result)?;
+    let mut response = serde_json::to_value(result)?;
     let game_id = response
         .pointer("/data/game_id")
         .and_then(serde_json::Value::as_i64)

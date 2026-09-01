@@ -552,33 +552,3 @@ pub async fn sync_events(
     }
     Ok(ReleaseSyncResult { cursor, events })
 }
-
-pub async fn event_cache_targets(
-    pool: &DbPool,
-    event_id: i64,
-    phase_id: Option<i32>,
-) -> Result<(Vec<i32>, Vec<i32>), RbInternalError> {
-    let puzzles = sqlx::query_scalar!(
-        "SELECT p.id FROM rb_puzzle p
-        LEFT JOIN rb_release_event_puzzle rep
-            ON rep.puzzle_id = p.id AND rep.event_id = $1
-        WHERE ($2::INT IS NOT NULL AND p.release_phase_id = $2)
-            OR ($2::INT IS NULL AND rep.event_id IS NOT NULL);",
-        event_id,
-        phase_id
-    )
-    .fetch_all(pool)
-    .await?;
-    let rounds = sqlx::query_scalar!(
-        "SELECT DISTINCT p.round_id FROM rb_puzzle p
-        LEFT JOIN rb_release_event_puzzle rep
-            ON rep.puzzle_id = p.id AND rep.event_id = $1
-        WHERE ($2::INT IS NOT NULL AND p.release_phase_id = $2)
-            OR ($2::INT IS NULL AND rep.event_id IS NOT NULL);",
-        event_id,
-        phase_id
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok((puzzles, rounds))
-}

@@ -1,8 +1,7 @@
-use deadpool_redis::redis::{AsyncCommands, RedisError};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppState, DbPool, KvPool,
+    AppState, DbPool,
     db::{self, game::GameUserInfo, puzzle::RbPuzzleTeamStateShowData},
     error::RbInternalError,
     model::game::RbTeamPuzzleState,
@@ -114,52 +113,6 @@ pub struct RbRoundShowData {
     pub puzzle: Option<i32>,
 }
 
-pub async fn get_info_show(
-    db_pool: &DbPool,
-    round_id: i32,
-) -> Result<Option<RbRoundShowData>, RbInternalError> {
-    let result = sqlx::query_as!(
-        RbRoundShowData,
-        "SELECT id, slug, title, cover, game_id, puzzle
-        FROM rb_round
-        WHERE id = $1",
-        round_id
-    )
-    .fetch_optional(db_pool)
-    .await?;
-
-    Ok(result)
-}
-
-pub async fn get_info_show_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    round_id: i32,
-) -> Result<Option<String>, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("round:{round_id}:show:v2");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok(Some(cache));
-    }
-
-    let result = get_info_show(db_pool, round_id)
-        .await?
-        .map(|x| serde_json::to_string(&x))
-        .transpose()?;
-
-    if result.is_some() {
-        let kv_pool = kv_pool.clone();
-        let result = result.clone();
-        tokio::spawn(async move {
-            let mut conn = kv_pool.get().await.unwrap();
-            let _: Result<(), RedisError> = conn.set_ex(&key, result, 60 * 60).await;
-        });
-    }
-
-    Ok(result)
-}
-
 #[derive(Serialize)]
 pub struct RbPuzzleSimpleData {
     pub id: i32,
@@ -245,73 +198,31 @@ pub async fn get_state_for_team(
     })
 }
 
-async fn get_state_cache_ttl(
+#[derive(Serialize)]
+pub struct RbRoundForTeamData {
+    data: RbRoundShowData,
+    state: RbRoundTeamStateShowData,
+}
+
+pub async fn get_info_for_team(
     db_pool: &DbPool,
-    team_id: i32,
     round_id: i32,
-) -> Result<u64, RbInternalError> {
-    let seconds = sqlx::query_scalar!(
-        "SELECT CEIL(EXTRACT(EPOCH FROM (MIN(rp.release_at) - NOW())))::BIGINT
-        FROM rb_puzzle p
-        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
-        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id
-            AND tp.team_id = $1
-            AND tp.state >= 0
-        WHERE p.round_id = $2
-            AND rp.release_at > NOW();",
-        team_id,
-        round_id
+    team_id: i32,
+) -> Result<Option<RbRoundForTeamData>, RbInternalError> {
+    let data = sqlx::query_as!(
+        RbRoundShowData,
+        "SELECT id, slug, title, cover, game_id, puzzle
+         FROM rb_round
+         WHERE id = $1",
+        round_id,
     )
-    .fetch_one(db_pool)
+    .fetch_optional(db_pool)
     .await?;
-
-    Ok(seconds
-        .and_then(|seconds| u64::try_from(seconds).ok())
-        .map(|seconds| seconds.clamp(1, 60 * 60))
-        .unwrap_or(60 * 60))
-}
-
-pub async fn get_state_for_team_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    team_id: i32,
-    round_id: i32,
-) -> Result<String, RbInternalError> {
-    let mut conn = kv_pool.get().await?;
-    let key = format!("round:{round_id}:team:{team_id}:full_state");
-
-    if let Some(cache) = conn.get(&key).await? {
-        return Ok(cache);
-    }
-
-    let result = get_state_for_team(db_pool, team_id, round_id).await?;
-    let result = serde_json::to_string(&result)?;
-    let ttl = get_state_cache_ttl(db_pool, team_id, round_id).await?;
-
-    let kv_pool = kv_pool.clone();
-    let result_clone = result.clone();
-    tokio::spawn(async move {
-        let mut conn = kv_pool.get().await.unwrap();
-        let _: Result<(), RedisError> = conn.set_ex(&key, result_clone, ttl).await;
-    });
-
-    Ok(result)
-}
-
-pub async fn get_info_for_team_str(
-    db_pool: &DbPool,
-    kv_pool: &KvPool,
-    round_id: i32,
-    team_id: i32,
-) -> Result<Option<String>, RbInternalError> {
-    if let Some(show_str) = get_info_show_str(db_pool, kv_pool, round_id).await? {
-        let puzzles_str = get_state_for_team_str(db_pool, kv_pool, team_id, round_id).await?;
-        Ok(Some(format!(
-            "{{\"data\":{show_str},\"state\":{puzzles_str}}}"
-        )))
-    } else {
-        Ok(None)
-    }
+    let Some(data) = data else {
+        return Ok(None);
+    };
+    let state = get_state_for_team(db_pool, team_id, round_id).await?;
+    Ok(Some(RbRoundForTeamData { data, state }))
 }
 
 #[derive(Serialize)]

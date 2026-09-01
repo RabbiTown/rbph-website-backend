@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use actix_web::{HttpResponse, Result, web};
-use deadpool_redis::redis::AsyncCommands;
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
@@ -321,20 +320,6 @@ async fn validate_submit_requirements(
     Ok(true)
 }
 
-async fn invalidate_puzzle_cache(app: &AppState, puzzle_id: i32) {
-    if let Ok(mut conn) = app.kv.get().await {
-        let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v3")).await;
-    }
-}
-
-async fn invalidate_round_state_cache(app: &AppState, round_id: i32) {
-    let _ = db::cache::del_pattern(&app.kv, &format!("round:{round_id}:team:*:full_state")).await;
-}
-
-async fn invalidate_puzzle_team_state_cache(app: &AppState, puzzle_id: i32) {
-    let _ = db::cache::del_pattern(&app.kv, &format!("puzzle:{puzzle_id}:team:*:full_state")).await;
-}
-
 async fn list(
     query: web::Query<PuzzleListQuery>,
     app: web::Data<AppState>,
@@ -397,8 +382,6 @@ async fn append(
             .code(PuzzleAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_puzzle_cache(&app, puzzle.id).await;
-    invalidate_round_state_cache(&app, puzzle.round_id).await;
     crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
@@ -436,15 +419,6 @@ async fn batch_update_release_phase(
         return RbError::bad_req(PuzzleAdminResult::Invalid.into()).http_err();
     };
 
-    let mut round_ids = HashSet::new();
-    for puzzle in &puzzles {
-        invalidate_puzzle_cache(&app, puzzle.id).await;
-        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
-        round_ids.insert(puzzle.round_id);
-    }
-    for round_id in round_ids {
-        invalidate_round_state_cache(&app, round_id).await;
-    }
     crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(PuzzleAdminListResponse {
@@ -509,14 +483,6 @@ async fn edit(
             .code(PuzzleAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_puzzle_cache(&app, path.puzzle_id).await;
-    invalidate_puzzle_team_state_cache(&app, path.puzzle_id).await;
-    invalidate_round_state_cache(&app, puzzle.round_id).await;
-    if let Some(previous) = previous
-        && previous.round_id != puzzle.round_id
-    {
-        invalidate_round_state_cache(&app, previous.round_id).await;
-    }
     crate::module::release::wake_scheduler(app.get_ref());
 
     Ok(HttpResponse::Ok().json(PuzzleAdminResponse {
@@ -526,22 +492,12 @@ async fn edit(
 }
 
 async fn delete(path: web::Path<PuzzlePathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
-    let puzzle = db::puzzle::admin_get(&app.db, path.puzzle_id).await?;
-    let Some(puzzle) = puzzle else {
-        return RbError::not_found()
-            .code(PuzzleAdminResult::NotFound.into())
-            .http_err();
-    };
-
     let deleted = db::puzzle::admin_delete(&app.db, path.puzzle_id).await?;
     if !deleted {
         return RbError::not_found()
             .code(PuzzleAdminResult::NotFound.into())
             .http_err();
     }
-    invalidate_puzzle_cache(&app, path.puzzle_id).await;
-    invalidate_round_state_cache(&app, puzzle.round_id).await;
-
     Ok(HttpResponse::Ok().json(PuzzleAdminDeleteResponse {
         code: PuzzleAdminResult::Ok,
     }))
@@ -565,11 +521,6 @@ async fn unlock_check(
         puzzle.unlock_cond.as_deref(),
     )
     .await?;
-
-    if !unlocked_team_ids.is_empty() {
-        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
-        invalidate_round_state_cache(&app, puzzle.round_id).await;
-    }
 
     Ok(HttpResponse::Ok().json(PuzzleAdminUnlockCheckResponse {
         code: PuzzleAdminResult::Ok,
@@ -613,21 +564,14 @@ async fn clear_states(
     };
 
     if !result.team_ids.is_empty() {
-        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
         let _ =
             db::cache::del_pattern(&app.kv, &format!("puzzle:{}:team:*:hints", puzzle.id)).await;
-        invalidate_round_state_cache(&app, puzzle.round_id).await;
 
         for team_id in &result.team_ids {
             db::board::LEADER_BOARD_CACHE
                 .update_team(&app.db, *team_id, true)
                 .await?;
         }
-    }
-
-    if !unlocked_team_ids.is_empty() {
-        invalidate_puzzle_team_state_cache(&app, puzzle.id).await;
-        invalidate_round_state_cache(&app, puzzle.round_id).await;
     }
 
     Ok(HttpResponse::Ok().json(PuzzleAdminClearStatesResponse {

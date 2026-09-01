@@ -1,5 +1,4 @@
 use actix_web::{HttpResponse, Result, web};
-use deadpool_redis::redis::AsyncCommands;
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
@@ -95,14 +94,6 @@ async fn notify_change(app: &AppState, game_id: Option<i32>) {
     app.sync_hub.notify_game_announcement_updated(game_id).await;
 }
 
-async fn invalidate_puzzle_cache(app: &AppState, puzzle_ids: &[i32]) {
-    if let Ok(mut conn) = app.kv.get().await {
-        for puzzle_id in puzzle_ids {
-            let _: Result<(), _> = conn.del(format!("puzzle:{puzzle_id}:show:v3")).await;
-        }
-    }
-}
-
 async fn list(
     query: web::Query<AnnouncementListQuery>,
     app: web::Data<AppState>,
@@ -121,12 +112,6 @@ async fn create(
         return RbError::bad_req(AnnouncementAdminResult::Invalid.into()).http_err();
     }
     let announcement = db::anmt::admin_create(&app.db, &body).await?;
-    let puzzle_ids = announcement
-        .puzzles
-        .iter()
-        .map(|puzzle| puzzle.id)
-        .collect::<Vec<_>>();
-    invalidate_puzzle_cache(&app, &puzzle_ids).await;
     notify_change(&app, announcement.game_id).await;
     Ok(HttpResponse::Ok().json(AnnouncementResponse {
         code: AnnouncementAdminResult::Ok,
@@ -151,13 +136,6 @@ async fn update(
     let announcement = db::anmt::admin_update(&app.db, path.announcement_id, &body)
         .await?
         .ok_or_else(|| RbError::not_found().code(AnnouncementAdminResult::NotFound.into()))?;
-    let mut puzzle_ids = previous
-        .puzzles
-        .iter()
-        .map(|puzzle| puzzle.id)
-        .collect::<HashSet<_>>();
-    puzzle_ids.extend(announcement.puzzles.iter().map(|puzzle| puzzle.id));
-    invalidate_puzzle_cache(&app, &puzzle_ids.into_iter().collect::<Vec<_>>()).await;
     notify_change(&app, previous.game_id).await;
     if previous.game_id != announcement.game_id {
         notify_change(&app, announcement.game_id).await;
@@ -183,12 +161,6 @@ async fn delete(
             .code(AnnouncementAdminResult::NotFound.into())
             .http_err();
     }
-    let puzzle_ids = announcement
-        .puzzles
-        .iter()
-        .map(|puzzle| puzzle.id)
-        .collect::<Vec<_>>();
-    invalidate_puzzle_cache(&app, &puzzle_ids).await;
     notify_change(&app, announcement.game_id).await;
     Ok(HttpResponse::Ok().json(AnnouncementDeleteResponse {
         code: AnnouncementAdminResult::Ok,

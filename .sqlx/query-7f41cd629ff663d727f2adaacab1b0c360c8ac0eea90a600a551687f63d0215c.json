@@ -1,15 +1,20 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT cname, prec FROM rb_currency WHERE id = $1 AND game_id = $2",
+  "query": "SELECT id, cname, prec\n         FROM rb_currency\n         WHERE game_id = $1 AND id = ANY($2)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
         "name": "cname",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "prec",
         "type_info": "Int4"
       }
@@ -17,13 +22,14 @@
     "parameters": {
       "Left": [
         "Int4",
-        "Int4"
+        "Int4Array"
       ]
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "c04fc8830023e46c149eeeaa287c65e31abbb2030c9aef57240fa95cc2dac091"
+  "hash": "7f41cd629ff663d727f2adaacab1b0c360c8ac0eea90a600a551687f63d0215c"
 }

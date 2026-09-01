@@ -1,5 +1,4 @@
 use actix_web::{HttpResponse, Result, web};
-use deadpool_redis::redis::AsyncCommands;
 use num_enum::IntoPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
@@ -91,14 +90,6 @@ fn validate_update(data: &RbRoundUpdateData) -> bool {
     true
 }
 
-async fn invalidate_round_cache(app: &AppState, round_id: i32) {
-    if let Ok(mut conn) = app.kv.get().await {
-        let _: Result<(), _> = conn.del(format!("round:{round_id}:show:v2")).await;
-    }
-
-    let _ = db::cache::del_pattern(&app.kv, &format!("round:{round_id}:team:*:full_state")).await;
-}
-
 async fn list(query: web::Query<RoundListQuery>, app: web::Data<AppState>) -> Result<HttpResponse> {
     let rounds = db::round::admin_list(&app.db, query.game_id).await?;
 
@@ -144,8 +135,6 @@ async fn append(
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_round_cache(&app, round.id).await;
-
     Ok(HttpResponse::Ok().json(RoundAdminResponse {
         code: RoundAdminResult::Ok,
         round,
@@ -175,8 +164,6 @@ async fn edit(
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     };
-    invalidate_round_cache(&app, path.round_id).await;
-
     Ok(HttpResponse::Ok().json(RoundAdminResponse {
         code: RoundAdminResult::Ok,
         round,
@@ -190,8 +177,6 @@ async fn delete(path: web::Path<RoundPathInfo>, app: web::Data<AppState>) -> Res
             .code(RoundAdminResult::NotFound.into())
             .http_err();
     }
-    invalidate_round_cache(&app, path.round_id).await;
-
     Ok(HttpResponse::Ok().json(RoundAdminDeleteResponse {
         code: RoundAdminResult::Ok,
     }))

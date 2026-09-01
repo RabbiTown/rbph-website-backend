@@ -91,8 +91,8 @@ async fn valid_write(app: &AppState, data: &db::anmt::AnnouncementWriteData) -> 
     }
 }
 
-fn notify_change(app: &AppState, game_id: Option<i32>) {
-    app.sync_hub.notify_game_announcement_updated(game_id);
+async fn notify_change(app: &AppState, game_id: Option<i32>) {
+    app.sync_hub.notify_game_announcement_updated(game_id).await;
 }
 
 async fn invalidate_puzzle_cache(app: &AppState, puzzle_ids: &[i32]) {
@@ -127,7 +127,7 @@ async fn create(
         .map(|puzzle| puzzle.id)
         .collect::<Vec<_>>();
     invalidate_puzzle_cache(&app, &puzzle_ids).await;
-    notify_change(&app, announcement.game_id);
+    notify_change(&app, announcement.game_id).await;
     Ok(HttpResponse::Ok().json(AnnouncementResponse {
         code: AnnouncementAdminResult::Ok,
         announcement,
@@ -158,9 +158,9 @@ async fn update(
         .collect::<HashSet<_>>();
     puzzle_ids.extend(announcement.puzzles.iter().map(|puzzle| puzzle.id));
     invalidate_puzzle_cache(&app, &puzzle_ids.into_iter().collect::<Vec<_>>()).await;
-    notify_change(&app, previous.game_id);
+    notify_change(&app, previous.game_id).await;
     if previous.game_id != announcement.game_id {
-        notify_change(&app, announcement.game_id);
+        notify_change(&app, announcement.game_id).await;
     }
     Ok(HttpResponse::Ok().json(AnnouncementResponse {
         code: AnnouncementAdminResult::Ok,
@@ -189,7 +189,7 @@ async fn delete(
         .map(|puzzle| puzzle.id)
         .collect::<Vec<_>>();
     invalidate_puzzle_cache(&app, &puzzle_ids).await;
-    notify_change(&app, announcement.game_id);
+    notify_change(&app, announcement.game_id).await;
     Ok(HttpResponse::Ok().json(AnnouncementDeleteResponse {
         code: AnnouncementAdminResult::Ok,
     }))

@@ -91,11 +91,13 @@ async fn update(
             .invalidate_game(&app.db, path.game_id)
             .await?;
     }
-    app.sync_hub.notify_game_release_updated(
-        path.game_id,
-        db::release::release_cursor(&app.db, path.game_id).await?,
-        true,
-    );
+    app.sync_hub
+        .notify_game_release_updated(
+            path.game_id,
+            db::release::release_cursor(&app.db, path.game_id).await?,
+            true,
+        )
+        .await;
     Ok(HttpResponse::Ok().json(FeatureListResponse {
         code: FeatureResult::Ok,
         features: db::feature::list_admin(&app.db, path.game_id).await?,

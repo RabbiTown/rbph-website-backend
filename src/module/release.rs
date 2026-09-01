@@ -29,7 +29,8 @@ pub async fn process_due_releases(app: &AppState) -> Result<(), RbInternalError>
             db::cache::del_pattern(&app.kv, &format!("round:{round_id}:team:*:full_state")).await?;
         }
         app.sync_hub
-            .notify_game_release_updated(event.game_id, event.id, false);
+            .notify_game_release_updated(event.game_id, event.id, false)
+            .await;
         db::release::mark_notified(&app.db, event.id).await?;
     }
     Ok(())

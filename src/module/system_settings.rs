@@ -18,17 +18,12 @@ async fn apply_latest_from_db(app: &AppState) {
         return;
     }
 
-    let previous = guard.clone();
     *guard = settings.clone();
     drop(guard);
 
     app.sync_hub
-        .enforce_connection_limit(settings.max_websocket_connections as usize);
-    if previous.maintenance_enabled != settings.maintenance_enabled
-        || previous.maintenance_message != settings.maintenance_message
-    {
-        app.sync_hub.notify_system_status_updated();
-    }
+        .enforce_connection_limit(settings.max_websocket_connections as usize)
+        .await;
 }
 
 pub async fn publish_updated(app: &AppState) {

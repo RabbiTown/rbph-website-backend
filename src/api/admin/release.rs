@@ -98,11 +98,13 @@ async fn append(
         Err(error) => return Err(error.into()),
     };
     app.release_schedule_changed.notify_one();
-    app.sync_hub.notify_game_release_updated(
-        path.game_id,
-        release::release_cursor(&app.db, path.game_id).await?,
-        true,
-    );
+    app.sync_hub
+        .notify_game_release_updated(
+            path.game_id,
+            release::release_cursor(&app.db, path.game_id).await?,
+            true,
+        )
+        .await;
     Ok(HttpResponse::Ok().json(ReleaseResponse {
         code: ReleaseAdminResult::Ok,
         phase,
@@ -152,11 +154,13 @@ async fn edit(
         Err(error) => return Err(error.into()),
     };
     app.release_schedule_changed.notify_one();
-    app.sync_hub.notify_game_release_updated(
-        path.game_id,
-        release::release_cursor(&app.db, path.game_id).await?,
-        true,
-    );
+    app.sync_hub
+        .notify_game_release_updated(
+            path.game_id,
+            release::release_cursor(&app.db, path.game_id).await?,
+            true,
+        )
+        .await;
     Ok(HttpResponse::Ok().json(ReleaseResponse {
         code: ReleaseAdminResult::Ok,
         phase,
@@ -168,11 +172,13 @@ async fn delete(path: web::Path<PhasePathInfo>, app: web::Data<AppState>) -> Res
         return RbError::bad_req(ReleaseAdminResult::Invalid.into()).http_err();
     }
     app.release_schedule_changed.notify_one();
-    app.sync_hub.notify_game_release_updated(
-        path.game_id,
-        release::release_cursor(&app.db, path.game_id).await?,
-        true,
-    );
+    app.sync_hub
+        .notify_game_release_updated(
+            path.game_id,
+            release::release_cursor(&app.db, path.game_id).await?,
+            true,
+        )
+        .await;
     Ok(HttpResponse::Ok().json(ReleaseDeleteResponse {
         code: ReleaseAdminResult::Ok,
     }))

@@ -27,7 +27,9 @@ async fn ready(app: web::Data<AppState>) -> HttpResponse {
     };
     let storage_ready = app.storage.ready().await;
 
-    if db_ready && kv_ready && storage_ready {
+    let sync_ready = app.sync_hub.is_ready();
+
+    if db_ready && kv_ready && storage_ready && sync_ready {
         HttpResponse::Ok().json(HealthResponse { status: "ready" })
     } else {
         HttpResponse::ServiceUnavailable().json(HealthResponse {

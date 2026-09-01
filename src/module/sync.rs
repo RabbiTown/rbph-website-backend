@@ -1,20 +1,25 @@
 use std::{
+    collections::HashMap,
     sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
 use actix_web::{HttpRequest, HttpResponse, web::Payload};
 use actix_ws::{CloseCode, CloseReason, Message, MessageStream, Session};
 use dashmap::DashMap;
+use deadpool_redis::redis::{self, AsyncCommands, Script};
+use futures_util::StreamExt;
 use num_enum::IntoPrimitive;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_repr::Serialize_repr;
 use time::OffsetDateTime;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::{mpsc, watch};
+use uuid::Uuid;
 
 use crate::{
-    DbPool, db,
+    DbPool, KvPool, db,
     db::{
         puzzle::{CurrencyPenaltyShowData, RbPuzzleTeamStateShowData},
         team::RbCurrencyShowData,
@@ -25,71 +30,208 @@ use crate::{
 };
 
 pub const CONNECTION_LIMIT_CLOSE_CODE: u16 = 4008;
+const SERVICE_RESTART_CLOSE_CODE: u16 = 1012;
+const SLOW_CLIENT_CLOSE_CODE: u16 = 1013;
+const SYNC_CHANNEL: &str = "rbph:sync:v1";
+const CONNECTION_KEY_PREFIX: &str = "rbph:ws:connection:";
+const CONNECTION_SET_PREFIX: &str = "rbph:ws:user:";
+const CONNECTION_LEASE_SECONDS: usize = 75;
+const COMMAND_QUEUE_CAPACITY: usize = 256;
 
-#[derive(Default)]
+const REGISTER_CONNECTION_SCRIPT: &str = r#"
+local set_key = KEYS[1]
+local lease_key = ARGV[1] .. ARGV[2]
+local members = redis.call('ZRANGE', set_key, 0, -1)
+for _, id in ipairs(members) do
+    if redis.call('EXISTS', ARGV[1] .. id) == 0 then
+        redis.call('ZREM', set_key, id)
+    end
+end
+local now = redis.call('TIME')
+local score = now[1] * 1000000 + now[2]
+redis.call('SET', lease_key, ARGV[3], 'EX', ARGV[4])
+redis.call('ZADD', set_key, score, ARGV[2])
+redis.call('EXPIRE', set_key, tonumber(ARGV[4]) * 2)
+members = redis.call('ZRANGE', set_key, 0, -1)
+local excess = #members - tonumber(ARGV[5])
+local evicted = {}
+for index = 1, excess do
+    local id = members[index]
+    redis.call('ZREM', set_key, id)
+    redis.call('DEL', ARGV[1] .. id)
+    table.insert(evicted, id)
+end
+return evicted
+"#;
+
+const RENEW_CONNECTIONS_SCRIPT: &str = r#"
+local invalid = {}
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]) * 2)
+for index = 4, #ARGV do
+    local key = ARGV[1] .. ARGV[index]
+    if redis.call('GET', key) == ARGV[2] then
+        redis.call('EXPIRE', key, ARGV[3])
+    else
+        table.insert(invalid, ARGV[index])
+    end
+end
+return invalid
+"#;
+
+const UNREGISTER_CONNECTION_SCRIPT: &str = r#"
+local lease_key = ARGV[1] .. ARGV[2]
+if redis.call('GET', lease_key) == ARGV[3] then
+    redis.call('DEL', lease_key)
+end
+redis.call('ZREM', KEYS[1], ARGV[2])
+return 1
+"#;
+
+const TRIM_CONNECTIONS_SCRIPT: &str = r#"
+local members = redis.call('ZRANGE', KEYS[1], 0, -1)
+for _, id in ipairs(members) do
+    if redis.call('EXISTS', ARGV[1] .. id) == 0 then
+        redis.call('ZREM', KEYS[1], id)
+    end
+end
+members = redis.call('ZRANGE', KEYS[1], 0, -1)
+local excess = #members - tonumber(ARGV[2])
+local evicted = {}
+for index = 1, excess do
+    local id = members[index]
+    redis.call('ZREM', KEYS[1], id)
+    redis.call('DEL', ARGV[1] .. id)
+    table.insert(evicted, id)
+end
+return evicted
+"#;
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SyncTarget {
+    Broadcast,
+    Users { ids: Vec<i32> },
+    Connections { ids: Vec<Uuid> },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SyncCommand {
+    Deliver { message: String },
+    CloseConnections { code: u16, reason: String },
+}
+
+#[derive(Deserialize, Serialize)]
+struct SyncBusEnvelope {
+    version: u8,
+    event_id: Uuid,
+    target: SyncTarget,
+    command: SyncCommand,
+}
+
 pub struct SyncHub {
     users: DashMap<i32, Vec<WsSessionHandle>>,
+    connections: DashMap<Uuid, (i32, WsSessionHandle)>,
+    kv: KvPool,
+    kv_addr: String,
+    instance_id: Uuid,
+    bus_ready: AtomicBool,
 }
 
 impl SyncHub {
-    pub fn create_ws(
-        &self,
+    pub fn new(kv: KvPool, kv_addr: String) -> Self {
+        Self {
+            users: DashMap::new(),
+            connections: DashMap::new(),
+            kv,
+            kv_addr,
+            instance_id: Uuid::new_v4(),
+            bus_ready: AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.bus_ready.load(Ordering::Acquire)
+    }
+
+    pub async fn create_ws(
+        self: &Arc<Self>,
         req: HttpRequest,
         stream: Payload,
         user_id: i32,
         max_connections: usize,
     ) -> actix_web::Result<HttpResponse> {
+        if !self.is_ready() {
+            return Err(actix_web::error::ErrorServiceUnavailable(
+                "WebSocket synchronization is unavailable",
+            ));
+        }
+
+        let connection_id = Uuid::new_v4();
         let (resp, session, stream) = actix_ws::handle(&req, stream)?;
-        let (handle, rx) = WsSessionHandle::new();
-        let mut sessions = self.users.entry(user_id).or_default();
-        Self::trim_sessions(&mut sessions, max_connections.saturating_sub(1));
-        sessions.push(handle);
-        actix_web::rt::spawn(WsSession::new(session, stream, rx).run());
+        let evicted = self
+            .register_connection(user_id, connection_id, max_connections)
+            .await
+            .map_err(actix_web::error::ErrorServiceUnavailable)?;
+        let (handle, rx) = WsSessionHandle::new(connection_id);
+        self.users.entry(user_id).or_default().push(handle.clone());
+        self.connections
+            .insert(connection_id, (user_id, handle.clone()));
+
+        let hub = self.clone();
+        actix_web::rt::spawn(async move {
+            WsSession::new(session, stream, rx, handle.close_rx())
+                .run()
+                .await;
+            hub.remove_connection(user_id, connection_id).await;
+        });
+
+        if !evicted.is_empty() {
+            self.publish_command(
+                SyncTarget::Connections { ids: evicted },
+                SyncCommand::CloseConnections {
+                    code: CONNECTION_LIMIT_CLOSE_CODE,
+                    reason: "Connection replaced due to per-user limit".to_string(),
+                },
+            )
+            .await;
+        }
         Ok(resp)
     }
 
-    fn trim_sessions(sessions: &mut Vec<WsSessionHandle>, max_connections: usize) {
-        sessions.retain(|session| !session.is_closed());
-        let excess = sessions.len().saturating_sub(max_connections);
-        for session in sessions.drain(..excess) {
-            let _ = session.close_for_connection_limit();
-        }
-    }
-
-    pub fn enforce_connection_limit(&self, max_connections: usize) {
-        self.users.retain(|_, sessions| {
-            Self::trim_sessions(sessions, max_connections);
-            !sessions.is_empty()
-        });
-    }
-
-    fn push_user<T: Serialize>(&self, user_id: i32, msg_type: SyncMessageType, data: T) {
-        if let Some(addrs) = self.users.get(&user_id) {
-            let envelope = WsEnvelope { msg_type, data };
-            if let Ok(json) = serde_json::to_string(&envelope) {
-                let arc_json = Arc::new(json);
-                for session in addrs.iter() {
-                    let _ = session.push(arc_json.clone());
-                }
+    async fn publish_message<T: Serialize>(
+        &self,
+        target: SyncTarget,
+        msg_type: SyncMessageType,
+        data: T,
+    ) {
+        let message = match serde_json::to_string(&WsEnvelope { msg_type, data }) {
+            Ok(message) => message,
+            Err(error) => {
+                log::error!("failed to serialize WebSocket message: {error}");
+                return;
             }
-        }
+        };
+        self.publish_command(target, SyncCommand::Deliver { message })
+            .await;
     }
 
-    fn push_users<T: Serialize>(&self, users: &[i32], msg_type: SyncMessageType, data: T) {
-        let envelope = WsEnvelope { msg_type, data };
-        if let Ok(json) = serde_json::to_string(&envelope) {
-            let arc_json = Arc::new(json);
-            for user_id in users {
-                if let Some(addrs) = self.users.get(user_id) {
-                    for session in addrs.iter() {
-                        let _ = session.push(arc_json.clone());
-                    }
-                }
-            }
+    async fn publish_users<T: Serialize>(
+        &self,
+        mut users: Vec<i32>,
+        msg_type: SyncMessageType,
+        data: T,
+    ) {
+        users.sort_unstable();
+        users.dedup();
+        if users.is_empty() {
+            return;
         }
+        self.publish_message(SyncTarget::Users { ids: users }, msg_type, data)
+            .await;
     }
 
-    async fn push_team<T: Serialize>(
+    async fn publish_team<T: Serialize>(
         &self,
         db_pool: &DbPool,
         team_id: i32,
@@ -97,56 +239,44 @@ impl SyncHub {
         data: T,
     ) -> Result<(), RbInternalError> {
         let members = db::team::get_member_id(db_pool, team_id).await?;
-        self.push_users(&members, msg_type, data);
+        self.publish_users(members, msg_type, data).await;
         Ok(())
     }
 
-    pub fn notify_game_release_updated(&self, game_id: i32, cursor: i64, force: bool) {
-        let users = self
-            .users
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        self.push_users(
-            &users,
+    pub async fn notify_game_release_updated(&self, game_id: i32, cursor: i64, force: bool) {
+        self.publish_message(
+            SyncTarget::Broadcast,
             SyncMessageType::GameReleaseUpdated,
             json!({ "game_id": game_id, "cursor": cursor, "force": force }),
-        );
+        )
+        .await;
     }
 
-    pub fn notify_game_announcement_updated(&self, game_id: Option<i32>) {
-        let users = self
-            .users
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        self.push_users(
-            &users,
+    pub async fn notify_game_announcement_updated(&self, game_id: Option<i32>) {
+        self.publish_message(
+            SyncTarget::Broadcast,
             SyncMessageType::GameNewAnnouncement,
             json!({ "game_id": game_id }),
-        );
+        )
+        .await;
     }
 
-    pub fn notify_game_frontend_updated(&self, game_id: i32, revision: i64) {
-        let users = self
-            .users
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        self.push_users(
-            &users,
+    pub async fn notify_game_frontend_updated(&self, game_id: i32, revision: i64) {
+        self.publish_message(
+            SyncTarget::Broadcast,
             SyncMessageType::GameFrontendUpdated,
             json!({ "game_id": game_id, "revision": revision }),
-        );
+        )
+        .await;
     }
 
-    pub fn notify_system_status_updated(&self) {
-        let users = self
-            .users
-            .iter()
-            .map(|entry| *entry.key())
-            .collect::<Vec<_>>();
-        self.push_users(&users, SyncMessageType::SystemStatusUpdated, ());
+    pub async fn notify_system_status_updated(&self) {
+        self.publish_message(
+            SyncTarget::Broadcast,
+            SyncMessageType::SystemStatusUpdated,
+            (),
+        )
+        .await;
     }
 
     pub async fn notify_puzzle_submitted(
@@ -205,7 +335,7 @@ impl SyncHub {
             sync["unlocks"] = json!(event.unlocks);
         }
 
-        self.push_team(
+        self.publish_team(
             db_pool,
             event.team_id,
             SyncMessageType::PuzzleSubmitted,
@@ -252,7 +382,7 @@ impl SyncHub {
             sync["sid"] = json!(sid);
         }
 
-        self.push_team(
+        self.publish_team(
             db_pool,
             event.team_id,
             SyncMessageType::PuzzleHintUnlocked,
@@ -273,8 +403,8 @@ impl SyncHub {
 
         let members = db::team::get_member_id(db_pool, team_id).await?;
         for event in events {
-            self.push_users(
-                &members,
+            self.publish_users(
+                members.clone(),
                 SyncMessageType::PuzzleBackendEvent,
                 json!({
                     "puzzle_id": event.puzzle_id,
@@ -289,7 +419,8 @@ impl SyncHub {
                         "function": event.function,
                     },
                 }),
-            );
+            )
+            .await;
         }
         Ok(())
     }
@@ -299,20 +430,23 @@ impl SyncHub {
         db_pool: &DbPool,
         team_id: i32,
     ) -> Result<(), RbInternalError> {
-        self.push_team(db_pool, team_id, SyncMessageType::TeamInfoUpdated, ())
+        self.publish_team(db_pool, team_id, SyncMessageType::TeamInfoUpdated, ())
             .await
     }
 
-    pub fn notify_team_disbanded(&self, users: &[i32]) {
-        self.push_users(users, SyncMessageType::TeamDisbanded, ());
+    pub async fn notify_team_disbanded(&self, users: &[i32]) {
+        self.publish_users(users.to_vec(), SyncMessageType::TeamDisbanded, ())
+            .await;
     }
 
-    pub fn notify_team_self_kicked(&self, user_id: i32) {
-        self.push_user(user_id, SyncMessageType::TeamSelfKicked, ());
+    pub async fn notify_team_self_kicked(&self, user_id: i32) {
+        self.publish_users(vec![user_id], SyncMessageType::TeamSelfKicked, ())
+            .await;
     }
 
-    pub fn notify_team_self_promoted(&self, user_id: i32) {
-        self.push_user(user_id, SyncMessageType::TeamSelfPromoted, ());
+    pub async fn notify_team_self_promoted(&self, user_id: i32) {
+        self.publish_users(vec![user_id], SyncMessageType::TeamSelfPromoted, ())
+            .await;
     }
 
     pub async fn notify_ticket_updated(
@@ -348,14 +482,10 @@ impl SyncHub {
             "game_id": ticket.game_id,
         });
 
-        self.push_team(
-            db_pool,
-            ticket.team_id,
-            SyncMessageType::TicketUpdated,
-            data.clone(),
-        )
-        .await?;
-        self.push_users(&moderators, SyncMessageType::TicketUpdated, data);
+        let mut recipients = db::team::get_member_id(db_pool, ticket.team_id).await?;
+        recipients.extend(moderators);
+        self.publish_users(recipients, SyncMessageType::TicketUpdated, data)
+            .await;
         Ok(())
     }
 
@@ -376,7 +506,7 @@ impl SyncHub {
             "team_id": info.team_id,
             "game_id": info.game_id,
         });
-        self.push_team(
+        self.publish_team(
             db_pool,
             info.team_id,
             SyncMessageType::NotificationUpdated,
@@ -395,7 +525,7 @@ impl SyncHub {
         let game_id = sqlx::query_scalar!("SELECT game_id FROM rb_team WHERE id = $1", team_id)
             .fetch_one(db_pool)
             .await?;
-        self.push_team(
+        self.publish_team(
             db_pool,
             team_id,
             SyncMessageType::NotificationUpdated,
@@ -409,7 +539,195 @@ impl SyncHub {
         .await
     }
 
-    pub fn cleanup(&self) {
+    async fn publish_command(&self, target: SyncTarget, command: SyncCommand) {
+        let payload = match serde_json::to_string(&SyncBusEnvelope {
+            version: 1,
+            event_id: Uuid::new_v4(),
+            target,
+            command,
+        }) {
+            Ok(payload) => payload,
+            Err(error) => {
+                log::error!("failed to serialize sync bus message: {error}");
+                return;
+            }
+        };
+        let mut conn = match self.kv.get().await {
+            Ok(conn) => conn,
+            Err(error) => {
+                log::error!("failed to get Redis connection for sync event: {error}");
+                return;
+            }
+        };
+        let result: redis::RedisResult<u64> = conn.publish(SYNC_CHANNEL, payload).await;
+        match result {
+            Ok(0) => log::error!("sync event published without any active subscribers"),
+            Ok(_) => {}
+            Err(error) => log::error!("failed to publish sync event: {error}"),
+        }
+    }
+
+    fn dispatch(&self, envelope: SyncBusEnvelope) {
+        if envelope.version != 1 {
+            log::warn!(
+                "ignored unsupported sync event version: {}",
+                envelope.version
+            );
+            return;
+        }
+        let connections: Vec<WsSessionHandle> = match envelope.target {
+            SyncTarget::Broadcast => self
+                .connections
+                .iter()
+                .map(|connection| connection.value().1.clone())
+                .collect(),
+            SyncTarget::Users { mut ids } => {
+                ids.sort_unstable();
+                ids.dedup();
+                ids.into_iter()
+                    .filter_map(|user_id| self.users.get(&user_id))
+                    .flat_map(|sessions| sessions.iter().cloned().collect::<Vec<_>>())
+                    .collect()
+            }
+            SyncTarget::Connections { mut ids } => {
+                ids.sort_unstable();
+                ids.dedup();
+                ids.into_iter()
+                    .filter_map(|connection_id| {
+                        self.connections
+                            .get(&connection_id)
+                            .map(|connection| connection.value().1.clone())
+                    })
+                    .collect()
+            }
+        };
+        match envelope.command {
+            SyncCommand::Deliver { message } => {
+                let message = Arc::new(message);
+                for connection in connections {
+                    let _ = connection.push(message.clone());
+                }
+            }
+            SyncCommand::CloseConnections { code, reason } => {
+                let reason: CloseReason = (CloseCode::Other(code), reason).into();
+                for connection in connections {
+                    connection.close(Some(reason.clone()));
+                }
+            }
+        }
+    }
+
+    pub async fn run_subscriber(self: Arc<Self>) {
+        let mut retry_seconds = 1_u64;
+        loop {
+            let result = self.subscribe_once().await;
+            let was_ready = self.is_ready();
+            self.mark_bus_unavailable();
+            if let Err(error) = result {
+                log::error!("sync bus subscriber disconnected: {error}");
+            }
+            if was_ready {
+                retry_seconds = 1;
+            }
+            tokio::time::sleep(Duration::from_secs(retry_seconds)).await;
+            retry_seconds = (retry_seconds * 2).min(30);
+        }
+    }
+
+    async fn subscribe_once(&self) -> Result<(), RbInternalError> {
+        let client = redis::Client::open(self.kv_addr.as_str())?;
+        let mut pubsub = client.get_async_pubsub().await?;
+        pubsub.subscribe(SYNC_CHANNEL).await?;
+        self.bus_ready.store(true, Ordering::Release);
+        log::info!(
+            "sync bus subscriber is ready (instance {})",
+            self.instance_id
+        );
+
+        let mut stream = pubsub.on_message();
+        while let Some(message) = stream.next().await {
+            let payload = match message.get_payload::<String>() {
+                Ok(payload) => payload,
+                Err(error) => {
+                    log::warn!("ignored invalid sync bus payload: {error}");
+                    continue;
+                }
+            };
+            match serde_json::from_str::<SyncBusEnvelope>(&payload) {
+                Ok(envelope) => self.dispatch(envelope),
+                Err(error) => log::warn!("ignored malformed sync bus message: {error}"),
+            }
+        }
+        Err(RbInternalError::Other(
+            "sync bus subscription ended".to_string(),
+        ))
+    }
+
+    fn mark_bus_unavailable(&self) {
+        if !self.bus_ready.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let reason: CloseReason = (
+            CloseCode::Other(SERVICE_RESTART_CLOSE_CODE),
+            "WebSocket synchronization is restarting",
+        )
+            .into();
+        for connection in self.connections.iter() {
+            connection.value().1.close(Some(reason.clone()));
+        }
+    }
+
+    async fn register_connection(
+        &self,
+        user_id: i32,
+        connection_id: Uuid,
+        max_connections: usize,
+    ) -> Result<Vec<Uuid>, RbInternalError> {
+        let mut conn = self.kv.get().await?;
+        let ids: Vec<String> = Script::new(REGISTER_CONNECTION_SCRIPT)
+            .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
+            .arg(CONNECTION_KEY_PREFIX)
+            .arg(connection_id.to_string())
+            .arg(self.instance_id.to_string())
+            .arg(CONNECTION_LEASE_SECONDS)
+            .arg(max_connections.max(1))
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| Uuid::parse_str(&id).ok())
+            .collect())
+    }
+
+    async fn remove_connection(&self, user_id: i32, connection_id: Uuid) {
+        self.connections.remove(&connection_id);
+        if let Some(mut sessions) = self.users.get_mut(&user_id) {
+            sessions.retain(|session| session.connection_id != connection_id);
+            if sessions.is_empty() {
+                drop(sessions);
+                self.users.remove(&user_id);
+            }
+        }
+        self.unregister_connection(user_id, connection_id).await;
+    }
+
+    async fn unregister_connection(&self, user_id: i32, connection_id: Uuid) {
+        let Ok(mut conn) = self.kv.get().await else {
+            return;
+        };
+        let result: redis::RedisResult<i32> = Script::new(UNREGISTER_CONNECTION_SCRIPT)
+            .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
+            .arg(CONNECTION_KEY_PREFIX)
+            .arg(connection_id.to_string())
+            .arg(self.instance_id.to_string())
+            .invoke_async(&mut conn)
+            .await;
+        if let Err(error) = result {
+            log::warn!("failed to unregister WebSocket connection: {error}");
+        }
+    }
+
+    pub async fn cleanup(&self) {
         self.users.retain(|_, sessions| {
             sessions.retain(|session| !session.is_closed());
             for session in sessions.iter() {
@@ -417,13 +735,111 @@ impl SyncHub {
             }
             !sessions.is_empty()
         });
+
+        let mut ids_by_user = HashMap::<i32, Vec<Uuid>>::new();
+        for connection in self.connections.iter() {
+            ids_by_user
+                .entry(connection.value().0)
+                .or_default()
+                .push(*connection.key());
+        }
+        for (user_id, ids) in ids_by_user {
+            for chunk in ids.chunks(200) {
+                let Ok(mut conn) = self.kv.get().await else {
+                    break;
+                };
+                let script = Script::new(RENEW_CONNECTIONS_SCRIPT);
+                let mut invocation = script.prepare_invoke();
+                invocation
+                    .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
+                    .arg(CONNECTION_KEY_PREFIX)
+                    .arg(self.instance_id.to_string())
+                    .arg(CONNECTION_LEASE_SECONDS);
+                for id in chunk {
+                    invocation.arg(id.to_string());
+                }
+                let result: redis::RedisResult<Vec<String>> =
+                    invocation.invoke_async(&mut conn).await;
+                match result {
+                    Ok(invalid) => {
+                        for id in invalid
+                            .into_iter()
+                            .filter_map(|id| Uuid::parse_str(&id).ok())
+                        {
+                            if let Some(connection) = self.connections.get(&id) {
+                                let reason = (
+                                    CloseCode::Other(CONNECTION_LIMIT_CLOSE_CODE),
+                                    "Connection replaced due to per-user limit",
+                                )
+                                    .into();
+                                connection.value().1.close(Some(reason));
+                            }
+                        }
+                    }
+                    Err(error) => log::warn!("failed to renew WebSocket leases: {error}"),
+                }
+            }
+        }
+    }
+
+    pub async fn enforce_connection_limit(&self, max_connections: usize) {
+        let user_ids = self
+            .users
+            .iter()
+            .map(|entry| *entry.key())
+            .collect::<Vec<_>>();
+        let mut evicted = Vec::new();
+        for user_id in user_ids {
+            let Ok(mut conn) = self.kv.get().await else {
+                break;
+            };
+            let result: redis::RedisResult<Vec<String>> = Script::new(TRIM_CONNECTIONS_SCRIPT)
+                .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
+                .arg(CONNECTION_KEY_PREFIX)
+                .arg(max_connections.max(1))
+                .invoke_async(&mut conn)
+                .await;
+            match result {
+                Ok(ids) => {
+                    evicted.extend(ids.into_iter().filter_map(|id| Uuid::parse_str(&id).ok()))
+                }
+                Err(error) => log::warn!("failed to enforce WebSocket connection limit: {error}"),
+            }
+        }
+        evicted.sort_unstable();
+        evicted.dedup();
+        if !evicted.is_empty() {
+            self.publish_command(
+                SyncTarget::Connections { ids: evicted },
+                SyncCommand::CloseConnections {
+                    code: CONNECTION_LIMIT_CLOSE_CODE,
+                    reason: "Connection replaced due to per-user limit".to_string(),
+                },
+            )
+            .await;
+        }
     }
 
     pub async fn invalidate(&self, user_id: i32) {
-        if let Some((_, sessions)) = self.users.remove(&user_id) {
+        if let Some(sessions) = self.users.get(&user_id) {
             for session in sessions.iter() {
-                let _ = session.close();
+                session.close(Some(CloseCode::Normal.into()));
             }
+        }
+    }
+
+    pub async fn shutdown(&self) {
+        self.bus_ready.store(false, Ordering::Release);
+        let connections = self
+            .connections
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().0, entry.value().1.clone()))
+            .collect::<Vec<_>>();
+        for (_, _, handle) in &connections {
+            handle.close(Some(CloseCode::Away.into()));
+        }
+        for (connection_id, user_id, _) in connections {
+            self.unregister_connection(user_id, connection_id).await;
         }
     }
 }
@@ -473,56 +889,69 @@ pub struct PuzzleUnlockInfo {
 
 #[derive(Clone)]
 pub struct WsSessionHandle {
-    tx: UnboundedSender<WsCommand>,
+    connection_id: Uuid,
+    tx: mpsc::Sender<WsCommand>,
+    close_tx: watch::Sender<Option<CloseReason>>,
 }
 
 impl WsSessionHandle {
-    fn new() -> (Self, UnboundedReceiver<WsCommand>) {
-        let (tx, rx) = unbounded_channel();
-        (Self { tx }, rx)
+    fn new(connection_id: Uuid) -> (Self, mpsc::Receiver<WsCommand>) {
+        let (tx, rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let (close_tx, _) = watch::channel(None);
+        (
+            Self {
+                connection_id,
+                tx,
+                close_tx,
+            },
+            rx,
+        )
+    }
+
+    fn close_rx(&self) -> watch::Receiver<Option<CloseReason>> {
+        self.close_tx.subscribe()
     }
 
     fn is_closed(&self) -> bool {
         self.tx.is_closed()
     }
 
-    fn push(&self, msg: Arc<String>) -> Result<(), WsCommand> {
-        self.tx.send(WsCommand::Push(msg)).map_err(|e| e.0)
+    fn push(&self, msg: Arc<String>) -> Result<(), ()> {
+        match self.tx.try_send(WsCommand::Push(msg)) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.close(Some(
+                    (
+                        CloseCode::Other(SLOW_CLIENT_CLOSE_CODE),
+                        "WebSocket client is too slow",
+                    )
+                        .into(),
+                ));
+                Err(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(()),
+        }
     }
 
-    fn check_alive(&self) -> Result<(), WsCommand> {
-        self.tx.send(WsCommand::CheckAlive).map_err(|e| e.0)
+    fn check_alive(&self) -> Result<(), ()> {
+        self.tx.try_send(WsCommand::CheckAlive).map_err(|_| ())
     }
 
-    fn close(&self) -> Result<(), WsCommand> {
-        self.tx
-            .send(WsCommand::Close(Some(CloseCode::Normal.into())))
-            .map_err(|e| e.0)
-    }
-
-    fn close_for_connection_limit(&self) -> Result<(), WsCommand> {
-        self.tx
-            .send(WsCommand::Close(Some(
-                (
-                    CloseCode::Other(CONNECTION_LIMIT_CLOSE_CODE),
-                    "Connection replaced due to per-user limit",
-                )
-                    .into(),
-            )))
-            .map_err(|e| e.0)
+    fn close(&self, reason: Option<CloseReason>) {
+        self.close_tx.send_replace(reason);
     }
 }
 
 enum WsCommand {
     Push(Arc<String>),
     CheckAlive,
-    Close(Option<CloseReason>),
 }
 
 pub struct WsSession {
     session: Session,
     stream: MessageStream,
-    commands: UnboundedReceiver<WsCommand>,
+    commands: mpsc::Receiver<WsCommand>,
+    close_requests: watch::Receiver<Option<CloseReason>>,
     last_heartbeat: Instant,
 }
 
@@ -532,12 +961,14 @@ impl WsSession {
     fn new(
         session: Session,
         stream: MessageStream,
-        commands: UnboundedReceiver<WsCommand>,
+        commands: mpsc::Receiver<WsCommand>,
+        close_requests: watch::Receiver<Option<CloseReason>>,
     ) -> Self {
         WsSession {
             session,
             stream,
             commands,
+            close_requests,
             last_heartbeat: Instant::now(),
         }
     }
@@ -566,6 +997,14 @@ impl WsSession {
                     if self.handle_command(command).await {
                         break;
                     }
+                }
+                changed = self.close_requests.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let reason = self.close_requests.borrow().clone();
+                    let _ = self.session.clone().close(reason).await;
+                    break;
                 }
             }
         }
@@ -608,36 +1047,278 @@ impl WsSession {
                     false
                 }
             }
-            WsCommand::Close(reason) => {
-                let _ = self.session.clone().close(reason).await;
-                true
-            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::mpsc::error::TryRecvError;
+    use std::{
+        sync::{Arc, atomic::Ordering},
+        time::Duration,
+    };
 
-    use super::{CONNECTION_LIMIT_CLOSE_CODE, SyncHub, WsCommand, WsSessionHandle};
+    use deadpool_redis::redis::AsyncCommands;
+    use tokio::sync::mpsc::error::TryRecvError;
+    use uuid::Uuid;
+
+    use super::{
+        COMMAND_QUEUE_CAPACITY, CONNECTION_LIMIT_CLOSE_CODE, SLOW_CLIENT_CLOSE_CODE,
+        SyncBusEnvelope, SyncCommand, SyncHub, SyncTarget, WsCommand, WsSessionHandle,
+    };
+
+    fn test_hub() -> SyncHub {
+        let kv = deadpool_redis::Config::from_url("redis://127.0.0.1/15")
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("test Redis pool configuration should be valid");
+        SyncHub::new(kv, "redis://127.0.0.1/15".to_string())
+    }
 
     #[test]
-    fn trims_oldest_connections_with_limit_close_code() {
-        let (oldest, mut oldest_rx) = WsSessionHandle::new();
-        let (newest, mut newest_rx) = WsSessionHandle::new();
-        let mut sessions = vec![oldest, newest];
+    fn slow_connection_is_closed_when_queue_is_full() {
+        let (handle, _commands) = WsSessionHandle::new(Uuid::new_v4());
+        let close = handle.close_rx();
 
-        SyncHub::trim_sessions(&mut sessions, 1);
-
-        assert_eq!(sessions.len(), 1);
-        match oldest_rx.try_recv() {
-            Ok(WsCommand::Close(Some(reason))) => {
-                assert_eq!(u16::from(reason.code), CONNECTION_LIMIT_CLOSE_CODE);
-            }
-            _ => panic!("oldest connection was not closed with the limit code"),
+        for _ in 0..COMMAND_QUEUE_CAPACITY {
+            assert!(handle.push(Arc::new("message".to_string())).is_ok());
         }
-        assert!(matches!(newest_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(handle.push(Arc::new("overflow".to_string())).is_err());
+        let reason = close.borrow().clone().expect("close reason should be set");
+        assert_eq!(u16::from(reason.code), SLOW_CLIENT_CLOSE_CODE);
+    }
+
+    #[test]
+    fn targeted_delivery_is_local_and_deduplicated() {
+        let hub = test_hub();
+        let first_id = Uuid::new_v4();
+        let second_id = Uuid::new_v4();
+        let (first, mut first_rx) = WsSessionHandle::new(first_id);
+        let (second, mut second_rx) = WsSessionHandle::new(second_id);
+        hub.users.entry(7).or_default().push(first.clone());
+        hub.users.entry(8).or_default().push(second.clone());
+        hub.connections.insert(first_id, (7, first));
+        hub.connections.insert(second_id, (8, second));
+
+        hub.dispatch(SyncBusEnvelope {
+            version: 1,
+            event_id: Uuid::new_v4(),
+            target: SyncTarget::Users { ids: vec![7, 7] },
+            command: SyncCommand::Deliver {
+                message: "message".to_string(),
+            },
+        });
+
+        assert!(
+            matches!(first_rx.try_recv(), Ok(WsCommand::Push(message)) if message.as_str() == "message")
+        );
+        assert!(matches!(first_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(matches!(second_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn unsupported_bus_version_is_ignored() {
+        let hub = test_hub();
+        let connection_id = Uuid::new_v4();
+        let (handle, mut commands) = WsSessionHandle::new(connection_id);
+        hub.connections.insert(connection_id, (7, handle));
+
+        hub.dispatch(SyncBusEnvelope {
+            version: 2,
+            event_id: Uuid::new_v4(),
+            target: SyncTarget::Broadcast,
+            command: SyncCommand::Deliver {
+                message: "message".to_string(),
+            },
+        });
+
+        assert!(matches!(commands.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn connection_target_closes_only_selected_connections() {
+        let hub = test_hub();
+        let first_id = Uuid::new_v4();
+        let second_id = Uuid::new_v4();
+        let (first, _first_commands) = WsSessionHandle::new(first_id);
+        let (second, _second_commands) = WsSessionHandle::new(second_id);
+        let first_close = first.close_rx();
+        let second_close = second.close_rx();
+        hub.connections.insert(first_id, (7, first));
+        hub.connections.insert(second_id, (7, second));
+
+        hub.dispatch(SyncBusEnvelope {
+            version: 1,
+            event_id: Uuid::new_v4(),
+            target: SyncTarget::Connections {
+                ids: vec![first_id, first_id],
+            },
+            command: SyncCommand::CloseConnections {
+                code: CONNECTION_LIMIT_CLOSE_CODE,
+                reason: "connection limit".to_string(),
+            },
+        });
+
+        let reason = first_close
+            .borrow()
+            .clone()
+            .expect("selected connection should be closed");
+        assert_eq!(u16::from(reason.code), CONNECTION_LIMIT_CLOSE_CODE);
+        assert!(second_close.borrow().is_none());
+    }
+
+    #[tokio::test]
+    async fn redis_registration_enforces_global_limit_and_lease_eviction() {
+        let Ok(redis_url) = std::env::var("RBPH_TEST_REDIS_URL") else {
+            return;
+        };
+        let pool = deadpool_redis::Config::from_url(&redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("test Redis pool configuration should be valid");
+        let first_hub = SyncHub::new(pool.clone(), redis_url.clone());
+        let second_hub = SyncHub::new(pool.clone(), redis_url);
+        let user_id = 1_500_000_000 + i32::from(Uuid::new_v4().as_bytes()[0]);
+        let first_id = Uuid::new_v4();
+        let second_id = Uuid::new_v4();
+        let third_id = Uuid::new_v4();
+        let (first_handle, _commands) = WsSessionHandle::new(first_id);
+        let first_close = first_handle.close_rx();
+        first_hub
+            .users
+            .entry(user_id)
+            .or_default()
+            .push(first_handle.clone());
+        first_hub
+            .connections
+            .insert(first_id, (user_id, first_handle));
+
+        assert!(
+            first_hub
+                .register_connection(user_id, first_id, 2)
+                .await
+                .expect("first registration should succeed")
+                .is_empty()
+        );
+        assert!(
+            second_hub
+                .register_connection(user_id, second_id, 2)
+                .await
+                .expect("second registration should succeed")
+                .is_empty()
+        );
+        assert_eq!(
+            second_hub
+                .register_connection(user_id, third_id, 2)
+                .await
+                .expect("third registration should succeed"),
+            vec![first_id]
+        );
+
+        first_hub.cleanup().await;
+        let reason = first_close
+            .borrow()
+            .clone()
+            .expect("evicted connection should be closed during lease renewal");
+        assert_eq!(u16::from(reason.code), super::CONNECTION_LIMIT_CLOSE_CODE);
+
+        let mut conn = pool
+            .get()
+            .await
+            .expect("test Redis should remain available");
+        let keys = vec![
+            format!("{}{}:connections", super::CONNECTION_SET_PREFIX, user_id),
+            format!("{}{}", super::CONNECTION_KEY_PREFIX, first_id),
+            format!("{}{}", super::CONNECTION_KEY_PREFIX, second_id),
+            format!("{}{}", super::CONNECTION_KEY_PREFIX, third_id),
+        ];
+        let _: deadpool_redis::redis::RedisResult<usize> = conn.del(&keys).await;
+    }
+
+    #[tokio::test]
+    async fn redis_bus_delivers_between_instances_once() {
+        let Ok(redis_url) = std::env::var("RBPH_TEST_REDIS_URL") else {
+            return;
+        };
+        let pool = deadpool_redis::Config::from_url(&redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("test Redis pool configuration should be valid");
+        let first_hub = Arc::new(SyncHub::new(pool.clone(), redis_url.clone()));
+        let second_hub = Arc::new(SyncHub::new(pool, redis_url));
+        let user_id = 1_600_000_000 + i32::from(Uuid::new_v4().as_bytes()[0]);
+        let connection_id = Uuid::new_v4();
+        let (handle, mut commands) = WsSessionHandle::new(connection_id);
+        let mut close = handle.close_rx();
+        second_hub
+            .users
+            .entry(user_id)
+            .or_default()
+            .push(handle.clone());
+        second_hub
+            .connections
+            .insert(connection_id, (user_id, handle));
+
+        let first_subscriber = tokio::spawn(first_hub.clone().run_subscriber());
+        let second_subscriber = tokio::spawn(second_hub.clone().run_subscriber());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !first_hub.is_ready() || !second_hub.is_ready() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("both sync subscribers should become ready");
+
+        first_hub
+            .publish_message(
+                SyncTarget::Users { ids: vec![user_id] },
+                super::SyncMessageType::TeamInfoUpdated,
+                (),
+            )
+            .await;
+        let message = tokio::time::timeout(Duration::from_secs(2), commands.recv())
+            .await
+            .expect("remote event should arrive")
+            .expect("connection command channel should remain open");
+        assert!(matches!(message, WsCommand::Push(_)));
+        assert!(matches!(commands.try_recv(), Err(TryRecvError::Empty)));
+
+        first_hub
+            .publish_command(
+                SyncTarget::Connections {
+                    ids: vec![connection_id],
+                },
+                SyncCommand::CloseConnections {
+                    code: CONNECTION_LIMIT_CLOSE_CODE,
+                    reason: "connection limit".to_string(),
+                },
+            )
+            .await;
+        tokio::time::timeout(Duration::from_secs(2), close.changed())
+            .await
+            .expect("remote close command should arrive")
+            .expect("connection close channel should remain open");
+        let reason = close
+            .borrow()
+            .clone()
+            .expect("remote target connection should be closed");
+        assert_eq!(u16::from(reason.code), CONNECTION_LIMIT_CLOSE_CODE);
+
+        first_subscriber.abort();
+        second_subscriber.abort();
+    }
+
+    #[test]
+    fn bus_failure_marks_instance_unready_and_closes_connections() {
+        let hub = test_hub();
+        let connection_id = Uuid::new_v4();
+        let (handle, _commands) = WsSessionHandle::new(connection_id);
+        let close = handle.close_rx();
+        hub.connections.insert(connection_id, (7, handle));
+        hub.bus_ready.store(true, Ordering::Release);
+
+        hub.mark_bus_unavailable();
+
+        assert!(!hub.is_ready());
+        let reason = close.borrow().clone().expect("connection should be closed");
+        assert_eq!(u16::from(reason.code), super::SERVICE_RESTART_CLOSE_CODE);
     }
 }
 

@@ -99,11 +99,12 @@ async fn update(
     .await?;
     *app.system_settings.write().await = settings.clone();
     app.sync_hub
-        .enforce_connection_limit(settings.max_websocket_connections as usize);
+        .enforce_connection_limit(settings.max_websocket_connections as usize)
+        .await;
     if previous.maintenance_enabled != settings.maintenance_enabled
         || previous.maintenance_message != settings.maintenance_message
     {
-        app.sync_hub.notify_system_status_updated();
+        app.sync_hub.notify_system_status_updated().await;
     }
     crate::module::system_settings::publish_updated(&app).await;
 

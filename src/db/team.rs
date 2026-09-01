@@ -425,7 +425,7 @@ pub async fn disband(app: &AppState, team_id: i32) -> Result<bool, RbInternalErr
 
         db::cache::remove_team_info(app, game_id).await?;
 
-        app.sync_hub.notify_team_disbanded(&members);
+        app.sync_hub.notify_team_disbanded(&members).await;
 
         Ok(true)
     } else {
@@ -1519,7 +1519,7 @@ pub async fn kick_member(
         // other member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
 
-        app.sync_hub.notify_team_self_kicked(user_id);
+        app.sync_hub.notify_team_self_kicked(user_id).await;
 
         Ok(true)
     } else {
@@ -1570,7 +1570,7 @@ pub async fn promote_member(
         // target member => TeamSelfPromoted
         db::cache::invalidate_team_info(app, team_id).await?;
 
-        app.sync_hub.notify_team_self_promoted(user_id);
+        app.sync_hub.notify_team_self_promoted(user_id).await;
 
         Ok(true)
     } else {
@@ -2197,7 +2197,7 @@ pub async fn admin_remove_member(
     }
     tx.commit().await?;
     db::cache::invalidate_team_info(app, team_id).await?;
-    app.sync_hub.notify_team_self_kicked(user_id);
+    app.sync_hub.notify_team_self_kicked(user_id).await;
     Ok(AdminMemberResult::Ok)
 }
 
@@ -2253,7 +2253,7 @@ pub async fn admin_delete(
     .await?;
     tx.commit().await?;
     db::cache::remove_team_info(app, game_id).await?;
-    app.sync_hub.notify_team_disbanded(&members);
+    app.sync_hub.notify_team_disbanded(&members).await;
     Ok(Some(members))
 }
 

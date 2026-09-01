@@ -968,7 +968,8 @@ async fn upload_package(
         .map_err(RbInternalError::from)?;
         if let Some(revision) = published_revision {
             app.sync_hub
-                .notify_game_frontend_updated(path.game_id, revision);
+                .notify_game_frontend_updated(path.game_id, revision)
+                .await;
         }
     }
     invalidate_draft_renderer_cache(&app, path.game_id).await?;
@@ -1278,7 +1279,8 @@ async fn publish(
     cleanup_pending_packages(&app, path.game_id).await?;
     db::frontend::invalidate_renderer_cache(&app.kv, path.game_id, None).await?;
     app.sync_hub
-        .notify_game_frontend_updated(path.game_id, result.0.revision);
+        .notify_game_frontend_updated(path.game_id, result.0.revision)
+        .await;
     Ok(HttpResponse::Ok().json(
         serde_json::json!({"code":FrontendPublishResult::Ok,"published":result.0,"draft":result.1}),
     ))

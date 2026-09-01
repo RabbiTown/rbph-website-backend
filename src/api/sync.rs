@@ -14,6 +14,7 @@ async fn sync_ws(
     let max_connections = app.system_settings.read().await.max_websocket_connections as usize;
     app.sync_hub
         .create_ws(req, stream, user.uid, max_connections)
+        .await
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {

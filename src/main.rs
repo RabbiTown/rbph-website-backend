@@ -70,7 +70,7 @@ async fn main() -> std::io::Result<()> {
     };
     let secret_key = Key::from(&secret_key_bytes);
 
-    let sync_hub = Arc::new(SyncHub::default());
+    let sync_hub = Arc::new(SyncHub::new(kv_pool.clone(), app_config.kv_addr.clone()));
     let release_schedule_changed = Arc::new(Notify::new());
     let captcha = match CaptchaService::from_config(&settings.auth.captcha) {
         Ok(service) => service.map(Arc::new),
@@ -181,12 +181,17 @@ async fn main() -> std::io::Result<()> {
 
     {
         let hub = sync_hub.clone();
+        tokio::spawn(hub.run_subscriber());
+    }
+
+    {
+        let hub = sync_hub.clone();
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(30));
+            let mut interval = time::interval(Duration::from_secs(20));
             interval.tick().await;
             loop {
                 interval.tick().await;
-                hub.cleanup();
+                hub.cleanup().await;
             }
         });
     }
@@ -223,5 +228,7 @@ async fn main() -> std::io::Result<()> {
         }
     );
 
-    server.await
+    let result = server.await;
+    sync_hub.shutdown().await;
+    result
 }

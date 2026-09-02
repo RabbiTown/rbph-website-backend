@@ -5,16 +5,16 @@ use actix_web::{App, HttpServer, cookie::Key, middleware::Logger, web};
 use dotenvy::dotenv;
 use env_logger::Env;
 use rbph_website_backend::{
-    AppState, api, asset, config, db, health,
-    middleware::maintenance::MaintenanceMiddleware,
+    AppState, MIGRATOR, api, asset, config, db, health,
+    middleware::{cluster::ClusterReadinessMiddleware, maintenance::MaintenanceMiddleware},
     module::{self, captcha::CaptchaService, email::EmailService, sync::SyncHub},
 };
 use tokio::{
     sync::{Notify, RwLock},
+    task::JoinSet,
     time,
 };
-
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+use tokio_util::sync::CancellationToken;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -33,10 +33,17 @@ async fn main() -> std::io::Result<()> {
         log::error!("Invalid auth rate limit configuration: enabled limits must be positive");
         std::process::exit(1);
     }
-    if let Err(error) = settings.storage.validate() {
+    if let Err(error) = settings
+        .storage
+        .validate_for_mode(settings.app.deployment_mode)
+    {
         log::error!("Invalid storage configuration: {error}");
         std::process::exit(1);
     }
+    let cluster_fingerprint = settings.cluster_fingerprint().unwrap_or_else(|error| {
+        log::error!("Failed to fingerprint cluster configuration: {error}");
+        std::process::exit(1);
+    });
     let app_config = settings.app.clone();
     let db_config = settings.db.clone();
     let storage_config = settings.storage.clone();
@@ -45,16 +52,22 @@ async fn main() -> std::io::Result<()> {
         log::error!("Failed to connect to PostgreSQL: {error}");
         std::process::exit(1);
     });
-    MIGRATOR.run(&db_pool).await.unwrap_or_else(|error| {
-        log::error!("Failed to run database migrations: {error}");
+
+    let cluster_membership = module::cluster::ClusterMembership::migrate_and_register(
+        db_pool.clone(),
+        &MIGRATOR,
+        app_config.deployment_mode,
+        cluster_fingerprint,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        log::error!("Failed to prepare and join deployment: {error}");
         std::process::exit(1);
     });
-    module::root::ensure_root(&db_pool)
-        .await
-        .unwrap_or_else(|error| {
-            log::error!("Failed to initialize Root user: {error:?}");
-            std::process::exit(1);
-        });
+    let membership_task = {
+        let membership = cluster_membership.clone();
+        tokio::spawn(membership.run())
+    };
 
     let kv_pool = deadpool_redis::Config::from_url(&app_config.kv_addr)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
@@ -93,14 +106,37 @@ async fn main() -> std::io::Result<()> {
     } else {
         None
     };
+
+    module::root::ensure_root(&db_pool)
+        .await
+        .unwrap_or_else(|error| {
+            log::error!("Failed to initialize Root user: {error:?}");
+            std::process::exit(1);
+        });
+
     let previous_system_settings = db::system_settings::get(&db_pool).await.unwrap();
-    let current_system_settings = db::system_settings::disable_unavailable_auth_features(
-        &db_pool,
-        captcha.is_some(),
-        email_service.is_some(),
-    )
-    .await
-    .unwrap();
+    if app_config.deployment_mode == config::DeploymentMode::Cluster
+        && ((previous_system_settings.require_email_verification && email_service.is_none())
+            || ((previous_system_settings.captcha_login_required
+                || previous_system_settings.captcha_registration_required)
+                && captcha.is_none()))
+    {
+        log::error!(
+            "Cluster instance lacks an email or captcha provider required by system settings"
+        );
+        std::process::exit(1);
+    }
+    let current_system_settings = if app_config.deployment_mode == config::DeploymentMode::Cluster {
+        previous_system_settings.clone()
+    } else {
+        db::system_settings::disable_unavailable_auth_features(
+            &db_pool,
+            captcha.is_some(),
+            email_service.is_some(),
+        )
+        .await
+        .unwrap()
+    };
     if previous_system_settings.require_email_verification
         && !current_system_settings.require_email_verification
     {
@@ -141,6 +177,7 @@ async fn main() -> std::io::Result<()> {
         db: db_pool,
         kv: kv_pool,
         settings,
+        cluster_membership: cluster_membership.clone(),
         system_settings,
         sync_hub: sync_hub.clone(),
         release_schedule_changed: release_schedule_changed.clone(),
@@ -156,9 +193,10 @@ async fn main() -> std::io::Result<()> {
 
     let (host, port) = (&app_config.bind_addr.0, app_config.bind_addr.1);
     let http_app_state = app_state_data.clone();
-    let server = HttpServer::new(move || {
+    let server_builder = HttpServer::new(move || {
         App::new()
             .app_data(http_app_state.clone())
+            .wrap(ClusterReadinessMiddleware)
             .wrap(Logger::default())
             .wrap(
                 SessionMiddleware::builder(session_store.clone(), secret_key.clone())
@@ -176,21 +214,42 @@ async fn main() -> std::io::Result<()> {
                     .configure(api::config),
             )
     })
-    .bind((host.as_str(), port))?
-    .run();
+    .shutdown_timeout(module::cluster::HTTP_SHUTDOWN_TIMEOUT_SECONDS);
+    let server = match server_builder.bind((host.as_str(), port)) {
+        Ok(server) => server.run(),
+        Err(error) => {
+            cluster_membership.shutdown().await;
+            let _ = membership_task.await;
+            return Err(error);
+        }
+    };
+    let server_handle = server.handle();
+
+    let shutdown = CancellationToken::new();
+    let mut background_tasks = JoinSet::new();
 
     {
         let hub = sync_hub.clone();
-        tokio::spawn(hub.run_subscriber());
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
+            tokio::select! {
+                _ = hub.run_subscriber() => {}
+                _ = cancelled.cancelled() => {}
+            }
+        });
     }
 
     {
         let hub = sync_hub.clone();
-        tokio::spawn(async move {
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
             let mut interval = time::interval(Duration::from_secs(20));
             interval.tick().await;
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cancelled.cancelled() => return,
+                }
                 hub.cleanup().await;
             }
         });
@@ -199,22 +258,46 @@ async fn main() -> std::io::Result<()> {
     {
         let state = app_state_data.get_ref().clone();
         let changed = release_schedule_changed.clone();
-        tokio::spawn(module::release::run_scheduler(state, changed));
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
+            tokio::select! {
+                _ = module::release::run_scheduler(state, changed) => {}
+                _ = cancelled.cancelled() => {}
+            }
+        });
     }
 
     {
         let state = app_state_data.get_ref().clone();
-        tokio::spawn(module::leaderboard::run_scheduler(state));
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
+            tokio::select! {
+                _ = module::leaderboard::run_scheduler(state) => {}
+                _ = cancelled.cancelled() => {}
+            }
+        });
     }
 
     {
         let state = app_state_data.get_ref().clone();
-        tokio::spawn(module::system_settings::run_reconciler(state));
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
+            tokio::select! {
+                _ = module::system_settings::run_reconciler(state) => {}
+                _ = cancelled.cancelled() => {}
+            }
+        });
     }
 
     {
         let state = app_state_data.get_ref().clone();
-        tokio::spawn(module::system_settings::run_subscriber(state));
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
+            tokio::select! {
+                _ = module::system_settings::run_subscriber(state) => {}
+                _ = cancelled.cancelled() => {}
+            }
+        });
     }
 
     log::info!(
@@ -228,7 +311,20 @@ async fn main() -> std::io::Result<()> {
         }
     );
 
-    let result = server.await;
+    tokio::pin!(server);
+    let result = tokio::select! {
+        result = &mut server => result,
+        _ = cluster_membership.wait_lost() => {
+            shutdown.cancel();
+            server_handle.stop(true).await;
+            let _ = (&mut server).await;
+            Err(std::io::Error::other("cluster membership lease was lost"))
+        }
+    };
+    shutdown.cancel();
+    background_tasks.shutdown().await;
     sync_hub.shutdown().await;
+    cluster_membership.shutdown().await;
+    let _ = membership_task.await;
     result
 }

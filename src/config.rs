@@ -1,11 +1,34 @@
 use base64::{Engine, prelude::BASE64_STANDARD};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use config::Config;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Clone)]
+pub const CLUSTER_PROTOCOL_VERSION: u32 = 1;
+pub const BUILD_FINGERPRINT: &str = env!("RBPH_BUILD_FINGERPRINT");
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentMode {
+    #[default]
+    Single,
+    Cluster,
+}
+
+impl DeploymentMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Cluster => "cluster",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Serialize)]
 pub struct AppConfig {
+    #[serde(default)]
+    pub deployment_mode: DeploymentMode,
     pub production: bool,
 
     pub bind_addr: (String, u16),
@@ -40,7 +63,7 @@ const fn default_db_max_connections() -> u32 {
     32
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct StorageConfig {
     pub default_backend: String,
     #[serde(default)]
@@ -48,7 +71,7 @@ pub struct StorageConfig {
     pub backends: BTreeMap<String, StorageBackendConfig>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StorageBackendConfig {
     Local {
@@ -131,6 +154,19 @@ impl StorageConfig {
         }
         Ok(())
     }
+
+    pub fn validate_for_mode(&self, mode: DeploymentMode) -> Result<(), String> {
+        self.validate()?;
+        if mode == DeploymentMode::Cluster
+            && self
+                .backends
+                .values()
+                .any(|backend| matches!(backend, StorageBackendConfig::Local { .. }))
+        {
+            return Err("kind=local storage backends are not allowed in cluster mode".to_string());
+        }
+        Ok(())
+    }
 }
 
 fn valid_storage_backend_id(value: &str) -> bool {
@@ -140,7 +176,7 @@ fn valid_storage_backend_id(value: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct AuthConfig {
     pub captcha: CaptchaConfig,
     pub email: EmailConfig,
@@ -148,7 +184,7 @@ pub struct AuthConfig {
     pub rate_limit: AuthRateLimitConfig,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 #[serde(default)]
 pub struct AuthRateLimitConfig {
     pub enabled: bool,
@@ -186,7 +222,7 @@ impl AuthRateLimitConfig {
     }
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 #[serde(tag = "provider", rename_all = "snake_case")]
 pub enum CaptchaConfig {
     Disabled,
@@ -207,7 +243,7 @@ pub struct Settings {
     pub auth: AuthConfig,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct EmailConfig {
     pub enabled: bool,
     pub sender: String,
@@ -217,7 +253,7 @@ pub struct EmailConfig {
     pub url: UrlConfig,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Serialize)]
 pub struct UrlConfig {
     pub verify: String,
 }
@@ -231,17 +267,59 @@ impl Settings {
             .build()?;
         cfg.try_deserialize()
     }
+
+    pub fn cluster_fingerprint(&self) -> Result<String, serde_json::Error> {
+        #[derive(Serialize)]
+        struct AppContract<'a> {
+            deployment_mode: DeploymentMode,
+            production: bool,
+            kv_addr: &'a str,
+            secret_key: &'a str,
+        }
+
+        #[derive(Serialize)]
+        struct ClusterContract<'a> {
+            cluster_protocol_version: u32,
+            schema_generation: i64,
+            build_fingerprint: &'static str,
+            app: AppContract<'a>,
+            storage: &'a StorageConfig,
+            auth: &'a AuthConfig,
+        }
+
+        let contract = ClusterContract {
+            cluster_protocol_version: CLUSTER_PROTOCOL_VERSION,
+            schema_generation: crate::embedded_schema_generation(),
+            build_fingerprint: BUILD_FINGERPRINT,
+            app: AppContract {
+                deployment_mode: self.app.deployment_mode,
+                production: self.app.production,
+                kv_addr: &self.app.kv_addr,
+                secret_key: &self.app.secret_key,
+            },
+            storage: &self.storage,
+            auth: &self.auth,
+        };
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&contract)?)
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{AppConfig, AuthRateLimitConfig, StorageBackendConfig, StorageConfig};
+    use super::{
+        AppConfig, AuthConfig, AuthRateLimitConfig, CaptchaConfig, DbConfig, DeploymentMode,
+        EmailConfig, Settings, StorageBackendConfig, StorageConfig, UrlConfig,
+    };
 
     #[test]
     fn session_secret_requires_exactly_64_bytes() {
         let valid = AppConfig {
+            deployment_mode: DeploymentMode::Single,
             production: true,
             bind_addr: ("127.0.0.1".to_string(), 9999),
             kv_addr: "redis://localhost/1".to_string(),
@@ -300,6 +378,8 @@ mod tests {
             backends,
         };
         assert!(valid.validate().is_ok());
+        assert!(valid.validate_for_mode(DeploymentMode::Single).is_ok());
+        assert!(valid.validate_for_mode(DeploymentMode::Cluster).is_err());
 
         let invalid_default = StorageConfig {
             default_backend: "missing".to_string(),
@@ -331,6 +411,7 @@ mod tests {
             )]),
         };
         assert!(cos_only.validate().is_ok());
+        assert!(cos_only.validate_for_mode(DeploymentMode::Cluster).is_ok());
 
         let database_default = StorageConfig {
             default_backend: "private".to_string(),
@@ -393,5 +474,65 @@ mod tests {
             },
         );
         assert!(invalid_cos.validate().is_err());
+    }
+
+    #[test]
+    fn cluster_fingerprint_covers_shared_but_not_instance_configuration() {
+        let settings = Settings {
+            app: AppConfig {
+                deployment_mode: DeploymentMode::Cluster,
+                production: true,
+                bind_addr: ("127.0.0.1".to_string(), 9999),
+                kv_addr: "redis://redis/1".to_string(),
+                secret_key: base64::Engine::encode(&base64::prelude::BASE64_STANDARD, [7_u8; 64]),
+            },
+            db: DbConfig {
+                addr: "postgres://one/database".to_string(),
+                password: Some("first".to_string()),
+                max_connections: 32,
+            },
+            storage: StorageConfig {
+                default_backend: "cos".to_string(),
+                content_cdn_backend: Some("cos".to_string()),
+                backends: BTreeMap::from([(
+                    "cos".to_string(),
+                    StorageBackendConfig::Cos {
+                        label: "COS".to_string(),
+                        region: "ap-shanghai".to_string(),
+                        bucket: "example-1234567890".to_string(),
+                        secret_id: "id".to_string(),
+                        secret_key: "key".to_string(),
+                        public_base_url: "https://assets.example.com".to_string(),
+                    },
+                )]),
+            },
+            auth: AuthConfig {
+                captcha: CaptchaConfig::Disabled,
+                email: EmailConfig {
+                    enabled: false,
+                    sender: "RBPH <bot@example.com>".to_string(),
+                    smtp: String::new(),
+                    smtp_user: String::new(),
+                    smtp_pass: String::new(),
+                    url: UrlConfig {
+                        verify: "https://example.com/verify?token={}".to_string(),
+                    },
+                },
+                rate_limit: AuthRateLimitConfig::default(),
+            },
+        };
+        let fingerprint = settings.cluster_fingerprint().unwrap();
+        assert_eq!(fingerprint.len(), 64);
+
+        let mut instance_variant = settings.clone();
+        instance_variant.app.bind_addr = ("0.0.0.0".to_string(), 8080);
+        instance_variant.db.addr = "postgres://two/database".to_string();
+        instance_variant.db.password = Some("second".to_string());
+        instance_variant.db.max_connections = 4;
+        assert_eq!(fingerprint, instance_variant.cluster_fingerprint().unwrap());
+
+        instance_variant.app.secret_key =
+            base64::Engine::encode(&base64::prelude::BASE64_STANDARD, [8_u8; 64]);
+        assert_ne!(fingerprint, instance_variant.cluster_fingerprint().unwrap());
     }
 }

@@ -1,5 +1,6 @@
 pub mod auth_rate_limit;
 pub mod captcha;
+pub mod cluster;
 pub mod email;
 pub mod leaderboard;
 pub mod puzzle_backend_js;

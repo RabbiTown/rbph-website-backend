@@ -1,4 +1,5 @@
 [app]
+deployment_mode = "single"
 production = false
 bind_addr = ["127.0.0.1", 9999]
 kv_addr = "redis://localhost/1"

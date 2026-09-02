@@ -29,7 +29,9 @@ async fn ready(app: web::Data<AppState>) -> HttpResponse {
 
     let sync_ready = app.sync_hub.is_ready();
 
-    if db_ready && kv_ready && storage_ready && sync_ready {
+    let membership_ready = app.cluster_membership.is_ready();
+
+    if db_ready && kv_ready && storage_ready && sync_ready && membership_ready {
         HttpResponse::Ok().json(HealthResponse { status: "ready" })
     } else {
         HttpResponse::ServiceUnavailable().json(HealthResponse {

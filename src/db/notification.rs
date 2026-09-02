@@ -3,7 +3,10 @@ use serde::Serialize;
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::{DbPool, error::RbInternalError};
+use crate::{
+    DbPool, db::ticket::STAFF_ALIAS_USER_ID, error::RbInternalError,
+    model::game::RbGameStaffIdentity,
+};
 
 #[repr(i16)]
 #[derive(Clone, Copy, FromPrimitive, IntoPrimitive)]
@@ -18,6 +21,27 @@ pub enum NotificationKind {
 pub struct NotificationActor {
     id: i32,
     nickname: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+}
+
+fn notification_actor(
+    id: i32,
+    nickname: String,
+    staff_identity: Option<&RbGameStaffIdentity>,
+) -> NotificationActor {
+    match staff_identity {
+        Some(identity) => NotificationActor {
+            id: STAFF_ALIAS_USER_ID,
+            nickname: identity.nickname.clone(),
+            avatar: identity.avatar.clone(),
+        },
+        None => NotificationActor {
+            id,
+            nickname,
+            avatar: None,
+        },
+    }
 }
 
 #[derive(Serialize)]
@@ -38,6 +62,7 @@ pub async fn list_for_team(
     team_id: i32,
     before: Option<i64>,
     limit: i64,
+    staff_identity: Option<&RbGameStaffIdentity>,
 ) -> Result<Vec<TeamNotification>, RbInternalError> {
     let rows = sqlx::query!(
         "SELECT n.id, n.kind, n.data, n.read_at, n.ctime_at,
@@ -62,7 +87,7 @@ pub async fn list_for_team(
             actor: row
                 .actor_id
                 .zip(row.actor_nickname)
-                .map(|(id, nickname)| NotificationActor { id, nickname }),
+                .map(|(id, nickname)| notification_actor(id, nickname, staff_identity)),
             data: row.data,
             read: row.read_at.is_some(),
             read_at: row.read_at,
@@ -75,6 +100,7 @@ pub async fn get_for_team(
     pool: &DbPool,
     team_id: i32,
     notification_id: i64,
+    staff_identity: Option<&RbGameStaffIdentity>,
 ) -> Result<Option<TeamNotification>, RbInternalError> {
     let row = sqlx::query!(
         "SELECT n.id, n.kind, n.data, n.read_at, n.ctime_at,
@@ -94,12 +120,30 @@ pub async fn get_for_team(
         actor: row
             .actor_id
             .zip(row.actor_nickname)
-            .map(|(id, nickname)| NotificationActor { id, nickname }),
+            .map(|(id, nickname)| notification_actor(id, nickname, staff_identity)),
         data: row.data,
         read: row.read_at.is_some(),
         read_at: row.read_at,
         ctime_at: row.ctime_at,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{STAFF_ALIAS_USER_ID, notification_actor};
+
+    #[test]
+    fn notification_actor_uses_staff_alias_when_requested() {
+        let identity = crate::model::game::RbGameStaffIdentity {
+            nickname: "Puzzle Control".to_string(),
+            avatar: Some("alias-avatar".to_string()),
+        };
+        let actor = notification_actor(42, "Alice".to_string(), Some(&identity));
+
+        assert_eq!(actor.id, STAFF_ALIAS_USER_ID);
+        assert_eq!(actor.nickname, "Puzzle Control");
+        assert_eq!(actor.avatar.as_deref(), Some("alias-avatar"));
+    }
 }
 
 pub struct NotificationUnreadCount {

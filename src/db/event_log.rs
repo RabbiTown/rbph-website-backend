@@ -5,7 +5,10 @@ use serde_repr::Serialize_repr;
 use sqlx::PgConnection;
 use time::OffsetDateTime;
 
-use crate::{DbPool, error::RbInternalError};
+use crate::{
+    DbPool, db::ticket::STAFF_ALIAS_USER_ID, error::RbInternalError,
+    model::game::RbGameStaffIdentity,
+};
 
 #[repr(i16)]
 #[derive(Clone, Copy, IntoPrimitive, Serialize_repr)]
@@ -127,6 +130,27 @@ pub struct EventLogData {
     pub data: Value,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+}
+
+impl EventLogData {
+    pub fn anonymize_staff(&mut self, identity: &RbGameStaffIdentity) {
+        if self.data.get("staff").and_then(Value::as_bool) != Some(true) {
+            return;
+        }
+
+        if self.user_id.is_some() {
+            self.user_id = Some(STAFF_ALIAS_USER_ID);
+            if let Some(data) = self.data.as_object_mut() {
+                data.insert(
+                    "user".to_owned(),
+                    json!({
+                        "id": STAFF_ALIAS_USER_ID,
+                        "nickname": identity.nickname
+                    }),
+                );
+            }
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -403,5 +427,64 @@ impl CurrencyEventData {
             "before": self.before,
             "after": self.after
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventLogData;
+    use crate::{db::ticket::STAFF_ALIAS_USER_ID, model::game::RbGameStaffIdentity};
+    use serde_json::json;
+    use time::OffsetDateTime;
+
+    fn event(staff: bool) -> EventLogData {
+        EventLogData {
+            id: 1,
+            event_type: "currency.staff_adjusted".to_owned(),
+            scope: 1,
+            severity: 0,
+            game_id: Some(1),
+            team_id: Some(2),
+            user_id: Some(42),
+            target_user_id: None,
+            puzzle_id: None,
+            round_id: None,
+            hint_id: None,
+            ticket_id: None,
+            submission_id: None,
+            currency_id: None,
+            delta_amount: None,
+            data: json!({
+                "staff": staff,
+                "user": { "id": 42, "nickname": "Real staff" }
+            }),
+            ctime_at: OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn staff_activity_uses_shared_identity() {
+        let mut event = event(true);
+        event.anonymize_staff(&RbGameStaffIdentity {
+            nickname: "Puzzle Control".to_owned(),
+            avatar: None,
+        });
+
+        assert_eq!(event.user_id, Some(STAFF_ALIAS_USER_ID));
+        assert_eq!(event.data["user"]["id"], STAFF_ALIAS_USER_ID);
+        assert_eq!(event.data["user"]["nickname"], "Puzzle Control");
+    }
+
+    #[test]
+    fn player_activity_keeps_real_identity() {
+        let mut event = event(false);
+        event.anonymize_staff(&RbGameStaffIdentity {
+            nickname: "Puzzle Control".to_owned(),
+            avatar: None,
+        });
+
+        assert_eq!(event.user_id, Some(42));
+        assert_eq!(event.data["user"]["id"], 42);
+        assert_eq!(event.data["user"]["nickname"], "Real staff");
     }
 }

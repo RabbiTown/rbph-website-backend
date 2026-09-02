@@ -11,7 +11,10 @@ use crate::{
     db::{round::RbRoundSimpleData, team::RbCurrencyShowData},
     error::RbInternalError,
     model::{
-        game::{RbContentType, RbTeamPuzzleState, RbTeamState, RbTicketSenderType, RbTicketState},
+        game::{
+            RbContentType, RbGameStaffIdentity, RbTeamPuzzleState, RbTeamState, RbTicketSenderType,
+            RbTicketState,
+        },
         user::RbUserRole,
     },
 };
@@ -84,6 +87,17 @@ pub struct TicketAggreInfoUser {
     pub email: Option<String>,
 }
 
+pub const STAFF_ALIAS_USER_ID: i32 = 0;
+
+impl TicketAggreInfoUser {
+    fn anonymize(&mut self, identity: &RbGameStaffIdentity) {
+        self.id = STAFF_ALIAS_USER_ID;
+        self.nickname = identity.nickname.clone();
+        self.avatar = identity.avatar.clone();
+        self.email = None;
+    }
+}
+
 fn user_avatar(email: Option<&str>, provider: Option<i16>) -> Option<String> {
     email.map(|email| {
         crate::model::user::avatar_url(
@@ -121,6 +135,12 @@ pub struct TicketMessage {
 impl TicketMessage {
     pub fn id(&self) -> i32 {
         self.id
+    }
+
+    pub fn anonymize_staff(&mut self, identity: &RbGameStaffIdentity) {
+        if matches!(self.sender_type, RbTicketSenderType::Host) {
+            self.sender.anonymize(identity);
+        }
     }
 }
 
@@ -169,6 +189,22 @@ pub struct TicketOperation {
 pub enum TicketThreadItem {
     Message(TicketMessage),
     Operation(TicketOperation),
+}
+
+impl TicketThreadItem {
+    fn anonymize_staff(&mut self, identity: &RbGameStaffIdentity) {
+        match self {
+            Self::Message(message) => message.anonymize_staff(identity),
+            Self::Operation(operation) => {
+                if matches!(operation.actor_type, RbTicketSenderType::Host) {
+                    operation.actor.anonymize(identity);
+                }
+                if let Some(message) = &mut operation.message {
+                    message.anonymize_staff(identity);
+                }
+            }
+        }
+    }
 }
 
 impl TicketThreadItem {
@@ -394,6 +430,19 @@ impl TicketThread {
 
     pub fn perm(&self) -> &TicketPerm {
         &self.perm
+    }
+
+    pub fn anonymize_staff(&mut self, identity: &RbGameStaffIdentity) {
+        if let Some(assignee) = self
+            .ticket
+            .as_mut()
+            .and_then(|ticket| ticket.assignee.as_mut())
+        {
+            assignee.anonymize(identity);
+        }
+        for item in &mut self.messages {
+            item.anonymize_staff(identity);
+        }
     }
 }
 
@@ -2145,7 +2194,7 @@ pub async fn get_team_puzzle_tickets(
 
 #[cfg(test)]
 mod tests {
-    use super::{PlayerFeatureAccess, TicketSendBlock};
+    use super::{PlayerFeatureAccess, STAFF_ALIAS_USER_ID, TicketAggreInfoUser, TicketSendBlock};
 
     #[test]
     fn feature_access_distinguishes_new_and_existing_conversations() {
@@ -2169,5 +2218,26 @@ mod tests {
             PlayerFeatureAccess::TeamFeatureBanned.send_block(true),
             TicketSendBlock::TeamFeatureBanned
         );
+    }
+
+    #[test]
+    fn staff_alias_removes_identity_fields() {
+        let identity = crate::model::game::RbGameStaffIdentity {
+            nickname: "Puzzle Control".to_string(),
+            avatar: Some("alias-avatar".to_string()),
+        };
+        let mut user = TicketAggreInfoUser {
+            id: 42,
+            nickname: "Alice".to_string(),
+            avatar: Some("avatar".to_string()),
+            email: Some("alice@example.com".to_string()),
+        };
+
+        user.anonymize(&identity);
+
+        assert_eq!(user.id, STAFF_ALIAS_USER_ID);
+        assert_eq!(user.nickname, "Puzzle Control");
+        assert_eq!(user.avatar.as_deref(), Some("alias-avatar"));
+        assert_eq!(user.email, None);
     }
 }

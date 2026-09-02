@@ -10,6 +10,8 @@ use sqlx::{
     types::{Json, time::OffsetDateTime},
 };
 
+use crate::model::user::{AvatarProvider, avatar_url};
+
 #[derive(FromRow, Serialize)]
 pub struct RbGame {
     pub id: i32,
@@ -25,12 +27,26 @@ pub struct RbGame {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RbGameSettings {
     pub team: RbGameTeamSettings,
+    pub display: RbGameDisplaySettings,
     pub ticket: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct RbGameTeamSettings {
     pub max_members: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct RbGameDisplaySettings {
+    pub staff_nickname: Option<String>,
+    pub staff_avatar_email: Option<String>,
+    pub staff_avatar_provider: AvatarProvider,
+}
+
+#[derive(Clone, Debug)]
+pub struct RbGameStaffIdentity {
+    pub nickname: String,
+    pub avatar: Option<String>,
 }
 
 pub trait GameSettingGroup: Default + for<'de> Deserialize<'de> + Serialize + Sized {
@@ -45,6 +61,7 @@ impl Default for RbGameSettings {
     fn default() -> Self {
         Self {
             team: RbGameTeamSettings::default(),
+            display: RbGameDisplaySettings::default(),
             ticket: Value::Object(Map::new()),
         }
     }
@@ -72,6 +89,61 @@ impl GameSettingGroup for RbGameTeamSettings {
     const PATH: &'static [&'static str] = &["team"];
 }
 
+impl RbGameDisplaySettings {
+    pub fn validate_patch(value: &Value) -> bool {
+        match value {
+            Value::Null => true,
+            Value::Object(display) => display.iter().all(|(key, value)| match key.as_str() {
+                "staff_nickname" => {
+                    value.is_null()
+                        || value.as_str().is_some_and(|nickname| {
+                            !nickname.trim().is_empty() && nickname.chars().count() <= 60
+                        })
+                }
+                "staff_avatar_email" => {
+                    value.is_null()
+                        || value.as_str().is_some_and(|email| {
+                            !email.trim().is_empty() && email.chars().count() <= 255
+                        })
+                }
+                "staff_avatar_provider" => {
+                    serde_json::from_value::<AvatarProvider>(value.clone()).is_ok()
+                }
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+}
+
+impl GameSettingGroup for RbGameDisplaySettings {
+    const PATH: &'static [&'static str] = &["display"];
+
+    fn sanitize(mut self) -> Self {
+        self.staff_nickname = self
+            .staff_nickname
+            .map(|nickname| nickname.trim().to_string())
+            .filter(|nickname| !nickname.is_empty() && nickname.chars().count() <= 60);
+        self.staff_avatar_email = self
+            .staff_avatar_email
+            .map(|email| email.trim().to_string())
+            .filter(|email| !email.is_empty() && email.chars().count() <= 255);
+        self
+    }
+}
+
+impl RbGameDisplaySettings {
+    pub fn staff_identity(&self) -> Option<RbGameStaffIdentity> {
+        Some(RbGameStaffIdentity {
+            nickname: self.staff_nickname.clone()?,
+            avatar: self
+                .staff_avatar_email
+                .as_deref()
+                .map(|email| avatar_url(email, self.staff_avatar_provider)),
+        })
+    }
+}
+
 impl RbGameSettings {
     pub fn default_value() -> Value {
         serde_json::to_value(Self::default()).unwrap_or(Value::Object(Map::new()))
@@ -84,6 +156,7 @@ impl RbGameSettings {
 
         root.iter().all(|(key, value)| match key.as_str() {
             "team" => RbGameTeamSettings::validate_patch(value),
+            "display" => RbGameDisplaySettings::validate_patch(value),
             "ticket" => value.is_null() || value.is_object(),
             _ => false,
         })
@@ -96,6 +169,7 @@ impl RbGameSettings {
         let mut settings = serde_json::from_value::<Self>(merged).unwrap_or_default();
 
         settings.team = settings.team.sanitize();
+        settings.display = settings.display.sanitize();
         if !settings.ticket.is_object() {
             settings.ticket = Self::default().ticket;
         }
@@ -191,7 +265,7 @@ impl<'q> Encode<'q, Postgres> for RbGameSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{RbGameSettings, RbGameTeamSettings};
+    use super::{RbGameDisplaySettings, RbGameSettings, RbGameTeamSettings};
     use serde_json::json;
 
     #[test]
@@ -201,9 +275,37 @@ mod tests {
             RbGameSettings::default_value(),
             json!({
                 "team": { "max_members": null },
+                "display": {
+                    "staff_nickname": null,
+                    "staff_avatar_email": null,
+                    "staff_avatar_provider": "cravatar"
+                },
                 "ticket": {},
             })
         );
+    }
+
+    #[test]
+    fn display_patch_accepts_optional_nonempty_staff_nickname() {
+        assert!(RbGameDisplaySettings::validate_patch(
+            &json!({ "staff_nickname": "Game Staff" })
+        ));
+        assert!(RbGameDisplaySettings::validate_patch(
+            &json!({ "staff_nickname": null })
+        ));
+        assert!(RbGameDisplaySettings::validate_patch(&json!({
+            "staff_avatar_email": "avatar@example.com",
+            "staff_avatar_provider": "catavatar"
+        })));
+        assert!(!RbGameDisplaySettings::validate_patch(
+            &json!({ "staff_nickname": "   " })
+        ));
+        assert!(!RbGameDisplaySettings::validate_patch(
+            &json!({ "staff_nickname": "x".repeat(61) })
+        ));
+        assert!(!RbGameDisplaySettings::validate_patch(
+            &json!({ "staff_avatar_provider": "unknown" })
+        ));
     }
 
     #[test]

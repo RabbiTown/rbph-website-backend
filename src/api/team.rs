@@ -241,7 +241,7 @@ async fn get_self_activity(
     }
 
     let team_id = team_id.unwrap();
-    let result = db::event_log::list_team_activity(
+    let mut result = db::event_log::list_team_activity(
         &app.db,
         team_id,
         query.currency_id,
@@ -249,6 +249,19 @@ async fn get_self_activity(
         query.limit.unwrap_or(30),
     )
     .await?;
+
+    if !user.req_role()?.is_moderator() {
+        let game_id = user
+            .game
+            .as_ref()
+            .map(|game| game.game_id)
+            .ok_or(RbError::forbid())?;
+        if let Some(identity) = db::game::get_staff_identity(&app.db, game_id).await? {
+            for event in &mut result {
+                event.anonymize_staff(&identity);
+            }
+        }
+    }
 
     if query.include_summary.unwrap_or(false)
         && let Some(currency_id) = query.currency_id

@@ -108,9 +108,20 @@ async fn get_ticket(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let page = ticket_page_request(&query)?;
-    let result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info, &page).await?;
+    let mut result = db::ticket::get_ticket_thread(&app.db, path.ticket_id, &info, &page).await?;
     if result.is_none() {
         RbError::not_found().err()?
+    }
+    let game_id = result
+        .as_ref()
+        .and_then(TicketThread::ticket)
+        .and_then(TicketSummary::game_id)
+        .ok_or(RbError::not_found())?;
+    if !info.mod_access
+        && let Some(identity) = db::game::get_staff_identity(&app.db, game_id).await?
+        && let Some(thread) = result.as_mut()
+    {
+        thread.anonymize_staff(&identity);
     }
 
     Ok(HttpResponse::Ok().json(result))
@@ -123,14 +134,25 @@ async fn get_dm_ticket(
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
     let page = ticket_page_request(&query)?;
-    let result = db::ticket::get_dm_ticket_thread(
+    let role = user.req_role()?;
+    let game_id = user
+        .game
+        .as_ref()
+        .map(|game| game.game_id)
+        .ok_or(RbError::forbid())?;
+    let mut result = db::ticket::get_dm_ticket_thread(
         &app.db,
         team_id,
-        user.req_role()?.is_moderator(),
-        user.req_role()?.is_admin(),
+        role.is_moderator(),
+        role.is_admin(),
         &page,
     )
     .await?;
+    if !role.is_moderator()
+        && let Some(identity) = db::game::get_staff_identity(&app.db, game_id).await?
+    {
+        result.anonymize_staff(&identity);
+    }
     let message_ids = result
         .messages()
         .iter()
@@ -659,7 +681,16 @@ async fn purchase_ticket_message(
         db::ticket::PurchaseTicketMessageResult::Insufficient => {
             RbError::conflict(TicketMessagePurchaseResult::Insufficient.into()).http_err()
         }
-        db::ticket::PurchaseTicketMessageResult::Ok(message) => {
+        db::ticket::PurchaseTicketMessageResult::Ok(mut message) => {
+            if !info.mod_access {
+                let game_id = db::ticket::get_ticket_summary(&app.db, path.ticket_id, false)
+                    .await?
+                    .and_then(|ticket| ticket.game_id())
+                    .ok_or(RbError::not_found())?;
+                if let Some(identity) = db::game::get_staff_identity(&app.db, game_id).await? {
+                    message.anonymize_staff(&identity);
+                }
+            }
             Ok(HttpResponse::Ok().json(message))
         }
     }

@@ -7,7 +7,10 @@ use crate::{
     db::{self},
     error::RbInternalError,
     model::{
-        game::{GameSettingGroup, RbGame, RbGameSettings, RbGameTeamSettings},
+        game::{
+            GameSettingGroup, RbGame, RbGameDisplaySettings, RbGameSettings, RbGameStaffIdentity,
+            RbGameTeamSettings,
+        },
         user::RbUserRole,
     },
 };
@@ -583,6 +586,15 @@ pub async fn get_team_max_members(
     Ok(get_setting_group::<RbGameTeamSettings>(pool, game_id)
         .await?
         .map(|settings| settings.max_members))
+}
+
+pub async fn get_staff_identity(
+    pool: &DbPool,
+    game_id: i32,
+) -> Result<Option<RbGameStaffIdentity>, RbInternalError> {
+    Ok(get_setting_group::<RbGameDisplaySettings>(pool, game_id)
+        .await?
+        .and_then(|settings| settings.staff_identity()))
 }
 
 pub async fn get_setting_group<T>(pool: &DbPool, game_id: i32) -> Result<Option<T>, RbInternalError>

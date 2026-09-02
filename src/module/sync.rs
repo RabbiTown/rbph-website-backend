@@ -481,10 +481,29 @@ impl SyncHub {
             "game_id": ticket.game_id,
         });
 
-        let mut recipients = db::team::get_member_id(db_pool, ticket.team_id).await?;
-        recipients.extend(moderators);
-        self.publish_users(recipients, SyncMessageType::TicketUpdated, data)
-            .await;
+        let members = db::team::get_member_id(db_pool, ticket.team_id).await?;
+        let staff_identity = db::game::get_staff_identity(db_pool, ticket.game_id).await?;
+        if staff_identity.is_some() && moderators.contains(&actor_id) {
+            let moderator_ids = moderators
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            let players = members
+                .into_iter()
+                .filter(|user_id| !moderator_ids.contains(user_id))
+                .collect::<Vec<_>>();
+            let mut anonymous_data = data.clone();
+            anonymous_data["actor_id"] = json!(db::ticket::STAFF_ALIAS_USER_ID);
+            self.publish_users(players, SyncMessageType::TicketUpdated, anonymous_data)
+                .await;
+            self.publish_users(moderators, SyncMessageType::TicketUpdated, data)
+                .await;
+        } else {
+            let mut recipients = members;
+            recipients.extend(moderators);
+            self.publish_users(recipients, SyncMessageType::TicketUpdated, data)
+                .await;
+        }
         Ok(())
     }
 

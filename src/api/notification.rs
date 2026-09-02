@@ -30,11 +30,23 @@ async fn list_notifications(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let role = user.req_role()?;
+    let staff_identity = if role.is_moderator() {
+        None
+    } else {
+        let game_id = user
+            .game
+            .as_ref()
+            .map(|game| game.game_id)
+            .ok_or(RbError::forbid())?;
+        db::game::get_staff_identity(&app.db, game_id).await?
+    };
     let notifications = db::notification::list_for_team(
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
         query.before,
         query.limit.unwrap_or(20).clamp(1, 100),
+        staff_identity.as_ref(),
     )
     .await?;
     Ok(HttpResponse::Ok().json(notifications))
@@ -45,10 +57,22 @@ async fn get_notification(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let role = user.req_role()?;
+    let staff_identity = if role.is_moderator() {
+        None
+    } else {
+        let game_id = user
+            .game
+            .as_ref()
+            .map(|game| game.game_id)
+            .ok_or(RbError::forbid())?;
+        db::game::get_staff_identity(&app.db, game_id).await?
+    };
     let notification = db::notification::get_for_team(
         &app.db,
         user.req_team_id()?.ok_or(RbError::forbid())?,
         path.notification_id,
+        staff_identity.as_ref(),
     )
     .await?
     .ok_or(RbError::not_found())?;

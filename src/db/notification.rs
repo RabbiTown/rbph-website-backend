@@ -128,24 +128,6 @@ pub async fn get_for_team(
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{STAFF_ALIAS_USER_ID, notification_actor};
-
-    #[test]
-    fn notification_actor_uses_staff_alias_when_requested() {
-        let identity = crate::model::game::RbGameStaffIdentity {
-            nickname: "Puzzle Control".to_string(),
-            avatar: Some("alias-avatar".to_string()),
-        };
-        let actor = notification_actor(42, "Alice".to_string(), Some(&identity));
-
-        assert_eq!(actor.id, STAFF_ALIAS_USER_ID);
-        assert_eq!(actor.nickname, "Puzzle Control");
-        assert_eq!(actor.avatar.as_deref(), Some("alias-avatar"));
-    }
-}
-
 pub struct NotificationUnreadCount {
     pub count: i64,
     pub dm_count: i64,
@@ -275,4 +257,22 @@ pub async fn get_sync_info_by_source(
         team_id: row.team_id,
         game_id: row.game_id,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{STAFF_ALIAS_USER_ID, notification_actor};
+
+    #[test]
+    fn notification_actor_uses_staff_alias_when_requested() {
+        let identity = crate::model::game::RbGameStaffIdentity {
+            nickname: "Puzzle Control".to_string(),
+            avatar: Some("alias-avatar".to_string()),
+        };
+        let actor = notification_actor(42, "Alice".to_string(), Some(&identity));
+
+        assert_eq!(actor.id, STAFF_ALIAS_USER_ID);
+        assert_eq!(actor.nickname, "Puzzle Control");
+        assert_eq!(actor.avatar.as_deref(), Some("alias-avatar"));
+    }
 }

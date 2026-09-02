@@ -230,6 +230,8 @@ pub struct RbRoundSimpleData {
     pub id: i32,
     pub slug: Option<String>,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 pub async fn get_simple_list_for_team(
@@ -239,7 +241,7 @@ pub async fn get_simple_list_for_team(
 ) -> Result<Vec<RbRoundSimpleData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundSimpleData,
-        "SELECT r.id, r.slug, r.title
+        "SELECT r.id, r.slug, r.title, r.description
         FROM rb_round r
         WHERE r.game_id = $1
         AND EXISTS (
@@ -266,6 +268,7 @@ pub struct RbRoundAdminData {
     pub slug: Option<String>,
     pub sort: i32,
     pub title: String,
+    pub description: Option<String>,
     pub cover: Option<String>,
     pub game_id: i32,
     pub puzzle: Option<i32>,
@@ -278,6 +281,7 @@ pub struct RbRoundCreateData {
     #[serde(default)]
     pub sort: i32,
     pub title: String,
+    pub description: Option<String>,
     pub content: String,
     #[serde(default)]
     pub content_type: i16,
@@ -298,6 +302,11 @@ pub struct RbRoundUpdateData {
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
     )]
+    pub description: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
     pub cover: Option<Option<String>>,
     #[serde(
         default,
@@ -313,7 +322,7 @@ pub async fn admin_list(
     let result = if let Some(game_id) = game_id {
         sqlx::query_as!(
             RbRoundAdminData,
-            "SELECT id, slug, sort, title, cover, game_id, puzzle
+            "SELECT id, slug, sort, title, description, cover, game_id, puzzle
         FROM rb_round
         WHERE game_id = $1
         ORDER BY sort, id;",
@@ -324,7 +333,7 @@ pub async fn admin_list(
     } else {
         sqlx::query_as!(
             RbRoundAdminData,
-            "SELECT id, slug, sort, title, cover, game_id, puzzle
+            "SELECT id, slug, sort, title, description, cover, game_id, puzzle
         FROM rb_round
         ORDER BY game_id, sort, id;",
         )
@@ -341,7 +350,7 @@ pub async fn admin_get(
 ) -> Result<Option<RbRoundAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbRoundAdminData,
-        "SELECT id, slug, sort, title, cover, game_id, puzzle
+        "SELECT id, slug, sort, title, description, cover, game_id, puzzle
         FROM rb_round
         WHERE id = $1;",
         round_id
@@ -359,15 +368,16 @@ pub async fn admin_create(
     let mut tx = pool.begin().await?;
     let result = sqlx::query_as!(
         RbRoundAdminData,
-        "INSERT INTO rb_round (slug, sort, title, cover, game_id, puzzle)
-        SELECT $2, $3, $4, $5, g.id, NULL::INT
+        "INSERT INTO rb_round (slug, sort, title, description, cover, game_id, puzzle)
+        SELECT $2, $3, $4, $5, $6, g.id, NULL::INT
         FROM rb_game g
-        WHERE g.id = $1 AND $6::INT IS NULL
-        RETURNING id, slug, sort, title, cover, game_id, puzzle;",
+        WHERE g.id = $1 AND $7::INT IS NULL
+        RETURNING id, slug, sort, title, description, cover, game_id, puzzle;",
         data.game_id,
         data.slug,
         data.sort,
         data.title,
+        data.description,
         data.cover,
         data.puzzle
     )
@@ -400,6 +410,8 @@ pub async fn admin_update(
     let puzzle = data.puzzle.flatten();
     let slug_is_set = data.slug.is_some();
     let slug = data.slug.clone().flatten();
+    let description_is_set = data.description.is_some();
+    let description = data.description.clone().flatten();
 
     let result = sqlx::query_as!(
         RbRoundAdminData,
@@ -407,26 +419,29 @@ pub async fn admin_update(
         SET slug = CASE WHEN $2 THEN $3 ELSE r.slug END,
             sort = COALESCE($4, r.sort),
             title = COALESCE($5, r.title),
-            cover = CASE WHEN $6 THEN $7 ELSE r.cover END,
+            description = CASE WHEN $6 THEN $7 ELSE r.description END,
+            cover = CASE WHEN $8 THEN $9 ELSE r.cover END,
             puzzle = CASE
-                WHEN $8 AND $9::INT IS NULL THEN NULL
-                WHEN $8 THEN $9::INT
+                WHEN $10 AND $11::INT IS NULL THEN NULL
+                WHEN $10 THEN $11::INT
                 ELSE r.puzzle
             END
         WHERE r.id = $1
             AND (
-                NOT $8 OR $9::INT IS NULL OR EXISTS (
+                NOT $10 OR $11::INT IS NULL OR EXISTS (
                     SELECT 1
                     FROM rb_puzzle p
-                    WHERE p.id = $9::INT AND p.round_id = r.id
+                    WHERE p.id = $11::INT AND p.round_id = r.id
                 )
             )
-        RETURNING id, slug, sort, title, cover, game_id, puzzle;",
+        RETURNING id, slug, sort, title, description, cover, game_id, puzzle;",
         round_id,
         slug_is_set,
         slug,
         data.sort,
         data.title,
+        description_is_set,
+        description,
         cover_is_set,
         cover,
         puzzle_is_set,

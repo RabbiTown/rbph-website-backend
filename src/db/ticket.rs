@@ -1152,6 +1152,7 @@ fn make_puzzle(
                     id: round_id,
                     slug: round_slug,
                     title: round_title,
+                    description: None,
                 },
             })
         }
@@ -2116,6 +2117,7 @@ pub async fn get_team_puzzle_tickets(
                     id: x.round_id,
                     slug: x.round_slug,
                     title: x.round_title,
+                    description: None,
                 },
             }),
             msg_count: x.msg_count,

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, sort, title, cover, game_id, puzzle\n        FROM rb_round\n        ORDER BY game_id, sort, id;",
+  "query": "SELECT id, slug, sort, title, description, cover, game_id, puzzle\n        FROM rb_round\n        WHERE game_id = $1\n        ORDER BY sort, id;",
   "describe": {
     "columns": [
       {
@@ -25,22 +25,29 @@
       },
       {
         "ordinal": 4,
-        "name": "cover",
+        "name": "description",
         "type_info": "Text"
       },
       {
         "ordinal": 5,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
         "name": "game_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "puzzle",
         "type_info": "Int4"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Int4"
+      ]
     },
     "nullable": [
       false,
@@ -48,9 +55,10 @@
       false,
       false,
       true,
+      true,
       false,
       true
     ]
   },
-  "hash": "4a069eba1249741e93a525c1810a8d456f0b6aaf8d33e446e758c27f2dcf83d9"
+  "hash": "e08757230b6482a4b1f193a17a2e3ef2752be2d7fe909954ae82e5a8812e050d"
 }

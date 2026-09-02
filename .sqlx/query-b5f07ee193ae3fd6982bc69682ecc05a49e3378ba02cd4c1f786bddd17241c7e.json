@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_round (slug, sort, title, cover, game_id, puzzle)\n        SELECT $2, $3, $4, $5, g.id, NULL::INT\n        FROM rb_game g\n        WHERE g.id = $1 AND $6::INT IS NULL\n        RETURNING id, slug, sort, title, cover, game_id, puzzle;",
+  "query": "INSERT INTO rb_round (slug, sort, title, description, cover, game_id, puzzle)\n        SELECT $2, $3, $4, $5, $6, g.id, NULL::INT\n        FROM rb_game g\n        WHERE g.id = $1 AND $7::INT IS NULL\n        RETURNING id, slug, sort, title, description, cover, game_id, puzzle;",
   "describe": {
     "columns": [
       {
@@ -25,16 +25,21 @@
       },
       {
         "ordinal": 4,
-        "name": "cover",
+        "name": "description",
         "type_info": "Text"
       },
       {
         "ordinal": 5,
+        "name": "cover",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
         "name": "game_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "puzzle",
         "type_info": "Int4"
       }
@@ -46,6 +51,7 @@
         "Int4",
         "Varchar",
         "Text",
+        "Text",
         "Int4"
       ]
     },
@@ -55,9 +61,10 @@
       false,
       false,
       true,
+      true,
       false,
       true
     ]
   },
-  "hash": "509a2239cfa1844342bff44fb53b66a0d7c170716ce8c0a42bc2c0eb09839b2a"
+  "hash": "b5f07ee193ae3fd6982bc69682ecc05a49e3378ba02cd4c1f786bddd17241c7e"
 }

@@ -180,7 +180,11 @@ async fn validate_update(
 }
 
 async fn invalidate_hint_cache(app: &AppState, puzzle_id: i32) {
-    let _ = db::cache::del_pattern(&app.kv, &format!("puzzle:{puzzle_id}:team:*:hints")).await;
+    let _ = db::cache::del_pattern(
+        &app.kv,
+        &format!("cache:puzzle-hints:v1:puzzle:{puzzle_id}:team:*"),
+    )
+    .await;
 }
 
 async fn list(query: web::Query<HintListQuery>, app: web::Data<AppState>) -> Result<HttpResponse> {

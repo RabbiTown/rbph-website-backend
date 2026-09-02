@@ -19,12 +19,13 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::{
-    DbPool, KvPool, db,
+    DbPool, db,
     db::{
         puzzle::{CurrencyPenaltyShowData, RbPuzzleTeamStateShowData},
         team::RbCurrencyShowData,
     },
     error::RbInternalError,
+    kv::KvStore,
     model::game::RbJudgeAction,
     serde_helpers::serialize_option_offset_datetime,
 };
@@ -32,9 +33,9 @@ use crate::{
 pub const CONNECTION_LIMIT_CLOSE_CODE: u16 = 4008;
 const SERVICE_RESTART_CLOSE_CODE: u16 = 1012;
 const SLOW_CLIENT_CLOSE_CODE: u16 = 1013;
-const SYNC_CHANNEL: &str = "rbph:sync:v1";
-const CONNECTION_KEY_PREFIX: &str = "rbph:ws:connection:";
-const CONNECTION_SET_PREFIX: &str = "rbph:ws:user:";
+const SYNC_CHANNEL: &str = "sync:v1";
+const CONNECTION_KEY_PREFIX: &str = "ws:v1:connection:";
+const CONNECTION_SET_PREFIX: &str = "ws:v1:user:";
 const CONNECTION_LEASE_SECONDS: usize = 75;
 const COMMAND_QUEUE_CAPACITY: usize = 256;
 
@@ -132,19 +133,17 @@ struct SyncBusEnvelope {
 pub struct SyncHub {
     users: DashMap<i32, Vec<WsSessionHandle>>,
     connections: DashMap<Uuid, (i32, WsSessionHandle)>,
-    kv: KvPool,
-    kv_addr: String,
+    kv: KvStore,
     instance_id: Uuid,
     bus_ready: AtomicBool,
 }
 
 impl SyncHub {
-    pub fn new(kv: KvPool, kv_addr: String) -> Self {
+    pub fn new(kv: KvStore) -> Self {
         Self {
             users: DashMap::new(),
             connections: DashMap::new(),
             kv,
-            kv_addr,
             instance_id: Uuid::new_v4(),
             bus_ready: AtomicBool::new(false),
         }
@@ -559,7 +558,8 @@ impl SyncHub {
                 return;
             }
         };
-        let result: redis::RedisResult<u64> = conn.publish(SYNC_CHANNEL, payload).await;
+        let result: redis::RedisResult<u64> =
+            conn.publish(self.kv.channel(SYNC_CHANNEL), payload).await;
         match result {
             Ok(0) => log::error!("sync event published without any active subscribers"),
             Ok(_) => {}
@@ -635,9 +635,9 @@ impl SyncHub {
     }
 
     async fn subscribe_once(&self) -> Result<(), RbInternalError> {
-        let client = redis::Client::open(self.kv_addr.as_str())?;
+        let client = self.kv.redis_client()?;
         let mut pubsub = client.get_async_pubsub().await?;
-        pubsub.subscribe(SYNC_CHANNEL).await?;
+        pubsub.subscribe(self.kv.channel(SYNC_CHANNEL)).await?;
         self.bus_ready.store(true, Ordering::Release);
         log::info!(
             "sync bus subscriber is ready (instance {})",
@@ -684,9 +684,13 @@ impl SyncHub {
         max_connections: usize,
     ) -> Result<Vec<Uuid>, RbInternalError> {
         let mut conn = self.kv.get().await?;
+        let connection_key_prefix = self.kv.key(CONNECTION_KEY_PREFIX);
         let ids: Vec<String> = Script::new(REGISTER_CONNECTION_SCRIPT)
-            .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
-            .arg(CONNECTION_KEY_PREFIX)
+            .key(
+                self.kv
+                    .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections")),
+            )
+            .arg(connection_key_prefix)
             .arg(connection_id.to_string())
             .arg(self.instance_id.to_string())
             .arg(CONNECTION_LEASE_SECONDS)
@@ -716,8 +720,11 @@ impl SyncHub {
             return;
         };
         let result: redis::RedisResult<i32> = Script::new(UNREGISTER_CONNECTION_SCRIPT)
-            .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
-            .arg(CONNECTION_KEY_PREFIX)
+            .key(
+                self.kv
+                    .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections")),
+            )
+            .arg(self.kv.key(CONNECTION_KEY_PREFIX))
             .arg(connection_id.to_string())
             .arg(self.instance_id.to_string())
             .invoke_async(&mut conn)
@@ -751,8 +758,11 @@ impl SyncHub {
                 let script = Script::new(RENEW_CONNECTIONS_SCRIPT);
                 let mut invocation = script.prepare_invoke();
                 invocation
-                    .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
-                    .arg(CONNECTION_KEY_PREFIX)
+                    .key(
+                        self.kv
+                            .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections")),
+                    )
+                    .arg(self.kv.key(CONNECTION_KEY_PREFIX))
                     .arg(self.instance_id.to_string())
                     .arg(CONNECTION_LEASE_SECONDS);
                 for id in chunk {
@@ -794,8 +804,11 @@ impl SyncHub {
                 break;
             };
             let result: redis::RedisResult<Vec<String>> = Script::new(TRIM_CONNECTIONS_SCRIPT)
-                .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections"))
-                .arg(CONNECTION_KEY_PREFIX)
+                .key(
+                    self.kv
+                        .key(format!("{CONNECTION_SET_PREFIX}{user_id}:connections")),
+                )
+                .arg(self.kv.key(CONNECTION_KEY_PREFIX))
                 .arg(max_connections.max(1))
                 .invoke_async(&mut conn)
                 .await;
@@ -1062,6 +1075,8 @@ mod tests {
     use tokio::sync::mpsc::error::TryRecvError;
     use uuid::Uuid;
 
+    use crate::kv::KvStore;
+
     use super::{
         COMMAND_QUEUE_CAPACITY, CONNECTION_LIMIT_CLOSE_CODE, SLOW_CLIENT_CLOSE_CODE,
         SyncBusEnvelope, SyncCommand, SyncHub, SyncTarget, WsCommand, WsSessionHandle,
@@ -1071,7 +1086,7 @@ mod tests {
         let kv = deadpool_redis::Config::from_url("redis://127.0.0.1/15")
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("test Redis pool configuration should be valid");
-        SyncHub::new(kv, "redis://127.0.0.1/15".to_string())
+        SyncHub::new(KvStore::new(kv, "redis://127.0.0.1/15", "test"))
     }
 
     #[test]
@@ -1167,15 +1182,16 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires RBPH_TEST_REDIS_URL"]
     async fn redis_registration_enforces_global_limit_and_lease_eviction() {
-        let Ok(redis_url) = std::env::var("RBPH_TEST_REDIS_URL") else {
-            return;
-        };
+        let redis_url = std::env::var("RBPH_TEST_REDIS_URL")
+            .expect("RBPH_TEST_REDIS_URL must be set for ignored Redis integration tests");
         let pool = deadpool_redis::Config::from_url(&redis_url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("test Redis pool configuration should be valid");
-        let first_hub = SyncHub::new(pool.clone(), redis_url.clone());
-        let second_hub = SyncHub::new(pool.clone(), redis_url);
+        let kv = KvStore::new(pool.clone(), redis_url, "sync-registration-test");
+        let first_hub = SyncHub::new(kv.clone());
+        let second_hub = SyncHub::new(kv);
         let user_id = 1_500_000_000 + i32::from(Uuid::new_v4().as_bytes()[0]);
         let first_id = Uuid::new_v4();
         let second_id = Uuid::new_v4();
@@ -1225,24 +1241,34 @@ mod tests {
             .await
             .expect("test Redis should remain available");
         let keys = vec![
-            format!("{}{}:connections", super::CONNECTION_SET_PREFIX, user_id),
-            format!("{}{}", super::CONNECTION_KEY_PREFIX, first_id),
-            format!("{}{}", super::CONNECTION_KEY_PREFIX, second_id),
-            format!("{}{}", super::CONNECTION_KEY_PREFIX, third_id),
+            first_hub.kv.key(format!(
+                "{}{user_id}:connections",
+                super::CONNECTION_SET_PREFIX
+            )),
+            first_hub
+                .kv
+                .key(format!("{}{first_id}", super::CONNECTION_KEY_PREFIX)),
+            first_hub
+                .kv
+                .key(format!("{}{second_id}", super::CONNECTION_KEY_PREFIX)),
+            first_hub
+                .kv
+                .key(format!("{}{third_id}", super::CONNECTION_KEY_PREFIX)),
         ];
         let _: deadpool_redis::redis::RedisResult<usize> = conn.del(&keys).await;
     }
 
     #[tokio::test]
+    #[ignore = "requires RBPH_TEST_REDIS_URL"]
     async fn redis_bus_delivers_between_instances_once() {
-        let Ok(redis_url) = std::env::var("RBPH_TEST_REDIS_URL") else {
-            return;
-        };
+        let redis_url = std::env::var("RBPH_TEST_REDIS_URL")
+            .expect("RBPH_TEST_REDIS_URL must be set for ignored Redis integration tests");
         let pool = deadpool_redis::Config::from_url(&redis_url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .expect("test Redis pool configuration should be valid");
-        let first_hub = Arc::new(SyncHub::new(pool.clone(), redis_url.clone()));
-        let second_hub = Arc::new(SyncHub::new(pool, redis_url));
+        let kv = KvStore::new(pool, redis_url, "sync-bus-test");
+        let first_hub = Arc::new(SyncHub::new(kv.clone()));
+        let second_hub = Arc::new(SyncHub::new(kv));
         let user_id = 1_600_000_000 + i32::from(Uuid::new_v4().as_bytes()[0]);
         let connection_id = Uuid::new_v4();
         let (handle, mut commands) = WsSessionHandle::new(connection_id);
@@ -1300,6 +1326,65 @@ mod tests {
             .clone()
             .expect("remote target connection should be closed");
         assert_eq!(u16::from(reason.code), CONNECTION_LIMIT_CLOSE_CODE);
+
+        first_subscriber.abort();
+        second_subscriber.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires RBPH_TEST_REDIS_URL"]
+    async fn redis_bus_is_isolated_between_deployments() {
+        let redis_url = std::env::var("RBPH_TEST_REDIS_URL")
+            .expect("RBPH_TEST_REDIS_URL must be set for ignored Redis integration tests");
+        let pool = deadpool_redis::Config::from_url(&redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("test Redis pool configuration should be valid");
+        let random = Uuid::new_v4().simple().to_string();
+        let suffix = &random[..8];
+        let first_hub = Arc::new(SyncHub::new(KvStore::new(
+            pool.clone(),
+            redis_url.clone(),
+            &format!("test-a-{suffix}"),
+        )));
+        let second_hub = Arc::new(SyncHub::new(KvStore::new(
+            pool,
+            redis_url,
+            &format!("test-b-{suffix}"),
+        )));
+        let user_id = 1_700_000_000 + i32::from(Uuid::new_v4().as_bytes()[0]);
+        let connection_id = Uuid::new_v4();
+        let (handle, mut commands) = WsSessionHandle::new(connection_id);
+        second_hub
+            .users
+            .entry(user_id)
+            .or_default()
+            .push(handle.clone());
+        second_hub
+            .connections
+            .insert(connection_id, (user_id, handle));
+
+        let first_subscriber = tokio::spawn(first_hub.clone().run_subscriber());
+        let second_subscriber = tokio::spawn(second_hub.clone().run_subscriber());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !first_hub.is_ready() || !second_hub.is_ready() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("both sync subscribers should become ready");
+
+        first_hub
+            .publish_message(
+                SyncTarget::Users { ids: vec![user_id] },
+                super::SyncMessageType::TeamInfoUpdated,
+                (),
+            )
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), commands.recv())
+                .await
+                .is_err()
+        );
 
         first_subscriber.abort();
         second_subscriber.abort();

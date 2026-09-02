@@ -2,9 +2,15 @@ use actix_session::Session;
 use deadpool_redis::redis::AsyncCommands;
 use uuid::Uuid;
 
-use crate::{KvPool, error::RbInternalError};
+use crate::{error::RbInternalError, kv::KvStore};
 
-static USER_SESSIONS: &str = "user_sessions";
+const USER_SESSION_KEY_VERSION: u8 = 1;
+
+fn user_sessions_key(kv: &KvStore, user_id: i32) -> String {
+    kv.key(format!(
+        "session:v{USER_SESSION_KEY_VERSION}:user:{user_id}"
+    ))
+}
 
 pub fn get_session_id(sess: &Session) -> Result<String, RbInternalError> {
     if let Ok(Some(id)) = sess.get::<String>("session_id") {
@@ -17,14 +23,14 @@ pub fn get_session_id(sess: &Session) -> Result<String, RbInternalError> {
 }
 
 pub async fn append(
-    pool: &KvPool,
+    pool: &KvStore,
     sess: &Session,
     user_id: i32,
     max_session: usize,
 ) -> Result<(), RbInternalError> {
     let mut conn = pool.get().await?;
 
-    let key = format!("{USER_SESSIONS}:{user_id}");
+    let key = user_sessions_key(pool, user_id);
 
     let _: () = conn.lpush(&key, get_session_id(sess)?).await?;
     let _: () = conn.ltrim(&key, 0, (max_session - 1) as isize).await?;
@@ -34,7 +40,7 @@ pub async fn append(
     Ok(())
 }
 
-pub async fn verify(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
+pub async fn verify(pool: &KvStore, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();
 
@@ -42,7 +48,7 @@ pub async fn verify(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalErr
         (Some(user_id), Some(sid)) => {
             let mut conn = pool.get().await?;
 
-            let key = format!("{USER_SESSIONS}:{user_id}");
+            let key = user_sessions_key(pool, user_id);
             let sessions: Vec<String> = conn.lrange(&key, 0, -1).await.unwrap_or_default();
 
             Ok(sessions.contains(&sid))
@@ -51,7 +57,7 @@ pub async fn verify(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalErr
     }
 }
 
-pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
+pub async fn invalidate(pool: &KvStore, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();
 
@@ -59,7 +65,7 @@ pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInterna
         (Some(user_id), Some(sid)) => {
             let mut conn = pool.get().await?;
 
-            let key = format!("{USER_SESSIONS}:{user_id}");
+            let key = user_sessions_key(pool, user_id);
             let count: i32 = conn.lrem(&key, 1, &sid).await?;
 
             Ok(count > 0)
@@ -68,14 +74,14 @@ pub async fn invalidate(pool: &KvPool, sess: &Session) -> Result<bool, RbInterna
     }
 }
 
-pub async fn invalidate_all(pool: &KvPool, user_id: i32) -> Result<(), RbInternalError> {
+pub async fn invalidate_all(pool: &KvStore, user_id: i32) -> Result<(), RbInternalError> {
     let mut conn = pool.get().await?;
-    let _: () = conn.del(format!("{USER_SESSIONS}:{user_id}")).await?;
+    let _: () = conn.del(user_sessions_key(pool, user_id)).await?;
     Ok(())
 }
 
 #[allow(dead_code)]
-pub async fn invalidate_others(pool: &KvPool, sess: &Session) -> Result<bool, RbInternalError> {
+pub async fn invalidate_others(pool: &KvStore, sess: &Session) -> Result<bool, RbInternalError> {
     let user_id = sess.get::<i32>("user_id").ok().flatten();
     let sid = sess.get::<String>("session_id").ok().flatten();
 
@@ -83,7 +89,7 @@ pub async fn invalidate_others(pool: &KvPool, sess: &Session) -> Result<bool, Rb
         (Some(user_id), Some(sid)) => {
             let mut conn = pool.get().await?;
 
-            let key = format!("{USER_SESSIONS}:{user_id}");
+            let key = user_sessions_key(pool, user_id);
             let _: () = conn.del(&key).await?;
             let _: () = conn.lpush(&key, &sid).await?;
 

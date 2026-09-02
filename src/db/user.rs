@@ -4,8 +4,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    DbPool, KvPool,
+    DbPool,
     error::RbInternalError,
+    kv::KvStore,
     model::user::{AvatarProvider, RbUserRole},
 };
 
@@ -81,16 +82,16 @@ struct PendingUser {
     pass: String,
 }
 
-pub async fn pending_exists(pool: &KvPool, email: &str) -> Result<bool, RbInternalError> {
+pub async fn pending_exists(pool: &KvStore, email: &str) -> Result<bool, RbInternalError> {
     let mut conn = pool.get().await?;
 
-    let key = format!("pending_email:{email}");
+    let key = pool.key(format!("auth:pending:v1:email:{email}"));
     let exists: Option<String> = conn.get(&key).await?;
     Ok(exists.is_some())
 }
 
 pub async fn put_pending(
-    pool: &KvPool,
+    pool: &KvStore,
     email: &str,
     pass: &str,
 ) -> Result<String, RbInternalError> {
@@ -105,26 +106,32 @@ pub async fn put_pending(
     };
 
     conn.set_ex::<_, _, ()>(
-        format!("pending_user:{token}"),
+        pool.key(format!("auth:pending:v1:user:{token}")),
         serde_json::to_string(&user).unwrap(),
         15 * 60,
     )
     .await?;
 
-    conn.set_ex::<_, _, ()>(format!("pending_email:{email}"), token.clone(), 15 * 60)
-        .await?;
+    conn.set_ex::<_, _, ()>(
+        pool.key(format!("auth:pending:v1:email:{email}")),
+        token.clone(),
+        15 * 60,
+    )
+    .await?;
 
     Ok(token)
 }
 
 pub async fn verify_pending(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
+    kv_pool: &KvStore,
     token: &str,
 ) -> Result<Option<i32>, RbInternalError> {
     let mut conn = kv_pool.get().await?;
 
-    let data: Option<String> = conn.get_del(format!("pending_user:{token}")).await?;
+    let data: Option<String> = conn
+        .get_del(kv_pool.key(format!("auth:pending:v1:user:{token}")))
+        .await?;
     if data.is_none() {
         return Ok(None);
     }
@@ -132,7 +139,9 @@ pub async fn verify_pending(
     let user: PendingUser = serde_json::from_str(&data.unwrap())?;
     let result = register_pass_hashed(db_pool, &user.email, &user.pass).await?;
 
-    let _: () = conn.del(format!("pending_email:{}", user.email)).await?;
+    let _: () = conn
+        .del(kv_pool.key(format!("auth:pending:v1:email:{}", user.email)))
+        .await?;
 
     Ok(Some(result))
 }

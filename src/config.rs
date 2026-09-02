@@ -29,6 +29,7 @@ impl DeploymentMode {
 pub struct AppConfig {
     #[serde(default)]
     pub deployment_mode: DeploymentMode,
+    pub deployment_id: String,
     pub production: bool,
 
     pub bind_addr: (String, u16),
@@ -38,6 +39,18 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        let mut chars = self.deployment_id.chars();
+        if !matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase())
+            || self.deployment_id.len() > 32
+            || !chars
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+        {
+            return Err("app.deployment_id must match ^[a-z][a-z0-9_-]{0,31}$".to_string());
+        }
+        Ok(())
+    }
+
     pub fn get_secret_key(&self) -> Result<[u8; 64], String> {
         let decoded = BASE64_STANDARD
             .decode(&self.secret_key)
@@ -272,6 +285,7 @@ impl Settings {
         #[derive(Serialize)]
         struct AppContract<'a> {
             deployment_mode: DeploymentMode,
+            deployment_id: &'a str,
             production: bool,
             kv_addr: &'a str,
             secret_key: &'a str,
@@ -293,6 +307,7 @@ impl Settings {
             build_fingerprint: BUILD_FINGERPRINT,
             app: AppContract {
                 deployment_mode: self.app.deployment_mode,
+                deployment_id: &self.app.deployment_id,
                 production: self.app.production,
                 kv_addr: &self.app.kv_addr,
                 secret_key: &self.app.secret_key,
@@ -320,6 +335,7 @@ mod tests {
     fn session_secret_requires_exactly_64_bytes() {
         let valid = AppConfig {
             deployment_mode: DeploymentMode::Single,
+            deployment_id: "production".to_string(),
             production: true,
             bind_addr: ("127.0.0.1".to_string(), 9999),
             kv_addr: "redis://localhost/1".to_string(),
@@ -332,6 +348,32 @@ mod tests {
             ..valid
         };
         assert!(invalid.get_secret_key().is_err());
+    }
+
+    #[test]
+    fn deployment_id_is_safe_for_redis_namespaces() {
+        let mut app = AppConfig {
+            deployment_mode: DeploymentMode::Cluster,
+            deployment_id: "production-cn_1".to_string(),
+            production: true,
+            bind_addr: ("127.0.0.1".to_string(), 9999),
+            kv_addr: "redis://localhost/1".to_string(),
+            secret_key: base64::Engine::encode(&base64::prelude::BASE64_STANDARD, [7_u8; 64]),
+        };
+        assert!(app.validate().is_ok());
+
+        for invalid in [
+            "",
+            "Production",
+            "1production",
+            "production:cn",
+            "production*",
+            "production.cn",
+            "abcdefghijklmnopqrstuvwxyzabcdefg",
+        ] {
+            app.deployment_id = invalid.to_string();
+            assert!(app.validate().is_err(), "accepted invalid id: {invalid}");
+        }
     }
 
     #[test]
@@ -481,6 +523,7 @@ mod tests {
         let settings = Settings {
             app: AppConfig {
                 deployment_mode: DeploymentMode::Cluster,
+                deployment_id: "production".to_string(),
                 production: true,
                 bind_addr: ("127.0.0.1".to_string(), 9999),
                 kv_addr: "redis://redis/1".to_string(),
@@ -530,6 +573,10 @@ mod tests {
         instance_variant.db.password = Some("second".to_string());
         instance_variant.db.max_connections = 4;
         assert_eq!(fingerprint, instance_variant.cluster_fingerprint().unwrap());
+
+        instance_variant.app.deployment_id = "staging".to_string();
+        assert_ne!(fingerprint, instance_variant.cluster_fingerprint().unwrap());
+        instance_variant.app.deployment_id = settings.app.deployment_id.clone();
 
         instance_variant.app.secret_key =
             base64::Engine::encode(&base64::prelude::BASE64_STANDARD, [8_u8; 64]);

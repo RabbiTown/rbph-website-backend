@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 
 use crate::{AppState, db};
 
-const SETTINGS_CHANNEL: &str = "rbph:system-settings:updated";
+const SETTINGS_CHANNEL: &str = "system-settings:v1";
 
 async fn apply_latest_from_db(app: &AppState) {
     let Ok(settings) = db::system_settings::get(&app.db).await else {
@@ -37,7 +37,9 @@ pub async fn publish_updated(app: &AppState) {
 
     let payload =
         crate::serde_helpers::format_offset_datetime(&app.system_settings.read().await.updated_at);
-    let result: redis::RedisResult<()> = conn.publish(SETTINGS_CHANNEL, payload).await;
+    let result: redis::RedisResult<()> = conn
+        .publish(app.kv.channel(SETTINGS_CHANNEL), payload)
+        .await;
     if let Err(error) = result {
         log::error!("failed to publish system settings notification: {error}");
     }
@@ -52,7 +54,7 @@ pub async fn run_reconciler(app: AppState) {
 
 pub async fn run_subscriber(app: AppState) {
     loop {
-        let client = match redis::Client::open(app.settings.app.kv_addr.as_str()) {
+        let client = match app.kv.redis_client() {
             Ok(client) => client,
             Err(error) => {
                 log::error!(
@@ -72,7 +74,7 @@ pub async fn run_subscriber(app: AppState) {
             }
         };
 
-        if let Err(error) = pubsub.subscribe(SETTINGS_CHANNEL).await {
+        if let Err(error) = pubsub.subscribe(app.kv.channel(SETTINGS_CHANNEL)).await {
             log::error!("failed to subscribe system settings updates: {error}");
             tokio::time::sleep(Duration::from_secs(5)).await;
             continue;

@@ -147,14 +147,18 @@ async fn login(
     let req = req.normalized();
     let rate_limit = &app.settings.auth.rate_limit;
     let client = client_identifier(&http_req);
-    let login_ip_email_key = rate_limit
-        .enabled
-        .then(|| auth_rate_limit::key("login_ip_email", &format!("{client}\0{}", req.email)));
+    let login_ip_email_key = rate_limit.enabled.then(|| {
+        auth_rate_limit::key(
+            &app.kv,
+            "login_ip_email",
+            &format!("{client}\0{}", req.email),
+        )
+    });
 
     if rate_limit.enabled {
         consume_rate_limit(
             app.get_ref(),
-            &auth_rate_limit::key("login_ip", &client),
+            &auth_rate_limit::key(&app.kv, "login_ip", &client),
             rate_limit.login_ip_attempts,
             rate_limit.login_window_seconds,
         )
@@ -306,14 +310,14 @@ async fn register(
     if rate_limit.enabled {
         consume_rate_limit(
             app.get_ref(),
-            &auth_rate_limit::key("registration_ip", &client_identifier(&http_req)),
+            &auth_rate_limit::key(&app.kv, "registration_ip", &client_identifier(&http_req)),
             rate_limit.registration_ip_attempts,
             rate_limit.registration_window_seconds,
         )
         .await?;
         consume_rate_limit(
             app.get_ref(),
-            &auth_rate_limit::key("registration_email", &req.email),
+            &auth_rate_limit::key(&app.kv, "registration_email", &req.email),
             rate_limit.registration_email_attempts,
             rate_limit.registration_window_seconds,
         )

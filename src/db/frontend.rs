@@ -8,7 +8,7 @@ use sqlx::{
 };
 use time::OffsetDateTime;
 
-use crate::{KvPool, error::RbInternalError};
+use crate::{error::RbInternalError, kv::KvStore};
 
 pub const ROUND_PAGE: &str = "round-page";
 pub const PUZZLE_PAGE: &str = "puzzle-page";
@@ -652,7 +652,7 @@ fn renderer_cache_key(
     preview_revision: Option<i64>,
 ) -> String {
     format!(
-        "frontend:renderer:v2:game:{game_id}:revision:{}:surface:{surface}:round:{}:puzzle:{}",
+        "cache:frontend-renderer:v2:game:{game_id}:revision:{}:surface:{surface}:round:{}:puzzle:{}",
         renderer_cache_revision(preview_revision),
         round_id.unwrap_or(0),
         puzzle_id.unwrap_or(0),
@@ -661,14 +661,20 @@ fn renderer_cache_key(
 
 pub async fn resolve_cached(
     pool: &PgPool,
-    kv_pool: &KvPool,
+    kv_pool: &KvStore,
     game_id: i32,
     surface: &str,
     round_id: Option<i32>,
     puzzle_id: Option<i32>,
     preview_revision: Option<i64>,
 ) -> Result<Option<ResolvedBindingRow>, RbInternalError> {
-    let key = renderer_cache_key(game_id, surface, round_id, puzzle_id, preview_revision);
+    let key = kv_pool.key(renderer_cache_key(
+        game_id,
+        surface,
+        round_id,
+        puzzle_id,
+        preview_revision,
+    ));
     let mut conn = kv_pool.get().await?;
     if let Some(cached) = conn.get::<_, Option<String>>(&key).await? {
         return Ok(serde_json::from_str(&cached)?);
@@ -693,14 +699,14 @@ pub async fn resolve_cached(
 }
 
 pub async fn invalidate_renderer_cache(
-    kv_pool: &KvPool,
+    kv_pool: &KvStore,
     game_id: i32,
     preview_revision: Option<i64>,
 ) -> Result<(), RbInternalError> {
     crate::db::cache::del_pattern(
         kv_pool,
         &format!(
-            "frontend:renderer:v2:game:{game_id}:revision:{}:*",
+            "cache:frontend-renderer:v2:game:{game_id}:revision:{}:*",
             renderer_cache_revision(preview_revision),
         ),
     )

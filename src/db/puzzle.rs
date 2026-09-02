@@ -6,7 +6,7 @@ use sqlx::{PgConnection, prelude::FromRow};
 use time::OffsetDateTime;
 
 use crate::{
-    AppState, DbPool, KvPool,
+    AppState, DbPool,
     db::{self, game::GameUserInfo},
     error::RbInternalError,
     expr::{self, types::PuzzleStates},
@@ -15,6 +15,7 @@ use crate::{
         self,
         judge::{JudgeResult, normalize_answer},
     },
+    kv::KvStore,
     model::game::{
         RbContentType, RbJudgeAction, RbPuzzlePenaltyType, RbPuzzleType, RbTeamPuzzleState,
     },
@@ -104,7 +105,7 @@ pub async fn get_puzzle_id_by_game_ref(
 
 pub async fn get_hint_puzzle(
     db_pool: &DbPool,
-    _kv_pool: &KvPool,
+    _kv_pool: &KvStore,
     hint_id: i32,
 ) -> Result<Option<i32>, RbInternalError> {
     let result = sqlx::query_scalar!("SELECT puzzle_id FROM rb_hint WHERE id = $1;", hint_id)
@@ -172,7 +173,7 @@ pub async fn get_puzzle_user_info(
 
 pub async fn get_hint_user_info(
     db_pool: &DbPool,
-    kv_pool: &KvPool,
+    kv_pool: &KvStore,
     user_id: i32,
     hint_id: i32,
     user_role: RbUserRole,

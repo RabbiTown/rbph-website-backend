@@ -564,8 +564,11 @@ async fn clear_states(
     };
 
     if !result.team_ids.is_empty() {
-        let _ =
-            db::cache::del_pattern(&app.kv, &format!("puzzle:{}:team:*:hints", puzzle.id)).await;
+        let _ = db::cache::del_pattern(
+            &app.kv,
+            &format!("cache:puzzle-hints:v1:puzzle:{}:team:*", puzzle.id),
+        )
+        .await;
 
         for team_id in &result.team_ids {
             db::board::LEADER_BOARD_CACHE

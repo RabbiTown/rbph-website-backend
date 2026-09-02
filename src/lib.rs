@@ -7,6 +7,7 @@ pub mod expr;
 pub mod extractor;
 pub mod game;
 pub mod health;
+pub mod kv;
 pub mod middleware;
 pub mod model;
 pub mod module;
@@ -29,6 +30,7 @@ use tokio::sync::{Notify, RwLock};
 
 use crate::{
     config::Settings,
+    kv::KvStore,
     module::{
         captcha::CaptchaService, cluster::ClusterMembership, email::EmailService,
         storage::StorageManager, sync::SyncHub,
@@ -36,12 +38,11 @@ use crate::{
 };
 
 pub type DbPool = PgPool;
-pub type KvPool = deadpool_redis::Pool;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
-    pub kv: KvPool,
+    pub kv: KvStore,
     pub settings: Settings,
     pub cluster_membership: Arc<ClusterMembership>,
     pub system_settings: Arc<RwLock<db::system_settings::SystemSettings>>,

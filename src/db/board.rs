@@ -7,7 +7,7 @@ use sqlx::{Postgres, pool::PoolConnection};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
-use crate::{DbPool, KvPool, error::RbInternalError};
+use crate::{DbPool, error::RbInternalError, kv::KvStore};
 
 const SNAPSHOT_TTL_SECONDS: u64 = 120;
 const LOCK_NAMESPACE: i32 = 737_001;
@@ -65,12 +65,16 @@ pub static LEADER_BOARD_CACHE: Lazy<LeaderBoardCache> = Lazy::new(|| LeaderBoard
     cache: RwLock::new(HashMap::new()),
 });
 
-fn latest_key(game_id: i32, board_type: &str) -> String {
-    format!("leaderboard:{game_id}:{board_type}:latest")
+fn latest_key(kv: &KvStore, game_id: i32, board_type: &str) -> String {
+    kv.key(format!(
+        "cache:leaderboard:v1:{game_id}:{board_type}:latest"
+    ))
 }
 
-fn snapshot_key(game_id: i32, board_type: &str, version: i64) -> String {
-    format!("leaderboard:{game_id}:{board_type}:snapshot:{version}")
+fn snapshot_key(kv: &KvStore, game_id: i32, board_type: &str, version: i64) -> String {
+    kv.key(format!(
+        "cache:leaderboard:v1:{game_id}:{board_type}:snapshot:{version}"
+    ))
 }
 
 impl LeaderBoardCache {
@@ -203,7 +207,7 @@ impl LeaderBoardCache {
 
     async fn publish_snapshot(
         &self,
-        kv_pool: &KvPool,
+        kv_pool: &KvStore,
         game_id: i32,
         snapshot: LeaderBoardSnapshot,
     ) -> Result<Arc<LeaderBoardSnapshot>, RbInternalError> {
@@ -212,13 +216,13 @@ impl LeaderBoardCache {
         let mut conn = kv_pool.get().await?;
         let _: () = conn
             .set_ex(
-                snapshot_key(game_id, MAIN_BOARD_TYPE, snapshot.version),
+                snapshot_key(kv_pool, game_id, MAIN_BOARD_TYPE, snapshot.version),
                 &payload,
                 SNAPSHOT_TTL_SECONDS,
             )
             .await?;
         let _: () = conn
-            .set(latest_key(game_id, MAIN_BOARD_TYPE), &payload)
+            .set(latest_key(kv_pool, game_id, MAIN_BOARD_TYPE), &payload)
             .await?;
 
         self.cache.write().await.insert(game_id, snapshot.clone());
@@ -227,13 +231,13 @@ impl LeaderBoardCache {
 
     async fn load_snapshot(
         &self,
-        kv_pool: &KvPool,
+        kv_pool: &KvStore,
         game_id: i32,
         version: Option<i64>,
     ) -> Result<Option<Arc<LeaderBoardSnapshot>>, RbInternalError> {
         let key = match version {
-            Some(version) => snapshot_key(game_id, MAIN_BOARD_TYPE, version),
-            None => latest_key(game_id, MAIN_BOARD_TYPE),
+            Some(version) => snapshot_key(kv_pool, game_id, MAIN_BOARD_TYPE, version),
+            None => latest_key(kv_pool, game_id, MAIN_BOARD_TYPE),
         };
         let mut conn = kv_pool.get().await?;
         let payload: Option<String> = conn.get(key).await?;
@@ -297,7 +301,7 @@ impl LeaderBoardCache {
     async fn rebuild_and_publish(
         &self,
         db_pool: &DbPool,
-        kv_pool: &KvPool,
+        kv_pool: &KvStore,
         game_id: i32,
     ) -> Result<Option<Arc<LeaderBoardSnapshot>>, RbInternalError> {
         let mut conn = db_pool.acquire().await?;
@@ -341,7 +345,7 @@ impl LeaderBoardCache {
     pub async fn refresh_game(
         &self,
         db_pool: &DbPool,
-        kv_pool: &KvPool,
+        kv_pool: &KvStore,
         game_id: i32,
     ) -> Result<(), RbInternalError> {
         let mut conn = db_pool.acquire().await?;
@@ -479,7 +483,7 @@ impl LeaderBoardCache {
     pub async fn get_info(
         &self,
         db_pool: &DbPool,
-        kv_pool: &KvPool,
+        kv_pool: &KvStore,
         game_id: i32,
         prev_version: Option<i64>,
         offset: usize,

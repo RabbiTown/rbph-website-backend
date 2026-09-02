@@ -6,6 +6,7 @@ use dotenvy::dotenv;
 use env_logger::Env;
 use rbph_website_backend::{
     AppState, MIGRATOR, api, asset, config, db, health,
+    kv::KvStore,
     middleware::{cluster::ClusterReadinessMiddleware, maintenance::MaintenanceMiddleware},
     module::{self, captcha::CaptchaService, email::EmailService, sync::SyncHub},
 };
@@ -29,6 +30,10 @@ async fn main() -> std::io::Result<()> {
     }
 
     let settings = settings.unwrap();
+    if let Err(error) = settings.app.validate() {
+        log::error!("Invalid application configuration: {error}");
+        std::process::exit(1);
+    }
     if !settings.auth.rate_limit.is_valid() {
         log::error!("Invalid auth rate limit configuration: enabled limits must be positive");
         std::process::exit(1);
@@ -72,8 +77,18 @@ async fn main() -> std::io::Result<()> {
     let kv_pool = deadpool_redis::Config::from_url(&app_config.kv_addr)
         .create_pool(Some(deadpool_redis::Runtime::Tokio1))
         .unwrap();
+    let kv = KvStore::new(
+        kv_pool,
+        app_config.kv_addr.clone(),
+        &app_config.deployment_id,
+    );
 
-    let session_store = RedisSessionStore::new(&app_config.kv_addr).await.unwrap();
+    let session_keyspace = kv.clone();
+    let session_store = RedisSessionStore::builder(&app_config.kv_addr)
+        .cache_keygen(move |session_key| session_keyspace.session_key(session_key))
+        .build()
+        .await
+        .unwrap();
     let secret_key_bytes = match app_config.get_secret_key() {
         Ok(key) => key,
         Err(error) => {
@@ -83,7 +98,7 @@ async fn main() -> std::io::Result<()> {
     };
     let secret_key = Key::from(&secret_key_bytes);
 
-    let sync_hub = Arc::new(SyncHub::new(kv_pool.clone(), app_config.kv_addr.clone()));
+    let sync_hub = Arc::new(SyncHub::new(kv.clone()));
     let release_schedule_changed = Arc::new(Notify::new());
     let captcha = match CaptchaService::from_config(&settings.auth.captcha) {
         Ok(service) => service.map(Arc::new),
@@ -175,7 +190,7 @@ async fn main() -> std::io::Result<()> {
 
     let app_state = AppState {
         db: db_pool,
-        kv: kv_pool,
+        kv,
         settings,
         cluster_membership: cluster_membership.clone(),
         system_settings,

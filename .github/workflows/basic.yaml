@@ -53,8 +53,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: |
-          cargo test --workspace --locked
-          cargo test --workspace --locked --no-default-features --features boa-engine
+          cargo test --workspace --locked -- --include-ignored
+          cargo test --workspace --locked --no-default-features --features boa-engine -- --include-ignored
 
   clippy:
     runs-on: ubuntu-latest

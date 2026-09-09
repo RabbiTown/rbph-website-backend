@@ -28,6 +28,8 @@ impl DeploymentMode {
 #[derive(Deserialize, Clone, Serialize)]
 pub struct AppConfig {
     #[serde(default)]
+    pub cors: CorsConfig,
+    #[serde(default)]
     pub deployment_mode: DeploymentMode,
     pub deployment_id: String,
     pub production: bool,
@@ -40,6 +42,7 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn validate(&self) -> Result<(), String> {
+        self.cors.normalized_origins()?;
         let mut chars = self.deployment_id.chars();
         if !matches!(chars.next(), Some(ch) if ch.is_ascii_lowercase())
             || self.deployment_id.len() > 32
@@ -61,6 +64,54 @@ impl AppConfig {
         let mut key = [0u8; 64];
         key.copy_from_slice(&decoded);
         Ok(key)
+    }
+}
+
+#[derive(Default, Deserialize, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CorsConfig {
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+}
+
+impl CorsConfig {
+    pub fn normalized_origins(&self) -> Result<Vec<String>, String> {
+        let mut origins = Vec::new();
+        for value in &self.allowed_origins {
+            let invalid =
+                || format!("app.cors.allowed_origins contains invalid HTTP(S) origin: {value:?}");
+            let url = reqwest::Url::parse(value).map_err(|_| invalid())?;
+            if value.trim() != value
+                || value.chars().any(char::is_control)
+                || value.contains('\\')
+                || !value.contains("://")
+                || !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none_or(|host| host.contains('*'))
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || value
+                    .split("://")
+                    .nth(1)
+                    .is_some_and(|rest| rest.split('/').next().unwrap_or_default().contains('@'))
+                || url.path() != "/"
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid());
+            }
+            // Reject paths that a URL parser would otherwise normalize away.
+            let authority_and_path = value.split_once("://").ok_or_else(invalid)?.1;
+            if authority_and_path
+                .find('/')
+                .is_some_and(|index| &authority_and_path[index..] != "/")
+            {
+                return Err(invalid());
+            }
+            origins.push(url.origin().ascii_serialization());
+        }
+        origins.sort();
+        origins.dedup();
+        Ok(origins)
     }
 }
 
@@ -289,6 +340,7 @@ impl Settings {
             production: bool,
             kv_addr: &'a str,
             secret_key: &'a str,
+            cors_origins: Vec<String>,
         }
 
         #[derive(Serialize)]
@@ -311,6 +363,11 @@ impl Settings {
                 production: self.app.production,
                 kv_addr: &self.app.kv_addr,
                 secret_key: &self.app.secret_key,
+                cors_origins: self
+                    .app
+                    .cors
+                    .normalized_origins()
+                    .map_err(serde::ser::Error::custom)?,
             },
             storage: &self.storage,
             auth: &self.auth,
@@ -332,8 +389,67 @@ mod tests {
     };
 
     #[test]
+    fn cors_origins_are_validated_and_canonicalized() {
+        let cors = super::CorsConfig {
+            allowed_origins: vec![
+                "https://BETA.example.com:443/".into(),
+                "https://beta.example.com".into(),
+                "http://localhost:3000".into(),
+            ],
+        };
+        assert_eq!(
+            cors.normalized_origins().unwrap(),
+            vec!["http://localhost:3000", "https://beta.example.com"]
+        );
+        for origin in [
+            "*",
+            "null",
+            "https://*.example.com",
+            "example.com",
+            "ftp://example.com",
+            "https://user@example.com",
+            "https://@example.com",
+            "https://example.com/api",
+            "https://example.com/..",
+            "https://example.com?x=1",
+            "https://example.com#x",
+            "https:///example.com",
+            " https://example.com",
+        ] {
+            assert!(
+                super::CorsConfig {
+                    allowed_origins: vec![origin.into()]
+                }
+                .normalized_origins()
+                .is_err(),
+                "accepted {origin}"
+            );
+        }
+        let settings: super::Settings = config::Config::builder()
+            .add_source(config::File::from_str(
+                include_str!("../config.toml"),
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert!(settings.app.cors.allowed_origins.is_empty());
+        let mut legacy = serde_json::to_value(&settings.app).unwrap();
+        legacy.as_object_mut().unwrap().remove("cors");
+        assert!(
+            serde_json::from_value::<AppConfig>(legacy)
+                .unwrap()
+                .cors
+                .allowed_origins
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn session_secret_requires_exactly_64_bytes() {
         let valid = AppConfig {
+            cors: Default::default(),
             deployment_mode: DeploymentMode::Single,
             deployment_id: "production".to_string(),
             production: true,
@@ -353,6 +469,7 @@ mod tests {
     #[test]
     fn deployment_id_is_safe_for_redis_namespaces() {
         let mut app = AppConfig {
+            cors: Default::default(),
             deployment_mode: DeploymentMode::Cluster,
             deployment_id: "production-cn_1".to_string(),
             production: true,
@@ -522,6 +639,7 @@ mod tests {
     fn cluster_fingerprint_covers_shared_but_not_instance_configuration() {
         let settings = Settings {
             app: AppConfig {
+                cors: Default::default(),
                 deployment_mode: DeploymentMode::Cluster,
                 deployment_id: "production".to_string(),
                 production: true,
@@ -566,6 +684,19 @@ mod tests {
         };
         let fingerprint = settings.cluster_fingerprint().unwrap();
         assert_eq!(fingerprint.len(), 64);
+
+        let mut cors_variant = settings.clone();
+        cors_variant.app.cors.allowed_origins = vec!["https://BETA.example.com:443/".into()];
+        let cors_fingerprint = cors_variant.cluster_fingerprint().unwrap();
+        assert_ne!(fingerprint, cors_fingerprint);
+        cors_variant.app.cors.allowed_origins = vec![
+            "https://beta.example.com".into(),
+            "https://beta.example.com/".into(),
+        ];
+        assert_eq!(
+            cors_fingerprint,
+            cors_variant.cluster_fingerprint().unwrap()
+        );
 
         let mut instance_variant = settings.clone();
         instance_variant.app.bind_addr = ("0.0.0.0".to_string(), 8080);

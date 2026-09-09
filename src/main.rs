@@ -221,6 +221,10 @@ async fn main() -> std::io::Result<()> {
                     .cookie_name("rbph_session".to_string())
                     .build(),
             )
+            .wrap(actix_web::middleware::Condition::new(
+                !app_config.cors.allowed_origins.is_empty(),
+                rbph_website_backend::middleware::cors::build(&app_config.cors),
+            ))
             .configure(health::config)
             .configure(asset::config)
             .service(

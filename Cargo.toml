@@ -10,6 +10,7 @@ v8-engine = ["dep:v8"]
 
 [dependencies]
 actix = "0.13.5"
+actix-cors = "0.7.2"
 actix-files = "0.6.10"
 actix-multipart = "0.7.2"
 actix-session = { version = "0.11.0", features = ["redis-session"] }

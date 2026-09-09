@@ -9,6 +9,8 @@ struct SystemStatusResponse {
     registration_open: bool,
     require_email_verification: bool,
     leaderboard_refresh_interval_seconds: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    footer_additional_info: Option<String>,
     maintenance_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     maintenance_message: Option<String>,
@@ -21,6 +23,8 @@ async fn status(app: web::Data<AppState>) -> Result<HttpResponse> {
         registration_open: settings.registration_open,
         require_email_verification: settings.require_email_verification,
         leaderboard_refresh_interval_seconds: settings.leaderboard_refresh_interval_seconds,
+        footer_additional_info: (!settings.footer_additional_info.is_empty())
+            .then(|| settings.footer_additional_info.clone()),
         maintenance_enabled: settings.maintenance_enabled,
         maintenance_message: settings
             .maintenance_enabled

@@ -18,6 +18,7 @@ struct SystemSettingsRequest {
     max_sessions: i16,
     max_websocket_connections: i16,
     leaderboard_refresh_interval_seconds: i32,
+    footer_additional_info: String,
     maintenance_enabled: bool,
     maintenance_message: String,
 }
@@ -45,6 +46,7 @@ fn valid_request(
     (1..=20).contains(&body.max_sessions)
         && (1..=20).contains(&body.max_websocket_connections)
         && (1..=86_400).contains(&body.leaderboard_refresh_interval_seconds)
+        && body.footer_additional_info.chars().count() <= 1000
         && body.maintenance_message.chars().count() <= 500
         && (!body.require_email_verification || email_delivery_enabled)
         && (!(body.captcha_login_required || body.captcha_registration_required)
@@ -72,6 +74,7 @@ async fn update(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let mut body = body.into_inner();
+    body.footer_additional_info = body.footer_additional_info.trim().to_string();
     body.maintenance_message = body.maintenance_message.trim().to_string();
     if !valid_request(&body, app.email.is_some(), app.captcha.is_some()) {
         return RbError::bad_req(SystemSettingsResult::Invalid.into()).http_err();
@@ -91,6 +94,7 @@ async fn update(
                 crate::module::leaderboard::normalize_refresh_interval(
                     body.leaderboard_refresh_interval_seconds,
                 ),
+            footer_additional_info: &body.footer_additional_info,
             maintenance_enabled: body.maintenance_enabled,
             maintenance_message: &body.maintenance_message,
             updated_by: actor.uid,
@@ -101,7 +105,8 @@ async fn update(
     app.sync_hub
         .enforce_connection_limit(settings.max_websocket_connections as usize)
         .await;
-    if previous.maintenance_enabled != settings.maintenance_enabled
+    if previous.footer_additional_info != settings.footer_additional_info
+        || previous.maintenance_enabled != settings.maintenance_enabled
         || previous.maintenance_message != settings.maintenance_message
     {
         app.sync_hub.notify_system_status_updated().await;
@@ -124,6 +129,7 @@ async fn update(
                     "max_sessions": previous.max_sessions != settings.max_sessions,
                     "max_websocket_connections": previous.max_websocket_connections != settings.max_websocket_connections,
                     "leaderboard_refresh_interval_seconds": previous.leaderboard_refresh_interval_seconds != settings.leaderboard_refresh_interval_seconds,
+                    "footer_additional_info": previous.footer_additional_info != settings.footer_additional_info,
                     "maintenance_enabled": previous.maintenance_enabled != settings.maintenance_enabled,
                     "maintenance_message": previous.maintenance_message != settings.maintenance_message,
                 }
@@ -163,6 +169,7 @@ mod tests {
             max_sessions: 3,
             max_websocket_connections: 5,
             leaderboard_refresh_interval_seconds: 5,
+            footer_additional_info: String::new(),
             maintenance_enabled: false,
             maintenance_message: String::new(),
         }
@@ -187,6 +194,11 @@ mod tests {
         body.leaderboard_refresh_interval_seconds = 86_401;
         assert!(!valid_request(&body, false, false));
         body.leaderboard_refresh_interval_seconds = 86_400;
+        body.footer_additional_info = "x".repeat(1000);
+        assert!(valid_request(&body, false, false));
+        body.footer_additional_info.push('x');
+        assert!(!valid_request(&body, false, false));
+        body.footer_additional_info.clear();
         body.maintenance_enabled = true;
         assert!(valid_request(&body, false, false));
         body.maintenance_message = "x".repeat(500);

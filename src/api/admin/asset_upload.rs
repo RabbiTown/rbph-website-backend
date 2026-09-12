@@ -822,7 +822,7 @@ pub(super) fn manifest_digest(files: &[StoredAssetFile]) -> String {
         h.update(f.relative_path.as_bytes());
         h.update(f.size.to_le_bytes());
 
-        for pair in f.sha256.as_bytes().chunks_exact(2) {
+        for pair in f.sha256.as_bytes().as_chunks::<2>().0 {
             let digit = |v: u8| if v <= b'9' { v - b'0' } else { v - b'a' + 10 };
             h.update([digit(pair[0]) * 16 + digit(pair[1])]);
         }

@@ -1,3 +1,4 @@
+pub mod direct;
 use std::{
     collections::{HashMap, VecDeque},
     io::{Cursor, Read},
@@ -87,9 +88,10 @@ struct DatabaseAssetCacheEntry {
 }
 
 #[derive(Clone)]
-struct CosStorage {
+pub(crate) struct CosStorage {
     client: Client,
     host: Arc<str>,
+    control_endpoint: Arc<str>,
     secret_id: Arc<str>,
     secret_key: Arc<str>,
     public_base_url: Arc<str>,
@@ -307,7 +309,9 @@ impl LocalStorage {
             if file.is_dir() {
                 continue;
             }
-            if files.len() >= max_files || file.size() > max_file_bytes {
+            let declared_size = file.size();
+            let remaining_bytes = max_group_bytes.saturating_sub(total_bytes);
+            if files.len() >= max_files || declared_size > max_file_bytes.min(remaining_bytes) {
                 return Err("asset archive exceeds configured limits".into());
             }
 
@@ -320,11 +324,11 @@ impl LocalStorage {
             }
 
             let mime_type = guess_mime_type(path.extension().and_then(|ext| ext.to_str()));
-            let mut bytes = Vec::with_capacity(file.size() as usize);
+            let mut bytes = Vec::with_capacity(declared_size.min(64 * 1024) as usize);
             file.by_ref()
-                .take(max_file_bytes.saturating_add(1))
+                .take(declared_size.saturating_add(1))
                 .read_to_end(&mut bytes)?;
-            if bytes.len() as u64 > max_file_bytes {
+            if bytes.len() as u64 != declared_size {
                 return Err("asset archive file exceeds configured limit".into());
             }
             total_bytes = total_bytes.saturating_add(bytes.len() as u64);
@@ -404,6 +408,7 @@ impl StorageManager {
                     secret_id,
                     secret_key,
                     public_base_url,
+                    ..
                 } => (
                     label,
                     StorageBackend::Cos(CosStorage::new(
@@ -779,6 +784,7 @@ impl CosStorage {
         Self {
             client: Client::new(),
             host: format!("{bucket}.cos.{region}.myqcloud.com").into(),
+            control_endpoint: format!("https://{bucket}.cos.{region}.myqcloud.com").into(),
             secret_id: secret_id.to_string().into(),
             secret_key: secret_key.to_string().into(),
             public_base_url: public_base_url.trim_end_matches('/').to_string().into(),
@@ -975,46 +981,7 @@ impl CosStorage {
         path: &str,
         extra_headers: &[(&str, &str)],
     ) -> reqwest::RequestBuilder {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let key_time = format!("{now};{}", now + 900);
-        let mut headers = vec![("host", self.host.as_ref())];
-        headers.extend_from_slice(extra_headers);
-        headers.sort_unstable_by_key(|(name, _)| *name);
-        let header_list = headers
-            .iter()
-            .map(|(name, _)| *name)
-            .collect::<Vec<_>>()
-            .join(";");
-        let canonical_headers = headers
-            .iter()
-            .map(|(name, value)| format!("{name}={}", encode_cos_component(value)))
-            .collect::<Vec<_>>()
-            .join("&");
-        let http_string = format!(
-            "{}\n{}\n\n{}\n",
-            method.as_str().to_ascii_lowercase(),
-            path,
-            canonical_headers
-        );
-        let string_to_sign = format!("sha1\n{key_time}\n{}\n", sha1_hex(http_string.as_bytes()));
-        let sign_key = hmac_sha1_hex(self.secret_key.as_bytes(), key_time.as_bytes());
-        let signature = hmac_sha1_hex(sign_key.as_bytes(), string_to_sign.as_bytes());
-        let authorization = format!(
-            "q-sign-algorithm=sha1&q-ak={}&q-sign-time={key_time}&q-key-time={key_time}&q-header-list={header_list}&q-url-param-list=&q-signature={signature}",
-            self.secret_id
-        );
-
-        let mut request = self
-            .client
-            .request(method, format!("https://{}{}", self.host, path))
-            .header(header::AUTHORIZATION, authorization);
-        for (name, value) in extra_headers {
-            request = request.header(*name, *value);
-        }
-        request
+        self.control(method, path, &[], extra_headers)
     }
 }
 
@@ -1240,8 +1207,8 @@ mod tests {
     #[test]
     fn public_path_encodes_each_path_segment() {
         assert_eq!(
-            build_public_path("group-test", "目录/a b#c.png"),
-            "/assets/group-test/%E7%9B%AE%E5%BD%95/a%20b%23c.png"
+            build_public_path("group-test", "f o#o/a b#c.png"),
+            "/assets/group-test/f%20o%23o/a%20b%23c.png"
         );
     }
 
@@ -1265,8 +1232,8 @@ mod tests {
     #[test]
     fn cos_object_path_encodes_each_path_segment() {
         assert_eq!(
-            cos_object_path("group-test", "目录/a b#c.png"),
-            "/group-test/%E7%9B%AE%E5%BD%95/a%20b%23c.png"
+            cos_object_path("group-test", "f o#o/a b#c.png"),
+            "/group-test/f%20o%23o/a%20b%23c.png"
         );
     }
 
@@ -1326,6 +1293,18 @@ mod tests {
         assert!(LocalStorage::unpack_zip_files_limited(&bytes, 3, 8, 2).is_err());
         assert!(LocalStorage::unpack_zip_files_limited(&bytes, 4, 7, 2).is_err());
         assert!(LocalStorage::unpack_zip_files_limited(&bytes, 4, 8, 1).is_err());
+    }
+
+    #[test]
+    fn zip_rejects_forged_uncompressed_size() {
+        let mut bytes = archive(&[("a.txt", b"1234")]);
+        let directory = bytes
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap();
+        bytes[directory + 24..directory + 28].copy_from_slice(&1_u32.to_le_bytes());
+
+        assert!(LocalStorage::unpack_zip_files_limited(&bytes, 8, 8, 1).is_err());
     }
 
     #[test]

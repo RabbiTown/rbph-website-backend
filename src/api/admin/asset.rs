@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_repr::Serialize_repr;
 use sha2::{Digest, Sha256};
 
+use super::asset_upload::UploadMode;
+
 use crate::{
     AppState,
     db::{
@@ -58,15 +60,9 @@ struct AssetFolderPatchRequest {
     name: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum UploadMode {
-    File,
-    Group,
-}
-
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
-enum AssetAdminResult {
+pub(super) enum AssetAdminResult {
     Invalid = -2,
     NotFound = -1,
     Ok = 0,
@@ -87,6 +83,8 @@ struct AssetAdminListResponse {
 
 #[derive(Serialize)]
 struct AssetGroupData {
+    digest_version: String,
+    sha256_source: String,
     #[serde(flatten)]
     group: RbAssetGroupAdminData,
     public_url: Option<String>,
@@ -94,6 +92,7 @@ struct AssetGroupData {
 
 #[derive(Serialize)]
 struct AssetFileData {
+    sha256_source: String,
     #[serde(flatten)]
     file: RbAssetFileAdminData,
     public_url: Option<String>,
@@ -116,6 +115,8 @@ struct AssetStorageBackendData {
     allowed_scopes: &'static [&'static str],
     max_file_bytes: Option<u64>,
     max_group_bytes: Option<u64>,
+    direct_upload: bool,
+    direct_upload_limits: Option<crate::config::UploadConfig>,
 }
 
 #[derive(Serialize)]
@@ -137,11 +138,25 @@ struct AssetAdminFileDeleteResponse {
     files: Vec<AssetFileData>,
 }
 
-fn asset_group_data(app: &AppState, group: RbAssetGroupAdminData) -> AssetGroupData {
+async fn asset_group_data(app: &AppState, group: RbAssetGroupAdminData) -> Result<AssetGroupData> {
     let public_url = app
         .storage
         .asset_group_public_url(&group.backend, &group.object_key);
-    AssetGroupData { group, public_url }
+    let (digest_version, sha256_source) = sqlx::query!(
+        "SELECT digest_version,sha256_source FROM rb_asset_digest WHERE group_id=$1",
+        group.id,
+    )
+    .fetch_optional(&app.db)
+    .await
+    .map_err(RbInternalError::from)?
+    .map(|row| (row.digest_version, row.sha256_source))
+    .unwrap_or_else(|| ("content-v1".into(), "server".into()));
+    Ok(AssetGroupData {
+        group,
+        public_url,
+        digest_version,
+        sha256_source,
+    })
 }
 
 fn asset_file_data(
@@ -152,7 +167,11 @@ fn asset_file_data(
     let public_url =
         app.storage
             .asset_public_url(&group.backend, &group.object_key, &file.relative_path);
-    AssetFileData { file, public_url }
+    AssetFileData {
+        file,
+        public_url,
+        sha256_source: "server".into(),
+    }
 }
 
 fn asset_files_data(
@@ -166,46 +185,50 @@ fn asset_files_data(
         .collect()
 }
 
-fn asset_response_data(
+async fn asset_response_data(
     app: &AppState,
     group: RbAssetGroupAdminData,
     files: Vec<RbAssetFileAdminData>,
-) -> AssetAdminResponse {
-    let files = asset_files_data(app, &group, files);
-    AssetAdminResponse {
-        code: AssetAdminResult::Ok,
-        group: asset_group_data(app, group),
-        files,
+) -> Result<AssetAdminResponse> {
+    let mut files = asset_files_data(app, &group, files);
+    let group = asset_group_data(app, group).await?;
+    for file in &mut files {
+        file.sha256_source = group.sha256_source.clone();
     }
+    Ok(AssetAdminResponse {
+        code: AssetAdminResult::Ok,
+        group,
+        files,
+    })
 }
-
-fn asset_group_item_data(
+async fn asset_group_item_data(
     app: &AppState,
     item: RbAssetGroupWithFilesAdminData,
-) -> AssetGroupItemData {
-    let files = asset_files_data(app, &item.group, item.files);
-    AssetGroupItemData {
-        group: asset_group_data(app, item.group),
-        files,
-    }
+) -> Result<AssetGroupItemData> {
+    let response = asset_response_data(app, item.group, item.files).await?;
+    Ok(AssetGroupItemData {
+        group: response.group,
+        files: response.files,
+    })
 }
-
-fn asset_file_delete_response(
+async fn asset_file_delete_response(
     app: &AppState,
     deleted_group: bool,
     group: Option<RbAssetGroupAdminData>,
     files: Vec<RbAssetFileAdminData>,
-) -> AssetAdminFileDeleteResponse {
-    let files = group
-        .as_ref()
-        .map(|group| asset_files_data(app, group, files))
-        .unwrap_or_default();
-    AssetAdminFileDeleteResponse {
+) -> Result<AssetAdminFileDeleteResponse> {
+    let (group, files) = if let Some(group) = group {
+        let response = asset_response_data(app, group, files).await?;
+        (Some(response.group), response.files)
+    } else {
+        (None, Vec::new())
+    };
+    Ok(AssetAdminFileDeleteResponse {
         code: AssetAdminResult::Ok,
         deleted_group,
-        group: group.map(|group| asset_group_data(app, group)),
+        group,
         files,
-    }
+    })
 }
 
 fn valid_asset_group_name(name: &str) -> bool {
@@ -316,10 +339,12 @@ async fn list(query: web::Query<AssetListQuery>, app: web::Data<AppState>) -> Re
         db::asset::list_by_scope(&app.db, query.game_id, query.puzzle_id, query.round_id).await?;
     Ok(HttpResponse::Ok().json(AssetAdminListResponse {
         code: AssetAdminResult::Ok,
-        groups: groups
-            .into_iter()
-            .map(|group| asset_group_item_data(&app, group))
-            .collect(),
+        groups: futures_util::future::try_join_all(
+            groups
+                .into_iter()
+                .map(|group| asset_group_item_data(&app, group)),
+        )
+        .await?,
     }))
 }
 
@@ -331,15 +356,22 @@ async fn storage_backends(app: web::Data<AppState>) -> HttpResponse {
             .available_backends()
             .into_iter()
             .map(|backend| AssetStorageBackendData {
-                backend: backend.id,
+                direct_upload: super::asset_upload::backend_limits(&app, &backend.id)
+                    .is_some_and(|l| l.direct),
+                direct_upload_limits: super::asset_upload::backend_limits(&app, &backend.id),
+                backend: backend.id.clone(),
                 kind: backend.kind,
                 label: backend.label,
                 recommended: backend.recommended,
                 public_read: backend.public_read,
                 backend_read: backend.backend_read,
                 allowed_scopes: backend.allowed_scopes,
-                max_file_bytes: backend.max_file_bytes,
-                max_group_bytes: backend.max_group_bytes,
+                max_file_bytes: super::asset_upload::backend_limits(&app, &backend.id)
+                    .map(|l| l.max_file_bytes)
+                    .or(backend.max_file_bytes),
+                max_group_bytes: super::asset_upload::backend_limits(&app, &backend.id)
+                    .map(|l| l.max_group_bytes)
+                    .or(backend.max_group_bytes),
             })
             .collect(),
     })
@@ -355,6 +387,18 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     let mut file_mime: Option<String> = None;
     let mut file_bytes: Option<Vec<u8>> = None;
 
+    // Multipart fields may arrive in any order; enforce the selected backend below.
+    let ingress_limit = app
+        .settings
+        .storage
+        .backends
+        .keys()
+        .filter_map(|id| super::asset_upload::backend_limits(&app, id))
+        .map(|limits| limits.max_group_bytes)
+        .max()
+        .unwrap_or(0)
+        .max(MAX_MULTIPART_FILE_BYTES as u64);
+
     while let Some(field) = payload.next().await {
         let mut field = field?;
         let name = field.name().unwrap_or_default().to_string();
@@ -364,16 +408,17 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
             .and_then(|d| d.get_filename().map(|s| s.to_string()));
 
         if name == "file" {
+            if file_bytes.is_some() {
+                return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+            }
+
             let mut bytes = Vec::new();
             while let Some(chunk) = field.next().await {
                 let chunk = chunk?;
-                if bytes.len().saturating_add(chunk.len()) > MAX_MULTIPART_FILE_BYTES {
+                if bytes.len().saturating_add(chunk.len()) as u64 > ingress_limit {
                     return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
                 }
                 bytes.extend_from_slice(&chunk);
-            }
-            if file_bytes.is_some() {
-                return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
             }
             file_name = Some(disposition_name.unwrap_or_else(|| "file".to_string()));
             file_mime =
@@ -385,20 +430,27 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
         if name == "mode" {
             let mut bytes = Vec::new();
             while let Some(chunk) = field.next().await {
-                bytes.extend_from_slice(&chunk?);
+                let chunk = chunk?;
+                if bytes.len().saturating_add(chunk.len()) > 4096 {
+                    return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+                }
+                bytes.extend_from_slice(&chunk);
             }
-            let text = String::from_utf8(bytes).unwrap_or_default();
-            mode = match text.trim() {
-                "group" => UploadMode::Group,
-                "file" | "" => UploadMode::File,
-                _ => return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err(),
-            };
+            mode = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| text.trim().parse::<i16>().ok())
+                .and_then(|value| UploadMode::try_from(value).ok())
+                .ok_or_else(|| RbError::bad_req(AssetAdminResult::Invalid.into()))?;
             continue;
         }
 
         let mut buf = Vec::new();
         while let Some(chunk) = field.next().await {
-            buf.extend_from_slice(&chunk?);
+            let chunk = chunk?;
+            if buf.len().saturating_add(chunk.len()) > 4096 {
+                return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+            }
+            buf.extend_from_slice(&chunk);
         }
         let text = String::from_utf8(buf).unwrap_or_default();
         match name.as_str() {
@@ -454,25 +506,45 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
     let file_name = file_name.unwrap_or_else(|| "file".to_string());
     let file_mime = file_mime.unwrap_or_else(|| "application/octet-stream".to_string());
 
+    let limits = super::asset_upload::backend_limits(&app, &backend);
+    let archive_limit = limits
+        .as_ref()
+        .map(|l| l.max_group_bytes)
+        .unwrap_or(MAX_MULTIPART_FILE_BYTES as u64);
+    let (max_file, max_group, max_files) = if let Some(limits) = limits {
+        (
+            limits.max_file_bytes,
+            limits.max_group_bytes,
+            limits.max_files,
+        )
+    } else if database_backend {
+        (
+            DATABASE_MAX_FILE_BYTES,
+            DATABASE_MAX_GROUP_BYTES,
+            DATABASE_MAX_GROUP_FILES,
+        )
+    } else {
+        (
+            MAX_MULTIPART_FILE_BYTES as u64,
+            MAX_MULTIPART_FILE_BYTES as u64,
+            DATABASE_MAX_GROUP_FILES,
+        )
+    };
+    let source_limit = if mode == UploadMode::Group {
+        archive_limit
+    } else {
+        max_file
+    };
+    if file_bytes.len() as u64 > source_limit {
+        return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
+    }
+
     let files = if matches!(mode, UploadMode::Group) {
         let is_zip =
             file_mime == "application/zip" || file_name.to_ascii_lowercase().ends_with(".zip");
         if !is_zip {
             return RbError::bad_req(AssetAdminResult::Invalid.into()).http_err();
         }
-        let (max_file, max_group, max_files) = if database_backend {
-            (
-                DATABASE_MAX_FILE_BYTES,
-                DATABASE_MAX_GROUP_BYTES,
-                DATABASE_MAX_GROUP_FILES,
-            )
-        } else {
-            (
-                MAX_MULTIPART_FILE_BYTES as u64,
-                MAX_MULTIPART_FILE_BYTES as u64,
-                DATABASE_MAX_GROUP_FILES,
-            )
-        };
         let unpacked =
             LocalStorage::unpack_zip_files_limited(&file_bytes, max_file, max_group, max_files)
                 .map_err(|_| RbError::bad_req(AssetAdminResult::Invalid.into()))?;
@@ -542,7 +614,7 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
             db_files.push(file);
         }
         tx.commit().await.map_err(RbInternalError::from)?;
-        return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, db_files)));
+        return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, db_files).await?));
     }
 
     let StoredAssetGroup {
@@ -609,7 +681,7 @@ async fn append(mut payload: Multipart, app: web::Data<AppState>) -> Result<Http
         }
     };
 
-    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, db_files)))
+    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, db_files).await?))
 }
 
 async fn recompute_group_metadata(
@@ -617,6 +689,34 @@ async fn recompute_group_metadata(
     group: RbAssetGroupAdminData,
     files: &[RbAssetFileAdminData],
 ) -> Result<RbAssetGroupAdminData> {
+    let manifest_v1: bool = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM rb_asset_digest WHERE group_id=$1 AND digest_version='manifest-v1') AS \"exists!\"",
+        group.id
+    )
+    .fetch_one(&app.db)
+    .await
+    .map_err(RbInternalError::from)?;
+    if manifest_v1 {
+        let stored = files
+            .iter()
+            .map(|f| StoredAssetFile {
+                relative_path: f.relative_path.clone(),
+                size: f.size as u64,
+                sha256: f.sha256.clone(),
+                mime_type: f.mime_type.clone(),
+                path: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let digest = super::asset_upload::manifest_digest(&stored);
+        return db::asset::admin_update_group_metadata(
+            &app.db,
+            group.id,
+            files.iter().map(|f| f.size).sum(),
+            &digest,
+        )
+        .await?
+        .ok_or_else(|| RbError::not_found().into());
+    }
     if app.storage.is_database(&group.backend) {
         let blobs = db::asset::list_file_blobs(&app.db, group.id).await?;
         let (size, sha256) = summarize_database_files(&blobs);
@@ -689,7 +789,7 @@ async fn patch(
 
     let files = db::asset::list_files(&app.db, group.id).await?;
 
-    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)))
+    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?))
 }
 
 async fn patch_file(
@@ -745,7 +845,7 @@ async fn patch_file(
                 let group = recompute_database_group_metadata_conn(&mut tx, group.id).await?;
                 tx.commit().await.map_err(RbInternalError::from)?;
                 let files = db::asset::list_files(&app.db, group.id).await?;
-                return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)));
+                return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?));
             }
 
             app.storage
@@ -806,12 +906,12 @@ async fn patch_file(
             }
             let group = recompute_group_metadata(&app, group, &files).await?;
 
-            return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)));
+            return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?));
         }
     }
 
     let files = db::asset::list_files(&app.db, group.id).await?;
-    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)))
+    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?))
 }
 
 async fn patch_folder(
@@ -837,7 +937,7 @@ async fn patch_folder(
     let new_folder_path = join_asset_path(parent_path(&folder_path), &folder_name);
     if new_folder_path == folder_path {
         let files = db::asset::list_files(&app.db, group.id).await?;
-        return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)));
+        return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?));
     }
 
     let files = db::asset::list_files(&app.db, group.id).await?;
@@ -883,7 +983,7 @@ async fn patch_folder(
         let group = recompute_database_group_metadata_conn(&mut tx, group.id).await?;
         tx.commit().await.map_err(RbInternalError::from)?;
         let files = db::asset::list_files(&app.db, group.id).await?;
-        return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)));
+        return Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?));
     }
 
     let mut renamed: Vec<(String, String, String)> = Vec::new();
@@ -980,7 +1080,7 @@ async fn patch_folder(
     let files = db::asset::list_files(&app.db, group.id).await?;
     let group = recompute_group_metadata(&app, group, &files).await?;
 
-    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files)))
+    Ok(HttpResponse::Ok().json(asset_response_data(&app, group, files).await?))
 }
 
 async fn delete_file(
@@ -1021,12 +1121,8 @@ async fn delete_file(
                 .map_err(|_| RbError::internal("failed to remove asset group files"))?;
         }
 
-        return Ok(HttpResponse::Ok().json(asset_file_delete_response(
-            &app,
-            true,
-            None,
-            Vec::new(),
-        )));
+        return Ok(HttpResponse::Ok()
+            .json(asset_file_delete_response(&app, true, None, Vec::new()).await?));
     }
 
     if !app.storage.is_database(&group.backend) {
@@ -1050,12 +1146,8 @@ async fn delete_file(
         let group = recompute_database_group_metadata_conn(&mut tx, group.id).await?;
         tx.commit().await.map_err(RbInternalError::from)?;
         let files = db::asset::list_files(&app.db, group.id).await?;
-        return Ok(HttpResponse::Ok().json(asset_file_delete_response(
-            &app,
-            false,
-            Some(group),
-            files,
-        )));
+        return Ok(HttpResponse::Ok()
+            .json(asset_file_delete_response(&app, false, Some(group), files).await?));
     }
 
     match db::asset::admin_delete_file(&app.db, group.id, file.id).await {
@@ -1071,7 +1163,7 @@ async fn delete_file(
     let files = db::asset::list_files(&app.db, group.id).await?;
     let group = recompute_group_metadata(&app, group, &files).await?;
 
-    Ok(HttpResponse::Ok().json(asset_file_delete_response(&app, false, Some(group), files)))
+    Ok(HttpResponse::Ok().json(asset_file_delete_response(&app, false, Some(group), files).await?))
 }
 
 async fn delete(path: web::Path<AssetPathInfo>, app: web::Data<AppState>) -> Result<HttpResponse> {
@@ -1146,6 +1238,7 @@ async fn download_file(
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("assets")
+            .configure(super::asset_upload::config)
             .route("/storage-backends", web::get().to(storage_backends))
             .route("", web::get().to(list))
             .route("", web::post().to(append))

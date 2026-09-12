@@ -44,6 +44,7 @@ once_cell = "1.21.4"
 percent-encoding = "2.3.2"
 rand = "0.9.3"
 regex = "1.12.2"
+quick-xml = { version = "0.38", features = ["serialize"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10.9"
 sha1 = "0.10.6"

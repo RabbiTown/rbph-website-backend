@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, game_id AS \"game_id!\"\n         FROM rb_asset_upload\n         WHERE state = $1\n           AND game_id IS NOT NULL\n           AND document->'request'->'purpose' = to_jsonb($2::smallint)\n           AND NOT (document ? 'cache_done')\n         LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "game_id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "f2056ac97baa946e60d70d974ca04fcc8ab9ec47ac8e1b452f86faa80d57f457"
+}

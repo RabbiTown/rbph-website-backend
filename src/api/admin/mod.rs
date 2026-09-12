@@ -1,5 +1,6 @@
 mod announcement;
 mod asset;
+pub(super) mod asset_upload;
 mod content;
 mod feature;
 mod frontend;

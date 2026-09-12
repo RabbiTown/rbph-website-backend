@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_frontend_binding b\n         SET package_id = $3\n         FROM rb_frontend_revision r, rb_frontend_package p\n         WHERE b.revision_id = r.id\n           AND r.game_id = $1\n           AND r.status = 'draft'\n           AND b.package_id = p.id\n           AND p.game_id = $1\n           AND p.name = $2\n           AND p.id <> $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1bf0d9a8ccb33a25d80a376b3ab0f64398f7de95c448981a757a170443aceafb"
+}

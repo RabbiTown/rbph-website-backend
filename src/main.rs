@@ -319,6 +319,16 @@ async fn main() -> std::io::Result<()> {
         });
     }
 
+    {
+        let state = app_state_data.get_ref().clone();
+        let cancelled = shutdown.clone();
+        background_tasks.spawn(async move {
+            tokio::select! {
+                _ = api::run_asset_uploads(state) => {},
+                _ = cancelled.cancelled() => {},
+            }
+        });
+    }
     log::info!(
         "Running on http://{}:{} ({})",
         host,

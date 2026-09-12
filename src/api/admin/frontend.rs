@@ -90,7 +90,10 @@ enum FrontendPublishResult {
     Ok = 0,
 }
 
-async fn invalidate_draft_renderer_cache(app: &web::Data<AppState>, game_id: i32) -> Result<()> {
+pub(super) async fn invalidate_draft_renderer_cache(
+    app: &web::Data<AppState>,
+    game_id: i32,
+) -> Result<()> {
     let draft_id = sqlx::query_scalar!(
         "SELECT id FROM rb_frontend_revision WHERE game_id=$1 AND status='draft'",
         game_id,
@@ -136,6 +139,8 @@ struct FrontendAdminPackage {
     #[serde(flatten)]
     package: db::frontend::FrontendPackage,
     manifest_url: Option<String>,
+    digest_version: String,
+    sha256_source: String,
 }
 
 #[derive(Deserialize)]
@@ -183,7 +188,7 @@ struct FrontendConfigFeatures {
     features: Vec<db::frontend::FrontendFeature>,
 }
 
-fn normalize_relative_path(path: &str) -> Option<&str> {
+pub(super) fn normalize_relative_path(path: &str) -> Option<&str> {
     let path = path.strip_prefix("./").unwrap_or(path);
     (!path.is_empty()
         && !path.starts_with('/')
@@ -193,7 +198,7 @@ fn normalize_relative_path(path: &str) -> Option<&str> {
     .then_some(path)
 }
 
-fn package_paths(manifest: &db::frontend::ThemeManifest) -> Option<HashSet<String>> {
+pub(super) fn package_paths(manifest: &db::frontend::ThemeManifest) -> Option<HashSet<String>> {
     if manifest.kind != "rbph-theme"
         || manifest.api_version != 1
         || manifest.package.name.trim().is_empty()
@@ -330,7 +335,9 @@ fn valid_icon_collection(collection: &Value) -> bool {
         })
 }
 
-fn validate_theme_files(files: &[AssetUploadFile]) -> Option<db::frontend::ThemeManifest> {
+pub(super) fn validate_theme_files(
+    files: &[AssetUploadFile],
+) -> Option<db::frontend::ThemeManifest> {
     let file_paths = files
         .iter()
         .map(|file| file.relative_path.as_str())
@@ -427,9 +434,20 @@ async fn get_state(
             ),
             None => None,
         };
+        let (digest_version, sha256_source) = sqlx::query!(
+            "SELECT digest_version,sha256_source FROM rb_asset_digest WHERE group_id=$1",
+            package.asset_group_id,
+        )
+        .fetch_optional(&app.db)
+        .await
+        .map_err(RbInternalError::from)?
+        .map(|row| (row.digest_version, row.sha256_source))
+        .unwrap_or_else(|| ("content-v1".into(), "server".into()));
         packages.push(FrontendAdminPackage {
             package,
             manifest_url,
+            digest_version,
+            sha256_source,
         });
     }
     let revisions = db::frontend::list_revisions(&app.db, path.game_id).await?;
@@ -669,6 +687,21 @@ async fn upload_package(
             .code(FrontendPackageResult::GameNotFound.into())
             .http_err();
     }
+    let backend = app
+        .storage
+        .available_backends()
+        .into_iter()
+        .filter(|backend| backend.public_read)
+        .min_by_key(|backend| !backend.recommended)
+        .ok_or_else(|| RbError::internal("no public asset backend is configured"))?;
+    let limits = super::asset_upload::backend_limits(&app, &backend.id);
+    let (max_file, max_group, max_files) = limits
+        .map(|l| (l.max_file_bytes, l.max_group_bytes, l.max_files))
+        .unwrap_or((
+            MAX_THEME_BYTES as u64,
+            MAX_THEME_BYTES as u64,
+            DATABASE_MAX_GROUP_FILES,
+        ));
     let mut upload = None;
     while let Some(field) = payload.next().await {
         let mut field =
@@ -689,7 +722,7 @@ async fn upload_package(
         while let Some(chunk) = field.next().await {
             let chunk = chunk
                 .map_err(|_| RbError::bad_req(FrontendPackageResult::InvalidArchive.into()))?;
-            if bytes.len().saturating_add(chunk.len()) > MAX_THEME_BYTES {
+            if bytes.len().saturating_add(chunk.len()) as u64 > max_group {
                 return RbError::bad_req(FrontendPackageResult::ArchiveTooLarge.into()).http_err();
             }
             bytes.extend_from_slice(&chunk);
@@ -701,26 +734,14 @@ async fn upload_package(
     else {
         return RbError::bad_req(FrontendPackageResult::ZipRequired.into()).http_err();
     };
-    let files = LocalStorage::unpack_zip_files_limited(
-        &archive,
-        MAX_THEME_BYTES as u64,
-        MAX_THEME_BYTES as u64,
-        DATABASE_MAX_GROUP_FILES,
-    )
-    .map_err(|_| RbError::bad_req(FrontendPackageResult::InvalidArchive.into()))?;
+    let files = LocalStorage::unpack_zip_files_limited(&archive, max_file, max_group, max_files)
+        .map_err(|_| RbError::bad_req(FrontendPackageResult::InvalidArchive.into()))?;
     if files.is_empty() {
         return RbError::bad_req(FrontendPackageResult::EmptyArchive.into()).http_err();
     }
     let Some(manifest) = validate_theme_files(&files) else {
         return RbError::bad_req(FrontendPackageResult::InvalidManifest.into()).http_err();
     };
-    let backend = app
-        .storage
-        .available_backends()
-        .into_iter()
-        .filter(|backend| backend.public_read)
-        .min_by_key(|backend| !backend.recommended)
-        .ok_or_else(|| RbError::internal("no public asset backend is configured"))?;
     let object_key = format!("group-{}", uuid::Uuid::new_v4());
     let StoredAssetGroup {
         size,
@@ -746,167 +767,20 @@ async fn upload_package(
             return Err(RbInternalError::from(error).into());
         }
     };
-    let result = async {
-        let previous = db::frontend::get_package_by_name_for_update_conn(
-            &mut tx,
-            path.game_id,
-            &manifest.package.name,
-        )
-        .await?;
-        let published_referenced = if let Some(package) = &previous {
-            sqlx::query_scalar!(
-                r#"SELECT (EXISTS(
-                        SELECT 1 FROM rb_frontend_binding b JOIN rb_frontend_revision r ON r.id=b.revision_id
-                        WHERE r.game_id=$1 AND r.status='published' AND b.package_id=$2
-                    ) OR EXISTS(
-                        SELECT 1 FROM rb_frontend_feature_activation f JOIN rb_frontend_revision r ON r.id=f.revision_id
-                        WHERE r.game_id=$1 AND r.status='published' AND f.package_id=$2
-                    )) AS "referenced!""#,
-                path.game_id,
-                package.id,
-            )
-            .fetch_one(&mut *tx)
-            .await?
-        } else {
-            false
-        };
-        let replaced_assets = if let Some(package) = &previous
-            && !published_referenced
-        {
-            let group = db::asset::admin_get_group_conn(&mut tx, package.asset_group_id)
-                .await?
-                .ok_or_else(|| {
-                    RbInternalError::Other("theme package asset group is missing".to_string())
-                })?;
-            let files = db::asset::list_files_conn(&mut tx, group.id).await?;
-            Some((group, files))
-        } else {
-            None
-        };
-        if let Some(package) = &previous
-            && published_referenced
-        {
-            sqlx::query!(
-                "UPDATE rb_frontend_package SET delete_pending=TRUE WHERE id=$1",
-                package.id,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-        let group = db::asset::create_group_conn(
-            &mut tx,
-            db::asset::CreateAssetGroupData {
-                game_id: path.game_id,
-                puzzle_id: None,
-                round_id: None,
-                backend: &backend.id,
-                object_key: &object_key,
-                original_name: &file_name,
-                mime_type: "application/zip",
-                size: size as i64,
-                sha256: &sha256,
-            },
-        )
-        .await?;
-        for file in &stored_files {
-            db::asset::create_file_conn(
-                &mut tx,
-                group.id,
-                &file.relative_path,
-                &file.mime_type,
-                file.size as i64,
-                &file.sha256,
-            )
-            .await?;
-        }
-        let data = db::frontend::NewPackage {
-            game_id: path.game_id,
-            asset_group_id: group.id,
-            manifest_path: MANIFEST_PATH,
-            manifest: &manifest,
-            sha256: &sha256,
-        };
-        let package = if let Some(previous) = &previous
-            && !published_referenced
-        {
-            db::frontend::replace_package_conn(&mut tx, previous.id, data).await?
-        } else {
-            db::frontend::create_package_conn(&mut tx, data).await?
-        };
-        let round_renderers = manifest
-            .features
-            .renderers
-            .iter()
-            .filter(|(_, renderer)| renderer.surface == db::frontend::ROUND_PAGE)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let puzzle_renderers = manifest
-            .features
-            .renderers
-            .iter()
-            .filter(|(_, renderer)| renderer.surface == db::frontend::PUZZLE_PAGE)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let features = [
-            db::frontend::FrontendFeature::Locale,
-            db::frontend::FrontendFeature::Icons,
-            db::frontend::FrontendFeature::Ui,
-        ]
-        .into_iter()
-        .filter(|feature| manifest.features.contains(*feature))
-        .map(i16::from)
-        .collect::<Vec<_>>();
-        sqlx::query!(
-            "DELETE FROM rb_frontend_binding b USING rb_frontend_revision r, rb_frontend_package p
-             WHERE b.revision_id=r.id AND r.game_id=$1 AND r.status='draft'
-               AND b.package_id=p.id AND p.game_id=$1 AND p.name=$2
-               AND NOT ((b.surface='round-page' AND b.renderer_id=ANY($3))
-                     OR (b.surface='puzzle-page' AND b.renderer_id=ANY($4)))",
-            path.game_id,
-            manifest.package.name,
-            &round_renderers,
-            &puzzle_renderers,
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query!(
-            "UPDATE rb_frontend_binding b SET package_id=$3
-             FROM rb_frontend_revision r, rb_frontend_package p
-             WHERE b.revision_id=r.id AND r.game_id=$1 AND r.status='draft'
-               AND b.package_id=p.id AND p.game_id=$1 AND p.name=$2 AND p.id<>$3",
-            path.game_id,
-            manifest.package.name,
-            package.id,
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query!(
-            "DELETE FROM rb_frontend_feature_activation f USING rb_frontend_revision r, rb_frontend_package p
-             WHERE f.revision_id=r.id AND r.game_id=$1 AND r.status='draft'
-               AND f.package_id=p.id AND p.game_id=$1 AND p.name=$2
-               AND NOT (f.feature=ANY($3))",
-            path.game_id,
-            manifest.package.name,
-            &features,
-        )
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query!(
-            "UPDATE rb_frontend_feature_activation f SET package_id=$3
-             FROM rb_frontend_revision r, rb_frontend_package p
-             WHERE f.revision_id=r.id AND r.game_id=$1 AND r.status='draft'
-               AND f.package_id=p.id AND p.game_id=$1 AND p.name=$2 AND p.id<>$3",
-            path.game_id,
-            manifest.package.name,
-            package.id,
-        )
-        .execute(&mut *tx)
-        .await?;
-        if let Some((old_group, _)) = &replaced_assets {
-            db::asset::admin_delete_group(&mut *tx, old_group.id).await?;
-        }
-        Ok::<_, RbInternalError>((package, replaced_assets))
-    }
+    let stored = StoredAssetGroup {
+        size,
+        sha256,
+        files: stored_files.clone(),
+    };
+    let result = register_uploaded_theme(
+        &mut tx,
+        path.game_id,
+        &backend.id,
+        &object_key,
+        &file_name,
+        &stored,
+        &manifest,
+    )
     .await;
     let (package, replaced_assets) = match result {
         Ok(result) => {
@@ -1121,18 +995,18 @@ async fn scope_valid(
 ) -> Result<bool, RbInternalError> {
     match kind {
         "game" => Ok(id == 0),
-        "round" => Ok(sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM rb_round WHERE id=$1 AND game_id=$2)",
+        "round" => Ok(sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM rb_round WHERE id=$1 AND game_id=$2) AS \"exists!\"",
+            id,
+            game_id
         )
-        .bind(id)
-        .bind(game_id)
         .fetch_one(pool)
         .await?),
-        "puzzle" => Ok(sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM rb_puzzle WHERE id=$1 AND game_id=$2)",
+        "puzzle" => Ok(sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM rb_puzzle WHERE id=$1 AND game_id=$2) AS \"exists!\"",
+            id,
+            game_id
         )
-        .bind(id)
-        .bind(game_id)
         .fetch_one(pool)
         .await?),
         _ => Ok(false),
@@ -1305,6 +1179,222 @@ pub fn config(cfg: &mut web::ServiceConfig) {
     );
 }
 
+pub(super) async fn register_uploaded_theme(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    game_id: i32,
+    backend: &str,
+    object_key: &str,
+    file_name: &str,
+    stored: &StoredAssetGroup,
+    manifest: &db::frontend::ThemeManifest,
+) -> std::result::Result<
+    (
+        db::frontend::FrontendPackage,
+        Option<(
+            db::asset::RbAssetGroupAdminData,
+            Vec<db::asset::RbAssetFileAdminData>,
+        )>,
+    ),
+    RbInternalError,
+> {
+    let size = stored.size;
+    let sha256 = &stored.sha256;
+    let stored_files = &stored.files;
+
+    let previous =
+        db::frontend::get_package_by_name_for_update_conn(tx, game_id, &manifest.package.name)
+            .await?;
+    let published_referenced = if let Some(package) = &previous {
+        sqlx::query_scalar!(
+                r#"SELECT (EXISTS(
+                        SELECT 1 FROM rb_frontend_binding b JOIN rb_frontend_revision r ON r.id=b.revision_id
+                        WHERE r.game_id=$1 AND r.status='published' AND b.package_id=$2
+                    ) OR EXISTS(
+                        SELECT 1 FROM rb_frontend_feature_activation f JOIN rb_frontend_revision r ON r.id=f.revision_id
+                        WHERE r.game_id=$1 AND r.status='published' AND f.package_id=$2
+                    )) AS "referenced!""#,
+                game_id,
+                package.id,
+            )
+            .fetch_one(&mut **tx)
+            .await?
+    } else {
+        false
+    };
+
+    let replaced_assets = if let Some(package) = &previous
+        && !published_referenced
+    {
+        let group = db::asset::admin_get_group_conn(tx, package.asset_group_id)
+            .await?
+            .ok_or_else(|| {
+                RbInternalError::Other("theme package asset group is missing".to_string())
+            })?;
+        let files = db::asset::list_files_conn(tx, group.id).await?;
+        Some((group, files))
+    } else {
+        None
+    };
+    if let Some(package) = &previous
+        && published_referenced
+    {
+        sqlx::query!(
+            "UPDATE rb_frontend_package SET delete_pending=TRUE WHERE id=$1",
+            package.id,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    let group = db::asset::create_group_conn(
+        tx,
+        db::asset::CreateAssetGroupData {
+            game_id,
+            puzzle_id: None,
+            round_id: None,
+            backend,
+            object_key,
+            original_name: file_name,
+            mime_type: "application/zip",
+            size: size as i64,
+            sha256,
+        },
+    )
+    .await?;
+
+    for file in stored_files {
+        db::asset::create_file_conn(
+            tx,
+            group.id,
+            &file.relative_path,
+            &file.mime_type,
+            file.size as i64,
+            &file.sha256,
+        )
+        .await?;
+    }
+
+    let data = db::frontend::NewPackage {
+        game_id,
+        asset_group_id: group.id,
+        manifest_path: MANIFEST_PATH,
+        manifest,
+        sha256,
+    };
+    let package = if let Some(previous) = &previous
+        && !published_referenced
+    {
+        db::frontend::replace_package_conn(tx, previous.id, data).await?
+    } else {
+        db::frontend::create_package_conn(tx, data).await?
+    };
+
+    let round_renderers = manifest
+        .features
+        .renderers
+        .iter()
+        .filter(|(_, renderer)| renderer.surface == db::frontend::ROUND_PAGE)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+
+    let puzzle_renderers = manifest
+        .features
+        .renderers
+        .iter()
+        .filter(|(_, renderer)| renderer.surface == db::frontend::PUZZLE_PAGE)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+
+    let features = [
+        db::frontend::FrontendFeature::Locale,
+        db::frontend::FrontendFeature::Icons,
+        db::frontend::FrontendFeature::Ui,
+    ]
+    .into_iter()
+    .filter(|feature| manifest.features.contains(*feature))
+    .map(i16::from)
+    .collect::<Vec<_>>();
+
+    sqlx::query!(
+        "DELETE FROM rb_frontend_binding b
+         USING rb_frontend_revision r, rb_frontend_package p
+         WHERE b.revision_id = r.id
+           AND r.game_id = $1
+           AND r.status = 'draft'
+           AND b.package_id = p.id
+           AND p.game_id = $1
+           AND p.name = $2
+           AND NOT (
+               (b.surface = 'round-page' AND b.renderer_id = ANY($3))
+               OR (b.surface = 'puzzle-page' AND b.renderer_id = ANY($4))
+           )",
+        game_id,
+        manifest.package.name,
+        &round_renderers,
+        &puzzle_renderers,
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query!(
+        "UPDATE rb_frontend_binding b
+         SET package_id = $3
+         FROM rb_frontend_revision r, rb_frontend_package p
+         WHERE b.revision_id = r.id
+           AND r.game_id = $1
+           AND r.status = 'draft'
+           AND b.package_id = p.id
+           AND p.game_id = $1
+           AND p.name = $2
+           AND p.id <> $3",
+        game_id,
+        manifest.package.name,
+        package.id,
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query!(
+        "DELETE FROM rb_frontend_feature_activation f
+         USING rb_frontend_revision r, rb_frontend_package p
+         WHERE f.revision_id = r.id
+           AND r.game_id = $1
+           AND r.status = 'draft'
+           AND f.package_id = p.id
+           AND p.game_id = $1
+           AND p.name = $2
+           AND NOT (f.feature = ANY($3))",
+        game_id,
+        manifest.package.name,
+        &features,
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query!(
+        "UPDATE rb_frontend_feature_activation f
+         SET package_id = $3
+         FROM rb_frontend_revision r, rb_frontend_package p
+         WHERE f.revision_id = r.id
+           AND r.game_id = $1
+           AND r.status = 'draft'
+           AND f.package_id = p.id
+           AND p.game_id = $1
+           AND p.name = $2
+           AND p.id <> $3",
+        game_id,
+        manifest.package.name,
+        package.id,
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    if let Some((old_group, _)) = &replaced_assets {
+        db::asset::admin_delete_group(&mut **tx, old_group.id).await?;
+    }
+    Ok((package, replaced_assets))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{package_paths, validate_theme_files};
@@ -1464,6 +1554,133 @@ mod tests {
                 "ui":{"source":"features/ui.json","icons":{"judge.milestone":"example:marker"}}
             })))
             .is_none()
+        );
+    }
+    #[sqlx::test]
+    async fn registration_preserves_published_assets_and_rebinds_drafts(pool: sqlx::PgPool) {
+        use crate::module::storage::{StoredAssetFile, StoredAssetGroup};
+        let game = sqlx::query_scalar!(
+            "INSERT INTO rb_game(title,settings) VALUES('upload test','{}') RETURNING id"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let mut manifest: ThemeManifest = serde_json::from_value(json!({"type":"rbph-theme","apiVersion":1,"package":{"name":"test","version":"1"},"features":{"renderers":{"main":{"surface":"round-page","entry":"main.js"}}}})).unwrap();
+        let stored = StoredAssetGroup {
+            size: 1,
+            sha256: "a".repeat(64),
+            files: vec![StoredAssetFile {
+                relative_path: "main.js".into(),
+                size: 1,
+                sha256: "b".repeat(64),
+                mime_type: "text/javascript".into(),
+                path: String::new(),
+            }],
+        };
+        let mut tx = pool.begin().await.unwrap();
+        let (first, old) = super::register_uploaded_theme(
+            &mut tx,
+            game,
+            "cos",
+            "group-1",
+            "theme.zip",
+            &stored,
+            &manifest,
+        )
+        .await
+        .unwrap();
+        assert!(old.is_none());
+        tx.commit().await.unwrap();
+        let draft = sqlx::query_scalar!(
+            "INSERT INTO rb_frontend_revision(game_id,revision,status) VALUES($1,1,'draft') RETURNING id",
+            game
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            "INSERT INTO rb_frontend_binding(revision_id,surface,scope_kind,scope_id,package_id,renderer_id) VALUES($1,'round-page','game',0,$2,'main')",
+            draft,
+            first.id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        manifest.package.version = "2".into();
+        let mut tx = pool.begin().await.unwrap();
+        let (second, old) = super::register_uploaded_theme(
+            &mut tx,
+            game,
+            "cos",
+            "group-2",
+            "theme.zip",
+            &stored,
+            &manifest,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(old.unwrap().0.id, first.asset_group_id);
+        tx.commit().await.unwrap();
+        assert!(
+            crate::db::asset::admin_get_group(&pool, first.asset_group_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let published = sqlx::query_scalar!(
+            "INSERT INTO rb_frontend_revision(game_id,revision,status) VALUES($1,2,'published') RETURNING id",
+            game
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query!(
+            "INSERT INTO rb_frontend_binding(revision_id,surface,scope_kind,scope_id,package_id,renderer_id) VALUES($1,'round-page','game',0,$2,'main')",
+            published,
+            second.id
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        manifest.package.version = "3".into();
+        let mut tx = pool.begin().await.unwrap();
+        let (third, old) = super::register_uploaded_theme(
+            &mut tx,
+            game,
+            "cos",
+            "group-3",
+            "theme.zip",
+            &stored,
+            &manifest,
+        )
+        .await
+        .unwrap();
+        assert_ne!(second.id, third.id);
+        assert!(old.is_none());
+        tx.commit().await.unwrap();
+        assert!(
+            crate::db::asset::admin_get_group(&pool, second.asset_group_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        for (revision, expected) in [(published, second.id), (draft, third.id)] {
+            let actual = sqlx::query_scalar!(
+                "SELECT package_id AS \"package_id!\" FROM rb_frontend_binding WHERE revision_id=$1",
+                revision
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
+        assert!(
+            crate::db::frontend::get_package(&pool, game, second.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .delete_pending
         );
     }
 }

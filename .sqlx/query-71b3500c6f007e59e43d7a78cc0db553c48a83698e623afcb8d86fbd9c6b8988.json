@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT digest_version,sha256_source FROM rb_asset_digest WHERE group_id=$1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "digest_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "sha256_source",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "71b3500c6f007e59e43d7a78cc0db553c48a83698e623afcb8d86fbd9c6b8988"
+}

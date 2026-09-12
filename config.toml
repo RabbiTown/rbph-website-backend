@@ -18,6 +18,21 @@ max_connections = 32
 default_backend = "local"
 # content_cdn_backend = "cos"
 
+# [storage.backends.cos]
+# kind = "cos"
+# label = "COS"
+# region = "ap-shanghai"
+# bucket = ""
+# secret_id = ""
+# secret_key = ""
+# public_base_url = ""
+
+# [storage.backends.cos.upload]
+# direct = true
+# max_file_bytes = 1073741824
+# max_group_bytes = 5368709120
+# max_files = 2000
+
 [storage.backends.local]
 kind = "local"
 label = "Local"

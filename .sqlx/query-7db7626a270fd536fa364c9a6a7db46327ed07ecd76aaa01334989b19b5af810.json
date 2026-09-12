@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id,\n                   state,\n                   document->'request' AS \"request!\",\n                   (\n                       SELECT count(*)\n                       FROM jsonb_array_elements(document->'files') AS file\n                       WHERE file->>'complete' = 'true'\n                   ) AS \"completed_files!\",\n                   error\n            FROM rb_asset_upload\n            WHERE owner_id = $1\n              AND game_id = $2\n              AND state IN ($3, $4, $5)\n              AND expires_at > now()\n            ORDER BY created_at DESC\n            LIMIT 100\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "request!",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "completed_files!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "error",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int2",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "7db7626a270fd536fa364c9a6a7db46327ed07ecd76aaa01334989b19b5af810"
+}

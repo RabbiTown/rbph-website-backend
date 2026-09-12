@@ -1,4 +1,5 @@
 mod admin;
+pub use admin::asset_upload::run as run_asset_uploads;
 mod auth;
 mod game;
 mod notification;

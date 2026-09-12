@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, state\n         FROM rb_asset_upload\n         WHERE state = $2\n           OR (\n               $1\n               AND (\n                    state = $3\n                    OR (state IN ($4, $5) AND expires_at <= now())\n               )\n           )\n         ORDER BY created_at\n         LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Int2",
+        "Int2",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e3c7c9054861395497c6a0963ffda21941c9523c10a95c550d66f47c05574744"
+}

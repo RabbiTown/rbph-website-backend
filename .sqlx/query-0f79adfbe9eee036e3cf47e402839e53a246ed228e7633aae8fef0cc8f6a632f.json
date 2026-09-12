@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT package_id AS \"package_id!\" FROM rb_frontend_binding WHERE revision_id=$1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "package_id!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "0f79adfbe9eee036e3cf47e402839e53a246ed228e7633aae8fef0cc8f6a632f"
+}

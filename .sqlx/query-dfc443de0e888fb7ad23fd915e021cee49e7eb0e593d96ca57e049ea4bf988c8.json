@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_frontend_binding(revision_id,surface,scope_kind,scope_id,package_id,renderer_id) VALUES($1,'round-page','game',0,$2,'main')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dfc443de0e888fb7ad23fd915e021cee49e7eb0e593d96ca57e049ea4bf988c8"
+}

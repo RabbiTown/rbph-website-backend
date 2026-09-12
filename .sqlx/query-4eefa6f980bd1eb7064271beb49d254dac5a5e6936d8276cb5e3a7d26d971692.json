@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_asset_upload\n                 SET document = jsonb_set(document, '{cache_done}', 'true')\n                 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4eefa6f980bd1eb7064271beb49d254dac5a5e6936d8276cb5e3a7d26d971692"
+}

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_frontend_binding b\n         USING rb_frontend_revision r, rb_frontend_package p\n         WHERE b.revision_id = r.id\n           AND r.game_id = $1\n           AND r.status = 'draft'\n           AND b.package_id = p.id\n           AND p.game_id = $1\n           AND p.name = $2\n           AND NOT (\n               (b.surface = 'round-page' AND b.renderer_id = ANY($3))\n               OR (b.surface = 'puzzle-page' AND b.renderer_id = ANY($4))\n           )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "be64d51fcfdb541d7b24c416970b6223a904c63d33f0ff42e10adb440ef81c19"
+}

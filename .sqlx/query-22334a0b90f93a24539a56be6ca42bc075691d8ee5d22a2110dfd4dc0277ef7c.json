@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_asset_upload_garbage (backend, object_key, paths)\n                 VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "22334a0b90f93a24539a56be6ca42bc075691d8ee5d22a2110dfd4dc0277ef7c"
+}

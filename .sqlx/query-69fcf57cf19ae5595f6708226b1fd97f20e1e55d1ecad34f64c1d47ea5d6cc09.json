@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE rb_asset_upload\n                SET touched_at = now(),\n                    expires_at = LEAST(\n                        created_at + INTERVAL '7 days',\n                        now() + INTERVAL '24 hours'\n                    )\n                WHERE id = $1\n                RETURNING EXTRACT(EPOCH FROM expires_at)::bigint AS \"expires!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "expires!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "69fcf57cf19ae5595f6708226b1fd97f20e1e55d1ecad34f64c1d47ea5d6cc09"
+}

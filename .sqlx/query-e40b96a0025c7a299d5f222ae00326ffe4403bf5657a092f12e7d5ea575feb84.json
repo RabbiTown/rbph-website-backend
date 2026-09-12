@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE rb_asset_upload\n                SET state = $2,\n                    document = $3,\n                    result = $4,\n                    error = $5\n                WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int2",
+        "Jsonb",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e40b96a0025c7a299d5f222ae00326ffe4403bf5657a092f12e7d5ea575feb84"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE rb_asset_upload\n         SET state = $3,\n             result = $2,\n             error = NULL\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f75468b7bf05540c11dc9c34b550928904dda744ce3b09f6da4a2386546cbe19"
+}

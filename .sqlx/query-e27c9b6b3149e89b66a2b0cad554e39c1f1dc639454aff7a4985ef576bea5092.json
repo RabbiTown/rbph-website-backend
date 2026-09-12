@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM rb_frontend_feature_activation f\n         USING rb_frontend_revision r, rb_frontend_package p\n         WHERE f.revision_id = r.id\n           AND r.game_id = $1\n           AND r.status = 'draft'\n           AND f.package_id = p.id\n           AND p.game_id = $1\n           AND p.name = $2\n           AND NOT (f.feature = ANY($3))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int2Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e27c9b6b3149e89b66a2b0cad554e39c1f1dc639454aff7a4985ef576bea5092"
+}

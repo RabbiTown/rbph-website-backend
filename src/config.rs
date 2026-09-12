@@ -149,6 +149,8 @@ pub enum StorageBackendConfig {
         secret_id: String,
         secret_key: String,
         public_base_url: String,
+        #[serde(default)]
+        upload: UploadConfig,
     },
     Database {
         label: String,
@@ -199,7 +201,9 @@ impl StorageConfig {
                     secret_id,
                     secret_key,
                     public_base_url,
+                    upload,
                 } => {
+                    upload.validate()?;
                     if region.trim().is_empty()
                         || bucket.trim().is_empty()
                         || secret_id.trim().is_empty()
@@ -379,6 +383,42 @@ impl Settings {
     }
 }
 
+/// COS upload limits shared by browser-direct and backend uploads.
+#[derive(Deserialize, Clone, Serialize)]
+#[serde(default)]
+pub struct UploadConfig {
+    pub direct: bool,
+    pub max_file_bytes: u64,
+    pub max_group_bytes: u64,
+    pub max_files: usize,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            direct: false,
+            max_file_bytes: 1024 * 1024 * 1024,
+            max_group_bytes: 5 * 1024 * 1024 * 1024,
+            max_files: 2000,
+        }
+    }
+}
+
+impl UploadConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.max_file_bytes == 0
+            || self.max_file_bytes > 80_000 * 1024 * 1024
+            || self.max_group_bytes < self.max_file_bytes
+            || self.max_group_bytes > i64::MAX as u64
+            || self.max_files == 0
+            || self.max_files > 2000
+        {
+            return Err("invalid upload limits".into());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -494,6 +534,30 @@ mod tests {
     }
 
     #[test]
+    fn cos_upload_config_uses_shared_limits_without_direct_upload() {
+        let backend: StorageBackendConfig = serde_json::from_value(serde_json::json!({
+            "kind": "cos", "label": "COS", "region": "ap-shanghai",
+            "bucket": "test-123", "secret_id": "id", "secret_key": "key",
+            "public_base_url": "https://assets.example.com",
+            "upload": { "direct": false, "max_file_bytes": 4, "max_group_bytes": 8, "max_files": 2 }
+        }))
+        .unwrap();
+        let StorageBackendConfig::Cos { ref upload, .. } = backend else {
+            panic!("expected COS")
+        };
+        assert!(!upload.direct);
+        assert_eq!(
+            (
+                upload.max_file_bytes,
+                upload.max_group_bytes,
+                upload.max_files
+            ),
+            (4, 8, 2)
+        );
+        assert!(upload.validate().is_ok());
+    }
+
+    #[test]
     fn auth_rate_limit_defaults_are_balanced() {
         let config = AuthRateLimitConfig::default();
         assert!(config.enabled);
@@ -566,6 +630,7 @@ mod tests {
                     secret_id: "id".to_string(),
                     secret_key: "key".to_string(),
                     public_base_url: "https://assets.example.com".to_string(),
+                    upload: Default::default(),
                 },
             )]),
         };
@@ -615,6 +680,7 @@ mod tests {
                 secret_id: "id".to_string(),
                 secret_key: "key".to_string(),
                 public_base_url: "https://assets.example.com".to_string(),
+                upload: Default::default(),
             },
         );
         assert!(invalid_id.validate().is_err());
@@ -630,6 +696,7 @@ mod tests {
                 secret_id: "id".to_string(),
                 secret_key: "key".to_string(),
                 public_base_url: "http://assets.example.com".to_string(),
+                upload: Default::default(),
             },
         );
         assert!(invalid_cos.validate().is_err());
@@ -664,6 +731,7 @@ mod tests {
                         secret_id: "id".to_string(),
                         secret_key: "key".to_string(),
                         public_base_url: "https://assets.example.com".to_string(),
+                        upload: Default::default(),
                     },
                 )]),
             },

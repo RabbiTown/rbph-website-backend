@@ -927,7 +927,6 @@ struct StaffTeamListQuery {
 struct StaffTeamListItem {
     id: i32,
     name: String,
-    state: i16,
 }
 
 #[derive(Serialize)]
@@ -1117,6 +1116,8 @@ async fn update_staff_team_access(
         bio: None,
         is_banned: req.is_banned,
         is_locked: req.is_locked,
+        is_started: None,
+        currency_action: None,
         is_beta: None,
         features: req.features.as_ref().map(|features| {
             features
@@ -1129,10 +1130,12 @@ async fn update_staff_team_access(
         }),
         reason: req.reason.clone(),
     };
-    let team =
-        db::team::admin_update(&app.db, path.game_id, path.team_id, user.uid, &update).await?;
-    let Some(team) = team else {
-        return RbError::not_found().http_err();
+    let team = match db::team::admin_update(&app.db, path.game_id, path.team_id, user.uid, &update)
+        .await?
+    {
+        db::team::AdminTeamUpdateResult::Ok(team) => *team,
+        db::team::AdminTeamUpdateResult::Invalid => return RbError::bad_req(-1).http_err(),
+        db::team::AdminTeamUpdateResult::NotFound => return RbError::not_found().http_err(),
     };
     db::cache::invalidate_team_info(&app, path.team_id).await?;
     db::board::LEADER_BOARD_CACHE
@@ -1295,13 +1298,7 @@ async fn list_staff_teams(
     let search = query.search.as_deref().unwrap_or("").trim();
     let teams = sqlx::query_as!(
         StaffTeamListItem,
-        "SELECT id, name,
-            (CASE
-                WHEN is_banned THEN -1
-                WHEN finish_at IS NOT NULL THEN 2
-                WHEN is_locked THEN 1
-                ELSE 0
-            END)::SMALLINT AS \"state!\"
+        "SELECT id, name
         FROM rb_team
         WHERE game_id = $1 AND ($2 = '' OR name ILIKE '%' || $2 || '%')
         ORDER BY name, id

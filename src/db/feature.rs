@@ -283,7 +283,7 @@ async fn lock_leaderboard_conn(
                     COUNT(tp.puzzle_id) DESC, MAX(tp.solve_at) ASC NULLS LAST, t.id) AS rank
             FROM rb_team t
             LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state = 1
-            WHERE t.game_id = $1 AND t.is_locked AND NOT t.is_banned
+            WHERE t.game_id = $1 AND t.start_at IS NOT NULL AND NOT t.is_banned
             GROUP BY t.id
         ) ranked;",
         game_id

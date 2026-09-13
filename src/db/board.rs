@@ -124,7 +124,7 @@ impl LeaderBoardCache {
                 LEFT JOIN rb_team_feature tf
                     ON tf.team_id = t.id AND tf.feature_type = 3
                 WHERE t.game_id = $1
-                    AND t.is_locked
+                    AND t.start_at IS NOT NULL
                     AND NOT t.is_banned
                     AND COALESCE(tf.enabled, TRUE)
                 GROUP BY t.id

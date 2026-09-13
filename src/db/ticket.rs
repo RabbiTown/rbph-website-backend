@@ -12,7 +12,7 @@ use crate::{
     error::RbInternalError,
     model::{
         game::{
-            RbContentType, RbGameStaffIdentity, RbTeamPuzzleState, RbTeamState, RbTicketSenderType,
+            RbContentType, RbGameStaffIdentity, RbTeamPuzzleState, RbTicketSenderType,
             RbTicketState,
         },
         user::RbUserRole,
@@ -63,7 +63,11 @@ pub async fn get_ticket_user_info(
 pub struct TicketAggreInfoTeam {
     id: i32,
     name: String,
-    state: RbTeamState,
+    is_banned: bool,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    start_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    finish_at: Option<OffsetDateTime>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     currency: Vec<RbCurrencyShowData>,
 }
@@ -1062,13 +1066,8 @@ pub async fn get_ticket_summary(
             ORDER BY m.ticket_id, m.ctime_at DESC, m.id DESC
         )
         SELECT tk.state,
-                t.id AS t_id, t.name AS t_name,
-                (CASE
-                    WHEN t.is_banned THEN -1
-                    WHEN t.finish_at IS NOT NULL THEN 2
-                    WHEN t.is_locked THEN 1
-                    ELSE 0
-                END)::SMALLINT AS "t_state!",
+                t.id AS t_id, t.name AS t_name, t.is_banned AS t_is_banned,
+                t.start_at AS t_start_at, t.finish_at AS t_finish_at,
                 t.game_id AS g_id,
                 p.id AS "p_id?", p.slug AS "p_slug?", p.title AS "p_title?", tp.state AS "p_state?",
                 r.id AS "r_id?", r.slug AS "r_slug?", r.title AS "r_title?",
@@ -1106,7 +1105,9 @@ pub async fn get_ticket_summary(
         team: include_team.then_some(TicketAggreInfoTeam {
             id: x.t_id,
             name: x.t_name,
-            state: RbTeamState::from_primitive(x.t_state),
+            is_banned: x.t_is_banned,
+            start_at: x.t_start_at,
+            finish_at: x.t_finish_at,
             currency,
         }),
         puzzle: make_puzzle(
@@ -1225,13 +1226,8 @@ pub async fn list_staff_tickets(
 ) -> Result<Vec<TicketSummary>, RbInternalError> {
     let rows = sqlx::query!(
         r#"SELECT tk.id, tk.state,
-                t.id AS t_id, t.name AS t_name,
-                (CASE
-                    WHEN t.is_banned THEN -1
-                    WHEN t.finish_at IS NOT NULL THEN 2
-                    WHEN t.is_locked THEN 1
-                    ELSE 0
-                END)::SMALLINT AS "t_state!",
+                t.id AS t_id, t.name AS t_name, t.is_banned AS t_is_banned,
+                t.start_at AS t_start_at, t.finish_at AS t_finish_at,
                 t.game_id AS g_id,
                 p.id AS "p_id?", p.slug AS "p_slug?", p.title AS "p_title?",
                 COALESCE(tp.state, -1)::SMALLINT AS "p_state?",
@@ -1285,7 +1281,9 @@ pub async fn list_staff_tickets(
             team: Some(TicketAggreInfoTeam {
                 id: x.t_id,
                 name: x.t_name,
-                state: RbTeamState::from_primitive(x.t_state),
+                is_banned: x.t_is_banned,
+                start_at: x.t_start_at,
+                finish_at: x.t_finish_at,
                 currency: vec![],
             }),
             puzzle: make_puzzle(

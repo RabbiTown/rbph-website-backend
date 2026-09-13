@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT t.game_id, t.is_locked, tp.puzzle_id AS \"puzzle_id?\"\n        FROM rb_team t\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1\n        WHERE t.id = $1;",
+  "query": "SELECT t.game_id, t.start_at, tp.puzzle_id AS \"puzzle_id?\"\n        FROM rb_team t\n        LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1\n        WHERE t.id = $1;",
   "describe": {
     "columns": [
       {
@@ -10,8 +10,8 @@
       },
       {
         "ordinal": 1,
-        "name": "is_locked",
-        "type_info": "Bool"
+        "name": "start_at",
+        "type_info": "Timestamptz"
       },
       {
         "ordinal": 2,
@@ -26,9 +26,9 @@
     },
     "nullable": [
       false,
-      false,
+      true,
       false
     ]
   },
-  "hash": "7670139e3d576ed8491ca89bc49cef2546b01f514a8cd9a95cd4962ea246a6aa"
+  "hash": "945e073efc3d9064eadda3efda5528e4cc834bb31cc7ce852a143a0a1d25c8ce"
 }

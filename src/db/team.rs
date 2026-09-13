@@ -66,6 +66,8 @@ pub struct RbTeamFullData {
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub start_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
     pub members: Vec<RbTeamMemberData>,
     pub features: Vec<RbTeamFeatureData>,
@@ -157,6 +159,7 @@ pub async fn get_by_user_game(
         pass: team.pass,
         bio: team.bio,
         ctime_at: team.ctime_at,
+        start_at: team.start_at,
         finish_at: team.finish_at,
         members,
         features: team_features(pool, team.id).await?,
@@ -539,6 +542,8 @@ pub struct RbTeamShowData {
     pub is_locked: bool,
     pub bio: String,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub start_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
     pub members: Vec<RbTeamMemberShowData>,
 }
@@ -581,6 +586,7 @@ pub async fn get_by_id_show(
         is_banned: team.is_banned,
         is_locked: team.is_locked,
         bio: team.bio,
+        start_at: team.start_at,
         finish_at: team.finish_at,
         members,
     }))
@@ -1586,6 +1592,8 @@ pub struct AdminTeamListItem {
     pub is_locked: bool,
     pub is_beta: bool,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub start_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
     pub member_count: i64,
     pub captain_id: Option<i32>,
@@ -1632,6 +1640,8 @@ pub struct AdminTeamDetail {
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub start_at: Option<OffsetDateTime>,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
     pub members: Vec<RbTeamMemberData>,
     pub features: Vec<RbTeamFeatureData>,
@@ -1659,10 +1669,33 @@ pub struct AdminTeamUpdateData {
     pub bio: Option<String>,
     pub is_banned: Option<bool>,
     pub is_locked: Option<bool>,
+    pub is_started: Option<bool>,
+    pub currency_action: Option<AdminTeamCurrencyAction>,
     pub is_beta: Option<bool>,
     pub features: Option<Vec<AdminTeamFeatureDataInput>>,
     #[validate(length(max = 500))]
     pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminTeamCurrencyAction {
+    Initialize,
+    Remove,
+}
+
+fn valid_admin_currency_action(
+    action: Option<AdminTeamCurrencyAction>,
+    requested_started: Option<bool>,
+    was_started: bool,
+) -> bool {
+    let started_changed = requested_started.is_some_and(|started| started != was_started);
+    match (action, requested_started) {
+        (None, _) => true,
+        (Some(AdminTeamCurrencyAction::Initialize), Some(true)) => started_changed,
+        (Some(AdminTeamCurrencyAction::Remove), Some(false)) => started_changed,
+        _ => false,
+    }
 }
 
 #[derive(Deserialize)]
@@ -1706,7 +1739,7 @@ pub async fn admin_list(
 ) -> Result<Vec<AdminTeamListItem>, RbInternalError> {
     let rows = sqlx::query_as!(
         AdminTeamListItem,
-        "SELECT t.id, t.name, t.is_banned, t.is_locked, t.is_beta, t.finish_at,
+        "SELECT t.id, t.name, t.is_banned, t.is_locked, t.is_beta, t.start_at, t.finish_at,
             COUNT(tm.user_id) AS \"member_count!\",
             captain.user_id AS \"captain_id?\",
             captain_user.nickname AS \"captain_name?\"
@@ -1718,7 +1751,7 @@ pub async fn admin_list(
             AND ($2 = '' OR t.name ILIKE '%' || $2 || '%')
             AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)
             AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)
-            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5)
+            AND ($5::BOOLEAN IS NULL OR (t.start_at IS NOT NULL AND t.finish_at IS NOT NULL) = $5)
             AND ($6::BOOLEAN IS NULL OR t.is_beta = $6)
         GROUP BY t.id, captain.user_id, captain_user.nickname
         ORDER BY t.id
@@ -1749,7 +1782,7 @@ pub async fn admin_count(
             AND ($2 = '' OR t.name ILIKE '%' || $2 || '%')
             AND ($3::BOOLEAN IS NULL OR t.is_banned = $3)
             AND ($4::BOOLEAN IS NULL OR t.is_locked = $4)
-            AND ($5::BOOLEAN IS NULL OR (t.finish_at IS NOT NULL) = $5)
+            AND ($5::BOOLEAN IS NULL OR (t.start_at IS NOT NULL AND t.finish_at IS NOT NULL) = $5)
             AND ($6::BOOLEAN IS NULL OR t.is_beta = $6);",
         game_id,
         filter.search,
@@ -1853,6 +1886,7 @@ pub async fn admin_get(
         is_beta: team.is_beta,
         game_id: team.game_id,
         ctime_at: team.ctime_at,
+        start_at: team.start_at,
         finish_at: team.finish_at,
         members,
         features: team_features(pool, team_id).await?,
@@ -1925,13 +1959,19 @@ pub async fn admin_create(
     Ok(AdminTeamCreateResult::Ok(team_id))
 }
 
+pub enum AdminTeamUpdateResult {
+    Invalid,
+    NotFound,
+    Ok(Box<AdminTeamDetail>),
+}
+
 pub async fn admin_update(
     pool: &DbPool,
     game_id: i32,
     team_id: i32,
     actor_id: i32,
     data: &AdminTeamUpdateData,
-) -> Result<Option<AdminTeamDetail>, RbInternalError> {
+) -> Result<AdminTeamUpdateResult, RbInternalError> {
     if let Some(features) = &data.features
         && (features.iter().any(|feature| !feature.valid())
             || features.len()
@@ -1941,12 +1981,12 @@ pub async fn admin_update(
                     .collect::<std::collections::HashSet<_>>()
                     .len())
     {
-        return Err("Invalid team feature update".into());
+        return Ok(AdminTeamUpdateResult::Invalid);
     }
 
     let mut tx = pool.begin().await?;
     let current = sqlx::query!(
-        "SELECT is_banned, is_locked, is_beta
+        "SELECT is_banned, is_locked, is_beta, start_at
         FROM rb_team
         WHERE game_id = $1 AND id = $2
         FOR UPDATE;",
@@ -1956,8 +1996,14 @@ pub async fn admin_update(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(current) = current else {
-        return Ok(None);
+        return Ok(AdminTeamUpdateResult::NotFound);
     };
+    let was_started = current.start_at.is_some();
+    let will_be_started = data.is_started.unwrap_or(was_started);
+    let started_changed = was_started != will_be_started;
+    if !valid_admin_currency_action(data.currency_action, data.is_started, was_started) {
+        return Ok(AdminTeamUpdateResult::Invalid);
+    }
     let current_features = sqlx::query!(
         "SELECT feature_type, enabled
         FROM rb_team_feature
@@ -1982,6 +2028,12 @@ pub async fn admin_update(
         changes.push(json!({
             "target": "team",
             "action": if is_locked { "locked" } else { "unlocked" }
+        }));
+    }
+    if started_changed {
+        changes.push(json!({
+            "target": "team",
+            "action": if will_be_started { "started" } else { "unstarted" }
         }));
     }
     if let Some(is_beta) = data.is_beta
@@ -2016,7 +2068,12 @@ pub async fn admin_update(
             bio = COALESCE($5, bio),
             is_banned = COALESCE($6, is_banned),
             is_locked = COALESCE($7, is_locked),
-            is_beta = COALESCE($8, is_beta)
+            is_beta = COALESCE($8, is_beta),
+            start_at = CASE
+                WHEN $9::BOOLEAN IS TRUE THEN COALESCE(start_at, $10)
+                WHEN $9::BOOLEAN IS FALSE THEN NULL
+                ELSE start_at
+            END
         WHERE game_id = $1 AND id = $2
         RETURNING id;",
         game_id,
@@ -2026,16 +2083,58 @@ pub async fn admin_update(
         data.bio.as_deref(),
         data.is_banned,
         data.is_locked,
-        data.is_beta
+        data.is_beta,
+        data.is_started,
+        OffsetDateTime::now_utc()
     )
     .fetch_optional(&mut *tx)
     .await?;
     debug_assert!(updated.is_some());
-    if data
-        .is_locked
-        .is_some_and(|value| value != current.is_locked)
+    if started_changed
+        || data
+            .is_locked
+            .is_some_and(|is_locked| is_locked != current.is_locked)
     {
         db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
+    }
+    if let Some(action) = data.currency_action {
+        let had_currency = sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT 1 FROM rb_team_currency WHERE team_id = $1) AS \"exists!\";",
+            team_id
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        match action {
+            AdminTeamCurrencyAction::Initialize => {
+                sqlx::query!(
+                    "INSERT INTO rb_team_currency (team_id, currency_id, amount, growth, hidden, utime_at)
+                    SELECT $1, c.id, c.init_amount, 0, c.init_hidden, NOW()
+                    FROM rb_currency c
+                    WHERE c.game_id = $2
+                    ON CONFLICT (team_id, currency_id) DO UPDATE SET
+                        amount = EXCLUDED.amount,
+                        growth = 0,
+                        hidden = EXCLUDED.hidden,
+                        utime_at = EXCLUDED.utime_at;",
+                    team_id,
+                    game_id
+                )
+                .execute(&mut *tx)
+                .await?;
+                changes.push(json!({
+                    "target": "currency",
+                    "action": "initialized"
+                }));
+            }
+            AdminTeamCurrencyAction::Remove => {
+                sqlx::query!("DELETE FROM rb_team_currency WHERE team_id = $1;", team_id)
+                    .execute(&mut *tx)
+                    .await?;
+                if had_currency {
+                    changes.push(json!({ "target": "currency", "action": "removed" }));
+                }
+            }
+        }
     }
     if let Some(features) = &data.features {
         for feature in features {
@@ -2078,7 +2177,10 @@ pub async fn admin_update(
         .await?;
     }
     tx.commit().await?;
-    admin_get(pool, game_id, team_id).await
+    Ok(match admin_get(pool, game_id, team_id).await? {
+        Some(team) => AdminTeamUpdateResult::Ok(Box::new(team)),
+        None => AdminTeamUpdateResult::NotFound,
+    })
 }
 
 pub enum AdminMemberResult {
@@ -2361,5 +2463,49 @@ mod currency_adjust_tests {
         assert_eq!(backend["currentAmount"], 21);
         assert_eq!(backend["maxAmount"], 100);
         assert!(backend.get("updatedAt").is_some());
+    }
+}
+
+#[cfg(test)]
+mod admin_team_state_tests {
+    use super::{AdminTeamCurrencyAction, valid_admin_currency_action};
+
+    #[test]
+    fn currency_actions_require_the_matching_state_transition() {
+        assert!(valid_admin_currency_action(
+            Some(AdminTeamCurrencyAction::Initialize),
+            Some(true),
+            false
+        ));
+        assert!(valid_admin_currency_action(
+            Some(AdminTeamCurrencyAction::Remove),
+            Some(false),
+            true
+        ));
+        assert!(!valid_admin_currency_action(
+            Some(AdminTeamCurrencyAction::Initialize),
+            Some(true),
+            true
+        ));
+        assert!(!valid_admin_currency_action(
+            Some(AdminTeamCurrencyAction::Remove),
+            Some(false),
+            false
+        ));
+        assert!(!valid_admin_currency_action(
+            Some(AdminTeamCurrencyAction::Initialize),
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn currency_action_uses_readable_string_values() {
+        assert!(matches!(
+            serde_json::from_str::<AdminTeamCurrencyAction>("\"initialize\""),
+            Ok(AdminTeamCurrencyAction::Initialize)
+        ));
+        assert!(serde_json::from_str::<AdminTeamCurrencyAction>("1").is_err());
+        assert!(serde_json::from_str::<AdminTeamCurrencyAction>("\"keep\"").is_err());
     }
 }

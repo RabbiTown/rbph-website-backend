@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT is_banned, is_locked, is_beta\n        FROM rb_team\n        WHERE game_id = $1 AND id = $2\n        FOR UPDATE;",
+  "query": "SELECT is_banned, is_locked, is_beta, start_at\n        FROM rb_team\n        WHERE game_id = $1 AND id = $2\n        FOR UPDATE;",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,11 @@
         "ordinal": 2,
         "name": "is_beta",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "start_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -28,8 +33,9 @@
     "nullable": [
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "94e8ead94b3a22fcf3e8f4d97712f3f5cefd3df7d52c617c30faeb67d3e1ec34"
+  "hash": "fb2d4bc615bb80fa115867fdc2593df55cd02d7f6ce7a68b4508cf438bb28ec7"
 }

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, name\n        FROM rb_team\n        WHERE game_id = $1 AND ($2 = '' OR name ILIKE '%' || $2 || '%')\n        ORDER BY name, id\n        LIMIT 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4255e540c0453f421d0dcc67af5331eb78280f4e925dec919e3fb906d26aafd9"
+}

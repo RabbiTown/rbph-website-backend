@@ -57,6 +57,11 @@
         "ordinal": 10,
         "name": "is_beta",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "start_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -76,7 +81,8 @@
       false,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
   "hash": "44b67e1eb00b1c604ae4982d03d2f85c586611d21b806abe00aab9874ec84f11"

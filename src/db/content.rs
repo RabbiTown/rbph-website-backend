@@ -471,7 +471,7 @@ async fn refresh_team_unlocks_if_dirty(
 ) -> Result<(), RbInternalError> {
     let mut tx = pool.begin().await?;
     let team = sqlx::query!(
-        "SELECT content_blocks_dirty, is_locked FROM rb_team
+        "SELECT content_blocks_dirty, start_at FROM rb_team
         WHERE id = $1 AND game_id = $2 FOR UPDATE",
         team_id,
         game_id
@@ -533,7 +533,7 @@ async fn refresh_team_unlocks_if_dirty(
         .filter(|block| !unlocked.contains(&block.id))
         .collect::<Vec<_>>();
     if !pending.is_empty() {
-        let states = team_states_conn(&mut tx, team_id, game_id, team.is_locked).await?;
+        let states = team_states_conn(&mut tx, team_id, game_id, team.start_at.is_some()).await?;
         for block in pending {
             let allowed = block
                 .visibility_cond

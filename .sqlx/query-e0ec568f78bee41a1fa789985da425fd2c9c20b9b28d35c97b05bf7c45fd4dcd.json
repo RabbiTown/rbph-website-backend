@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_currency (team_id, currency_id, amount, growth, hidden, utime_at)\n                    SELECT $1, c.id, c.init_amount, 0, c.init_hidden, NOW()\n                    FROM rb_currency c\n                    WHERE c.game_id = $2\n                    ON CONFLICT (team_id, currency_id) DO UPDATE SET\n                        amount = EXCLUDED.amount,\n                        growth = 0,\n                        hidden = EXCLUDED.hidden,\n                        utime_at = EXCLUDED.utime_at;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e0ec568f78bee41a1fa789985da425fd2c9c20b9b28d35c97b05bf7c45fd4dcd"
+}

@@ -345,19 +345,6 @@ mod tests {
     }
 }
 
-#[derive(Debug, Serialize_repr, Deserialize_repr, FromPrimitive, IntoPrimitive, Clone, Copy)]
-#[repr(i16)]
-#[serde(into = "i16")]
-pub enum RbTeamState {
-    Banned = -1,
-    Open = 0,
-    InGame = 1,
-    Finished = 2,
-
-    #[num_enum(default)]
-    Invalid,
-}
-
 #[derive(FromRow, Serialize)]
 pub struct RbTeam {
     pub id: i32,
@@ -373,6 +360,8 @@ pub struct RbTeam {
     pub game_id: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
+    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
+    pub start_at: Option<OffsetDateTime>,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
     pub finish_at: Option<OffsetDateTime>,
 }

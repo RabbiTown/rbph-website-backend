@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT content_blocks_dirty, is_locked FROM rb_team\n        WHERE id = $1 AND game_id = $2 FOR UPDATE",
+  "query": "SELECT content_blocks_dirty, start_at FROM rb_team\n        WHERE id = $1 AND game_id = $2 FOR UPDATE",
   "describe": {
     "columns": [
       {
@@ -10,8 +10,8 @@
       },
       {
         "ordinal": 1,
-        "name": "is_locked",
-        "type_info": "Bool"
+        "name": "start_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -22,8 +22,8 @@
     },
     "nullable": [
       false,
-      false
+      true
     ]
   },
-  "hash": "ed303b973975d28ba3f2e3941ce02ce134b70c3374444aa408a5df2a9559da8e"
+  "hash": "b7e708beecceed29c54c5b7d965a31f641e6e79ee19ff9ab2b28fc46543854d2"
 }

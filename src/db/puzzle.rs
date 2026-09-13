@@ -599,7 +599,7 @@ pub async fn solve_backend_puzzle(
     if matches!(submission.saction, RbJudgeAction::FinishGame) {
         sqlx::query!(
             "UPDATE rb_team SET finish_at = COALESCE(finish_at, NOW())
-            WHERE id = $1 AND is_locked;",
+            WHERE id = $1 AND start_at IS NOT NULL;",
             team_id
         )
         .execute(&mut *tx)
@@ -1409,7 +1409,7 @@ pub async fn submit_answer(
             if matches!(result.action, RbJudgeAction::FinishGame) {
                 sqlx::query!(
                     "UPDATE rb_team SET finish_at = COALESCE(finish_at, NOW())
-                    WHERE id = $1 AND is_locked;",
+                    WHERE id = $1 AND start_at IS NOT NULL;",
                     team_id
                 )
                 .execute(&mut *tx)
@@ -1468,15 +1468,24 @@ pub async fn submit_answer(
                 submit_ctime_at
             };
 
-            let result = sqlx::query!(
-                "UPDATE rb_team SET is_locked = TRUE
-                WHERE id = $1 AND NOT is_locked;",
-                team_id
+            let started = sqlx::query_scalar!(
+                r#"WITH current AS (
+                    SELECT start_at FROM rb_team WHERE id = $1 FOR UPDATE
+                ), updated AS (
+                    UPDATE rb_team
+                    SET is_locked = TRUE, start_at = COALESCE(start_at, $2)
+                    WHERE id = $1
+                    RETURNING id
+                )
+                SELECT current.start_at IS NULL AS "started!"
+                FROM current JOIN updated ON TRUE"#,
+                team_id,
+                submit_ctime_at
             )
-            .execute(&mut *tx)
+            .fetch_one(&mut *tx)
             .await?;
 
-            if result.rows_affected() > 0 {
+            if started {
                 db::content::mark_team_dirty_conn(&mut tx, team_id).await?;
                 content_changed = true;
                 db::event_log::insert_conn(
@@ -1767,7 +1776,7 @@ async fn team_gate_state_conn(
     team_id: i32,
 ) -> Result<Option<RbPuzzleStates>, RbInternalError> {
     let team = sqlx::query!(
-        "SELECT game_id, is_locked FROM rb_team WHERE id = $1",
+        "SELECT game_id, start_at FROM rb_team WHERE id = $1",
         team_id
     )
     .fetch_optional(&mut *conn)
@@ -1836,7 +1845,7 @@ async fn team_gate_state_conn(
         round_slugs,
         round_puzzles,
         triggers,
-        game_started: team.is_locked,
+        game_started: team.start_at.is_some(),
     }))
 }
 
@@ -1894,7 +1903,7 @@ pub async fn refresh_team_hint_enablements(
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
     let info = sqlx::query!(
-        "SELECT t.game_id, t.is_locked, tp.puzzle_id AS \"puzzle_id?\"
+        "SELECT t.game_id, t.start_at, tp.puzzle_id AS \"puzzle_id?\"
         FROM rb_team t
         LEFT JOIN rb_team_puzzle tp ON tp.team_id = t.id AND tp.state >= 1
         WHERE t.id = $1;",
@@ -1982,7 +1991,7 @@ pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>
         round_slugs,
         round_puzzles,
         triggers,
-        game_started: info[0].is_locked,
+        game_started: info[0].start_at.is_some(),
     };
 
     let mut unlocks: Vec<i32> = Vec::new();
@@ -2123,7 +2132,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
     }
 
     let candidate_rows = sqlx::query!(
-        "SELECT t.id, t.is_locked, solved.puzzle_id AS \"solved_puzzle_id?\"
+        "SELECT t.id, t.start_at, solved.puzzle_id AS \"solved_puzzle_id?\"
         FROM rb_team t
         LEFT JOIN rb_team_puzzle current
             ON current.team_id = t.id AND current.puzzle_id = $1
@@ -2139,10 +2148,10 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
 
     let mut eligible_team_ids = Vec::new();
     let mut current_team_id: Option<i32> = None;
-    let mut current_team_locked = false;
+    let mut current_team_started = false;
     let mut solved = HashSet::new();
 
-    let mut flush_team = |team_id: Option<i32>, team_locked: bool, solved: &HashSet<i32>| {
+    let mut flush_team = |team_id: Option<i32>, team_started: bool, solved: &HashSet<i32>| {
         let Some(team_id) = team_id else {
             return;
         };
@@ -2152,7 +2161,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
             round_slugs: round_slugs.clone(),
             round_puzzles: round_puzzles.clone(),
             triggers: team_triggers.get(&team_id).cloned().unwrap_or_default(),
-            game_started: team_locked,
+            game_started: team_started,
         };
         let eligible = compiled_unlock_cond
             .as_ref()
@@ -2164,9 +2173,9 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
 
     for row in candidate_rows {
         if current_team_id != Some(row.id) {
-            flush_team(current_team_id, current_team_locked, &solved);
+            flush_team(current_team_id, current_team_started, &solved);
             current_team_id = Some(row.id);
-            current_team_locked = row.is_locked;
+            current_team_started = row.start_at.is_some();
             solved.clear();
         }
 
@@ -2174,7 +2183,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
             solved.insert(solved_puzzle_id);
         }
     }
-    flush_team(current_team_id, current_team_locked, &solved);
+    flush_team(current_team_id, current_team_started, &solved);
 
     if eligible_team_ids.is_empty() {
         return Ok(Vec::new());

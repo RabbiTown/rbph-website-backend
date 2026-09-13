@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT game_id, is_locked FROM rb_team WHERE id = $1",
+  "query": "SELECT game_id, start_at FROM rb_team WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -10,8 +10,8 @@
       },
       {
         "ordinal": 1,
-        "name": "is_locked",
-        "type_info": "Bool"
+        "name": "start_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -21,8 +21,8 @@
     },
     "nullable": [
       false,
-      false
+      true
     ]
   },
-  "hash": "a9dee43591353178f55d8456dd2a960e31519817cb40f19a62015ab20d267332"
+  "hash": "db9cc3141e579a839e6437e8d1bbe4399782ccd073a1d5a85cf42d5750787d3d"
 }

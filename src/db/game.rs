@@ -291,10 +291,7 @@ pub async fn create_currency(
         "INSERT INTO rb_team_currency (team_id, currency_id, amount, hidden)
         SELECT t.id, $2, $3, $4 FROM rb_team t
         WHERE t.game_id = $1
-            AND EXISTS (
-                SELECT 1 FROM rb_submission s
-                WHERE s.team_id = t.id AND s.saction = 3
-            )
+            AND t.start_at IS NOT NULL
         ON CONFLICT (team_id, currency_id) DO NOTHING;",
         game_id,
         currency.id,

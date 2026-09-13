@@ -201,13 +201,22 @@ async fn update(
     {
         return RbError::bad_req(TeamAdminResult::Invalid.into()).http_err();
     }
-    let team = db::team::admin_update(&app.db, path.game_id, path.team_id, actor.uid, &req).await?;
-    let Some(team) = team else {
-        return RbError::not_found()
-            .code(TeamAdminResult::NotFound.into())
-            .http_err();
-    };
+    let team =
+        match db::team::admin_update(&app.db, path.game_id, path.team_id, actor.uid, &req).await? {
+            db::team::AdminTeamUpdateResult::Ok(team) => *team,
+            db::team::AdminTeamUpdateResult::Invalid => {
+                return RbError::bad_req(TeamAdminResult::Invalid.into()).http_err();
+            }
+            db::team::AdminTeamUpdateResult::NotFound => {
+                return RbError::not_found()
+                    .code(TeamAdminResult::NotFound.into())
+                    .http_err();
+            }
+        };
     db::cache::invalidate_team_info(&app, path.team_id).await?;
+    if req.is_started == Some(true) {
+        db::puzzle::unlock_new_puzzles(&app, path.team_id).await?;
+    }
     db::board::LEADER_BOARD_CACHE
         .invalidate_game(&app.db, path.game_id)
         .await?;

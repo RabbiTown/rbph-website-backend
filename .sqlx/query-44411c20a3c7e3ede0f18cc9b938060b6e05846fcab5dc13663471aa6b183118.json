@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_hint (\n            sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id, cost_amount,\n            backend_function, puzzle_id\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, p.id\n        FROM rb_puzzle p\n        WHERE p.id = $1\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, puzzle_id, ctime_at;",
+  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown,\n                enable_cond, cooldown_after_enable, cost_id,\n                cost_amount, backend_function, triggers, puzzle_id, ctime_at\n            FROM rb_hint\n            ORDER BY puzzle_id, sort, id;",
   "describe": {
     "columns": [
       {
@@ -65,30 +65,22 @@
       },
       {
         "ordinal": 12,
+        "name": "triggers",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 13,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": [
-        "Int4",
-        "Int4",
-        "Varchar",
-        "Bool",
-        "Text",
-        "Int2",
-        "Int4",
-        "Text",
-        "Bool",
-        "Int4",
-        "Int8",
-        "Varchar"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -104,8 +96,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "f93d92a0fa4f9286880fef2f293ab788f12c6bedd3d7257c58362bd93a27ac51"
+  "hash": "44411c20a3c7e3ede0f18cc9b938060b6e05846fcab5dc13663471aa6b183118"
 }

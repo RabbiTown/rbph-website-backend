@@ -283,6 +283,14 @@ struct SyncDueHintsResponse {
     next_unlock_at: Option<OffsetDateTime>,
 }
 
+#[derive(Serialize)]
+struct PurchaseHintResponse {
+    #[serde(flatten)]
+    hint: db::puzzle::RbHintTeamStateShowData,
+    unlocks: Vec<PuzzleUnlockInfo>,
+    content_changed: bool,
+}
+
 async fn sync_due_hints(
     path: web::Path<PuzzlePathInfo>,
     user: AuthUser,
@@ -321,8 +329,28 @@ async fn purchase_hint(
         }
         db::puzzle::PurchaseHintResult::Ok {
             result,
+            unlocks,
+            content_changed,
             backend_events,
         } => {
+            let unlock_rows = sqlx::query_as!(
+                PuzzleUnlockInfo,
+                "SELECT p.id, p.slug, p.title, p.round_id, r.slug AS round_slug
+                FROM rb_puzzle p
+                JOIN rb_round r ON r.id = p.round_id
+                JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id
+                JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = $2
+                WHERE p.id = ANY($1)
+                    AND tp.state >= 0
+                    AND rp.release_at <= NOW()
+                ORDER BY r.sort, r.id, (p.id IS DISTINCT FROM r.puzzle), p.sort, p.id",
+                &unlocks,
+                team_id
+            )
+            .fetch_all(&app.db)
+            .await
+            .map_err(RbInternalError::from)?;
+            let sync_unlocks = unlock_rows.clone();
             tokio::spawn(async move {
                 if let Err(error) = app
                     .sync_hub
@@ -332,6 +360,8 @@ async fn purchase_hint(
                             team_id,
                             user_id: user.uid,
                             hint_id: path.hint_id,
+                            unlocks: sync_unlocks,
+                            content_changed,
                             sid,
                         },
                     )
@@ -348,7 +378,11 @@ async fn purchase_hint(
                 }
             });
 
-            Ok(HttpResponse::Ok().json(result))
+            Ok(HttpResponse::Ok().json(PurchaseHintResponse {
+                hint: result,
+                unlocks: unlock_rows,
+                content_changed,
+            }))
         }
     }
 }

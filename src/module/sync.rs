@@ -380,6 +380,12 @@ impl SyncHub {
         if let Some(sid) = event.sid {
             sync["sid"] = json!(sid);
         }
+        if !event.unlocks.is_empty() {
+            sync["unlocks"] = json!(event.unlocks);
+        }
+        if event.content_changed {
+            sync["content_changed"] = json!(true);
+        }
 
         self.publish_team(
             db_pool,
@@ -896,6 +902,8 @@ pub struct PuzzleHintUnlockedSync {
     pub team_id: i32,
     pub user_id: i32,
     pub hint_id: i32,
+    pub unlocks: Vec<PuzzleUnlockInfo>,
+    pub content_changed: bool,
     pub sid: Option<String>,
 }
 

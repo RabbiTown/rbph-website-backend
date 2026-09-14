@@ -71,6 +71,7 @@ fn validate_basic(
     cooldown: Option<i32>,
     cost_amount: Option<i64>,
     backend_function: Option<&str>,
+    triggers: Option<&[String]>,
 ) -> bool {
     title.is_none_or(|value| !value.trim().is_empty() && value.chars().count() <= 120)
         && content.is_none_or(|_| true)
@@ -78,6 +79,13 @@ fn validate_basic(
         && cooldown.is_none_or(|value| value >= 0)
         && cost_amount.is_none_or(|value| value >= 0)
         && backend_function.is_none_or(validate_backend_function)
+        && triggers.is_none_or(validate_triggers)
+}
+
+fn validate_triggers(values: &[String]) -> bool {
+    values
+        .iter()
+        .all(|value| crate::game::judge::valid_trigger_key(value))
 }
 
 fn validate_backend_function(value: &str) -> bool {
@@ -106,6 +114,7 @@ async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool
         Some(data.cooldown),
         Some(data.cost_amount),
         data.backend_function.as_deref(),
+        Some(&data.triggers),
     ) {
         return Ok(false);
     }
@@ -145,6 +154,7 @@ async fn validate_update(
             .as_ref()
             .map(|value| value.as_deref())
             .unwrap_or(current.backend_function.as_deref()),
+        data.triggers.as_deref(),
     ) {
         return Ok(false);
     }
@@ -311,4 +321,20 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .route("/{hint_id}", web::patch().to(edit))
             .route("/{hint_id}", web::delete().to(delete)),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_triggers;
+
+    #[test]
+    fn hint_triggers_use_gate_trigger_key_rules() {
+        assert!(validate_triggers(&[
+            "hintUnlocked".to_string(),
+            "extra-content_2".to_string(),
+        ]));
+        assert!(!validate_triggers(&["2-invalid".to_string()]));
+        assert!(!validate_triggers(&["contains space".to_string()]));
+        assert!(!validate_triggers(&["a".repeat(65)]));
+    }
 }

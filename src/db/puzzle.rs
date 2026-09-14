@@ -2490,6 +2490,8 @@ pub enum PurchaseHintResult {
     Unavailable,
     Ok {
         result: RbHintTeamStateShowData,
+        unlocks: Vec<i32>,
+        content_changed: bool,
         backend_events: Vec<crate::module::sync::PuzzleBackendEventSync>,
     },
 }
@@ -2518,7 +2520,7 @@ pub async fn purchase_hint(
     let info = sqlx::query!(
         "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,
             h.puzzle_id, p.round_id, p.title AS puzzle_title,
-            h.title AS hint_title, h.cost_id, h.cost_amount, h.backend_function
+            h.title AS hint_title, h.cost_id, h.cost_amount, h.backend_function, h.triggers
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_round r ON r.id = p.round_id
@@ -2697,6 +2699,30 @@ pub async fn purchase_hint(
     .fetch_one(&mut *tx)
     .await?;
 
+    let trigger_inserted = if info.triggers.is_empty() {
+        false
+    } else {
+        let inserted = sqlx::query!(
+            "INSERT INTO rb_team_puzzle_trigger
+                (team_id, puzzle_id, trigger_key, source_hint_id)
+            SELECT $1, $2, trigger_key, $4
+            FROM UNNEST($3::text[]) AS trigger_key
+            ON CONFLICT DO NOTHING;",
+            info.team_id,
+            info.puzzle_id,
+            &info.triggers,
+            hint_id
+        )
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() > 0 {
+            db::content::mark_team_dirty_conn(&mut tx, info.team_id).await?;
+            true
+        } else {
+            false
+        }
+    };
+
     db::event_log::insert_conn(
         &mut tx,
         db::event_log::EventLogInput {
@@ -2740,8 +2766,19 @@ pub async fn purchase_hint(
     db::cache::invalidate_team_hints(app, info.team_id, info.puzzle_id).await?;
 
     tx.commit().await?;
+
+    let unlocks = if trigger_inserted {
+        unlock_new_puzzles(app, info.team_id).await?
+    } else {
+        vec![]
+    };
+    if trigger_inserted {
+        refresh_team_hint_enablements(&app.db, info.team_id, None).await?;
+    }
     Ok(PurchaseHintResult::Ok {
         result,
+        unlocks,
+        content_changed: trigger_inserted,
         backend_events,
     })
 }
@@ -3208,6 +3245,7 @@ pub struct RbHintAdminData {
     pub cost_id: Option<i32>,
     pub cost_amount: i64,
     pub backend_function: Option<String>,
+    pub triggers: Vec<String>,
     pub puzzle_id: i32,
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     pub ctime_at: OffsetDateTime,
@@ -3232,6 +3270,8 @@ pub struct RbHintCreateData {
     #[serde(default)]
     pub cost_amount: i64,
     pub backend_function: Option<String>,
+    #[serde(default)]
+    pub triggers: Vec<String>,
     pub puzzle_id: i32,
 }
 
@@ -3260,6 +3300,7 @@ pub struct RbHintUpdateData {
         deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
     )]
     pub backend_function: Option<Option<String>>,
+    pub triggers: Option<Vec<String>>,
     pub puzzle_id: Option<i32>,
 }
 
@@ -3272,7 +3313,7 @@ pub async fn admin_list_hints(
             RbHintAdminData,
             "SELECT id, sort, title, title_hidden, content, content_type, cooldown,
                 enable_cond, cooldown_after_enable, cost_id,
-                cost_amount, backend_function, puzzle_id, ctime_at
+                cost_amount, backend_function, triggers, puzzle_id, ctime_at
             FROM rb_hint
             WHERE puzzle_id = $1
             ORDER BY sort, id;",
@@ -3285,7 +3326,7 @@ pub async fn admin_list_hints(
             RbHintAdminData,
             "SELECT id, sort, title, title_hidden, content, content_type, cooldown,
                 enable_cond, cooldown_after_enable, cost_id,
-                cost_amount, backend_function, puzzle_id, ctime_at
+                cost_amount, backend_function, triggers, puzzle_id, ctime_at
             FROM rb_hint
             ORDER BY puzzle_id, sort, id;"
         )
@@ -3304,7 +3345,7 @@ pub async fn admin_get_hint(
         RbHintAdminData,
         "SELECT id, sort, title, title_hidden, content, content_type, cooldown,
             enable_cond, cooldown_after_enable, cost_id,
-            cost_amount, backend_function, puzzle_id, ctime_at
+            cost_amount, backend_function, triggers, puzzle_id, ctime_at
         FROM rb_hint
         WHERE id = $1;",
         hint_id
@@ -3324,14 +3365,14 @@ pub async fn admin_create_hint(
         "INSERT INTO rb_hint (
             sort, title, title_hidden, content, content_type, cooldown,
             enable_cond, cooldown_after_enable, cost_id, cost_amount,
-            backend_function, puzzle_id
+            backend_function, triggers, puzzle_id
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, p.id
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, p.id
         FROM rb_puzzle p
         WHERE p.id = $1
         RETURNING id, sort, title, title_hidden, content, content_type, cooldown,
             enable_cond, cooldown_after_enable, cost_id,
-            cost_amount, backend_function, puzzle_id, ctime_at;",
+            cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
         data.puzzle_id,
         data.sort,
         data.title,
@@ -3344,6 +3385,7 @@ pub async fn admin_create_hint(
         data.cost_id,
         data.cost_amount,
         data.backend_function,
+        &data.triggers,
     )
     .fetch_optional(pool)
     .await?;
@@ -3383,16 +3425,17 @@ pub async fn admin_update_hint(
                 WHEN $13 AND $14::TEXT IS NULL THEN FALSE
                 ELSE COALESCE($15, h.cooldown_after_enable)
             END,
+            triggers = COALESCE($16, h.triggers),
             puzzle_id = COALESCE((
-                SELECT p.id FROM rb_puzzle p WHERE p.id = $16::INT
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $17::INT
             ), h.puzzle_id)
         WHERE h.id = $1
-            AND ($16::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_puzzle p WHERE p.id = $16::INT
+            AND ($17::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $17::INT
             ))
         RETURNING id, sort, title, title_hidden, content, content_type, cooldown,
             enable_cond, cooldown_after_enable, cost_id,
-            cost_amount, backend_function, puzzle_id, ctime_at;",
+            cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
         hint_id,
         data.sort,
         data.title,
@@ -3408,6 +3451,7 @@ pub async fn admin_update_hint(
         enable_cond_is_set,
         enable_cond,
         data.cooldown_after_enable,
+        data.triggers.as_deref(),
         data.puzzle_id
     )
     .fetch_optional(pool)

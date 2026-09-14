@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            title_hidden = COALESCE($4, h.title_hidden),\n            content = COALESCE($5, h.content),\n            content_type = COALESCE($6, h.content_type),\n            cooldown = COALESCE($7, h.cooldown),\n            cost_id = CASE WHEN $8 THEN $9 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $8 AND $9::INT IS NULL THEN 0\n                ELSE COALESCE($10, h.cost_amount)\n            END,\n            backend_function = CASE WHEN $11 THEN $12 ELSE h.backend_function END,\n            enable_cond = CASE WHEN $13 THEN $14 ELSE h.enable_cond END,\n            cooldown_after_enable = CASE\n                WHEN $13 AND $14::TEXT IS NULL THEN FALSE\n                ELSE COALESCE($15, h.cooldown_after_enable)\n            END,\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $16::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($16::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $16::INT\n            ))\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, puzzle_id, ctime_at;",
+  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            title_hidden = COALESCE($4, h.title_hidden),\n            content = COALESCE($5, h.content),\n            content_type = COALESCE($6, h.content_type),\n            cooldown = COALESCE($7, h.cooldown),\n            cost_id = CASE WHEN $8 THEN $9 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $8 AND $9::INT IS NULL THEN 0\n                ELSE COALESCE($10, h.cost_amount)\n            END,\n            backend_function = CASE WHEN $11 THEN $12 ELSE h.backend_function END,\n            enable_cond = CASE WHEN $13 THEN $14 ELSE h.enable_cond END,\n            cooldown_after_enable = CASE\n                WHEN $13 AND $14::TEXT IS NULL THEN FALSE\n                ELSE COALESCE($15, h.cooldown_after_enable)\n            END,\n            triggers = COALESCE($16, h.triggers),\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $17::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($17::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $17::INT\n            ))\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -65,11 +65,16 @@
       },
       {
         "ordinal": 12,
+        "name": "triggers",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 13,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -91,6 +96,7 @@
         "Bool",
         "Text",
         "Bool",
+        "TextArray",
         "Int4"
       ]
     },
@@ -108,8 +114,9 @@
       false,
       true,
       false,
+      false,
       false
     ]
   },
-  "hash": "a9df0744e91f3812faff9a1c188e917dc143bc928b297f75064c0a62f78f7a6f"
+  "hash": "f3ea6d9af961fd3a43b73f804fb9af97dfdf122927f18d779c2c806daa455c75"
 }

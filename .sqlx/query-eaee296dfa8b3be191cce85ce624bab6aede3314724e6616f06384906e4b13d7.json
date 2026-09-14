@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, triggers, puzzle_id, ctime_at\n        FROM rb_hint\n        WHERE id = $1;",
+  "query": "SELECT id, sort, title, content, content_type, cooldown,\n                title_display_condition, display_condition,\n                enable_cond, cooldown_after_enable, cost_id,\n                cost_amount, backend_function, triggers, puzzle_id, ctime_at\n            FROM rb_hint\n            WHERE puzzle_id = $1\n            ORDER BY sort, id;",
   "describe": {
     "columns": [
       {
@@ -20,61 +20,66 @@
       },
       {
         "ordinal": 3,
-        "name": "title_hidden",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 4,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "content_type",
         "type_info": "Int2"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "cooldown",
         "type_info": "Int4"
       },
       {
+        "ordinal": 6,
+        "name": "title_display_condition",
+        "type_info": "Int2"
+      },
+      {
         "ordinal": 7,
+        "name": "display_condition",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 8,
         "name": "enable_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "cooldown_after_enable",
         "type_info": "Bool"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "cost_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "cost_amount",
         "type_info": "Int8"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "backend_function",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "triggers",
         "type_info": "TextArray"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
@@ -92,6 +97,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       true,
@@ -102,5 +108,5 @@
       false
     ]
   },
-  "hash": "62c82871c4cf62696ca5074f3d662ee0e7f87a334918e295030d1eb1752c69a8"
+  "hash": "eaee296dfa8b3be191cce85ce624bab6aede3314724e6616f06384906e4b13d7"
 }

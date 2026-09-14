@@ -276,11 +276,11 @@ pub enum PurchaseHintResult {
 }
 
 #[derive(Serialize)]
-struct SyncDueHintsResponse {
+struct SyncHintCooldownsResponse {
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     server_time: OffsetDateTime,
     #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
-    next_unlock_at: Option<OffsetDateTime>,
+    next_cooldown_at: Option<OffsetDateTime>,
 }
 
 #[derive(Serialize)]
@@ -291,17 +291,18 @@ struct PurchaseHintResponse {
     content_changed: bool,
 }
 
-async fn sync_due_hints(
+async fn sync_hint_cooldowns(
     path: web::Path<PuzzlePathInfo>,
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
-    let next_unlock_at = db::puzzle::sync_due_hints(&app.db, team_id, path.puzzle_id).await?;
+    let next_cooldown_at =
+        db::puzzle::sync_hint_cooldowns(&app.db, team_id, path.puzzle_id).await?;
 
-    Ok(HttpResponse::Ok().json(SyncDueHintsResponse {
+    Ok(HttpResponse::Ok().json(SyncHintCooldownsResponse {
         server_time: OffsetDateTime::now_utc(),
-        next_unlock_at,
+        next_cooldown_at,
     }))
 }
 
@@ -488,7 +489,7 @@ pub fn puzzles_config(cfg: &mut web::ServiceConfig) {
             .route("/contents", web::get().to(get_contents))
             .route("/submit", web::post().to(judge_puzzle))
             .route("/hints", web::get().to(get_puzzle_hints))
-            .route("/hints/sync", web::post().to(sync_due_hints))
+            .route("/hints/sync", web::post().to(sync_hint_cooldowns))
             .route("/submissions", web::get().to(get_puzzle_submissions))
             .configure(puzzle_backend::config)
             .service(

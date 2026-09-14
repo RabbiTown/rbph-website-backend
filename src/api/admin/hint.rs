@@ -64,22 +64,33 @@ fn validate_content_type(value: i16) -> bool {
     )
 }
 
-fn validate_basic(
-    title: Option<&str>,
-    content: Option<&str>,
+struct HintBasicValidation<'a> {
+    title: Option<&'a str>,
     content_type: Option<i16>,
     cooldown: Option<i32>,
+    title_display_condition: Option<i16>,
+    display_condition: Option<i16>,
     cost_amount: Option<i64>,
-    backend_function: Option<&str>,
-    triggers: Option<&[String]>,
-) -> bool {
-    title.is_none_or(|value| !value.trim().is_empty() && value.chars().count() <= 120)
-        && content.is_none_or(|_| true)
-        && content_type.is_none_or(validate_content_type)
-        && cooldown.is_none_or(|value| value >= 0)
-        && cost_amount.is_none_or(|value| value >= 0)
-        && backend_function.is_none_or(validate_backend_function)
-        && triggers.is_none_or(validate_triggers)
+    backend_function: Option<&'a str>,
+    triggers: Option<&'a [String]>,
+}
+
+fn validate_basic(data: HintBasicValidation<'_>) -> bool {
+    data.title
+        .is_none_or(|value| !value.trim().is_empty() && value.chars().count() <= 120)
+        && data.content_type.is_none_or(validate_content_type)
+        && data.cooldown.is_none_or(|value| value >= 0)
+        && data
+            .title_display_condition
+            .is_none_or(valid_display_condition)
+        && data.display_condition.is_none_or(valid_display_condition)
+        && data.cost_amount.is_none_or(|value| value >= 0)
+        && data.backend_function.is_none_or(validate_backend_function)
+        && data.triggers.is_none_or(validate_triggers)
+}
+
+fn valid_display_condition(value: i16) -> bool {
+    (0..=3).contains(&value)
 }
 
 fn validate_triggers(values: &[String]) -> bool {
@@ -107,15 +118,16 @@ async fn get_hint_game(app: &AppState, puzzle_id: i32) -> Result<Option<i32>, Rb
 }
 
 async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool, RbInternalError> {
-    if !validate_basic(
-        Some(&data.title),
-        Some(&data.content),
-        Some(data.content_type),
-        Some(data.cooldown),
-        Some(data.cost_amount),
-        data.backend_function.as_deref(),
-        Some(&data.triggers),
-    ) {
+    if !validate_basic(HintBasicValidation {
+        title: Some(&data.title),
+        content_type: Some(data.content_type),
+        cooldown: Some(data.cooldown),
+        title_display_condition: Some(data.title_display_condition),
+        display_condition: Some(data.display_condition),
+        cost_amount: Some(data.cost_amount),
+        backend_function: data.backend_function.as_deref(),
+        triggers: Some(&data.triggers),
+    }) {
         return Ok(false);
     }
     if !validate_enable_condition(data.enable_cond.as_deref())
@@ -144,18 +156,20 @@ async fn validate_update(
     current: &RbHintAdminData,
     data: &RbHintUpdateData,
 ) -> Result<bool, RbInternalError> {
-    if !validate_basic(
-        data.title.as_deref(),
-        data.content.as_deref(),
-        data.content_type,
-        data.cooldown,
-        data.cost_amount,
-        data.backend_function
+    if !validate_basic(HintBasicValidation {
+        title: data.title.as_deref(),
+        content_type: data.content_type,
+        cooldown: data.cooldown,
+        title_display_condition: data.title_display_condition,
+        display_condition: data.display_condition,
+        cost_amount: data.cost_amount,
+        backend_function: data
+            .backend_function
             .as_ref()
             .map(|value| value.as_deref())
             .unwrap_or(current.backend_function.as_deref()),
-        data.triggers.as_deref(),
-    ) {
+        triggers: data.triggers.as_deref(),
+    }) {
         return Ok(false);
     }
 

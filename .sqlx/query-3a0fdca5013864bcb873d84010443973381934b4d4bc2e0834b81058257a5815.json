@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO rb_hint (\n            sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id, cost_amount,\n            backend_function, triggers, puzzle_id\n        )\n        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, p.id\n        FROM rb_puzzle p\n        WHERE p.id = $1\n        RETURNING id, sort, title, title_hidden, content, content_type, cooldown,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
+  "query": "SELECT id, sort, title, content, content_type, cooldown,\n            title_display_condition, display_condition,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, triggers, puzzle_id, ctime_at\n        FROM rb_hint\n        WHERE id = $1;",
   "describe": {
     "columns": [
       {
@@ -20,83 +20,77 @@
       },
       {
         "ordinal": 3,
-        "name": "title_hidden",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 4,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "content_type",
         "type_info": "Int2"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "cooldown",
         "type_info": "Int4"
       },
       {
+        "ordinal": 6,
+        "name": "title_display_condition",
+        "type_info": "Int2"
+      },
+      {
         "ordinal": 7,
+        "name": "display_condition",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 8,
         "name": "enable_cond",
         "type_info": "Text"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "cooldown_after_enable",
         "type_info": "Bool"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "cost_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "cost_amount",
         "type_info": "Int8"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "backend_function",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "triggers",
         "type_info": "TextArray"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "puzzle_id",
         "type_info": "Int4"
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "ctime_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Int4",
-        "Int4",
-        "Varchar",
-        "Bool",
-        "Text",
-        "Int2",
-        "Int4",
-        "Text",
-        "Bool",
-        "Int4",
-        "Int8",
-        "Varchar",
-        "TextArray"
+        "Int4"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -114,5 +108,5 @@
       false
     ]
   },
-  "hash": "da3e1d08e392071fa420b36e702f3b8c61339962a1c2fafe299e6e56a5b746fa"
+  "hash": "3a0fdca5013864bcb873d84010443973381934b4d4bc2e0834b81058257a5815"
 }

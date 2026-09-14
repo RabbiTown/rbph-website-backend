@@ -11,6 +11,8 @@ struct SystemStatusResponse {
     leaderboard_refresh_interval_seconds: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     footer_additional_info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    no_game_message: Option<String>,
     maintenance_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     maintenance_message: Option<String>,
@@ -25,6 +27,8 @@ async fn status(app: web::Data<AppState>) -> Result<HttpResponse> {
         leaderboard_refresh_interval_seconds: settings.leaderboard_refresh_interval_seconds,
         footer_additional_info: (!settings.footer_additional_info.is_empty())
             .then(|| settings.footer_additional_info.clone()),
+        no_game_message: (!settings.no_game_message.is_empty())
+            .then(|| settings.no_game_message.clone()),
         maintenance_enabled: settings.maintenance_enabled,
         maintenance_message: settings
             .maintenance_enabled

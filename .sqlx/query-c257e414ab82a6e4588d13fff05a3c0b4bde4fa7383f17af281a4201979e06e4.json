@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE rb_system_settings SET\n            registration_open = $1,\n            require_email_verification = $2,\n            captcha_login_required = $3,\n            captcha_registration_required = $4,\n            max_sessions = $5,\n            max_websocket_connections = $6,\n            leaderboard_refresh_interval_seconds = $7,\n            footer_additional_info = $8,\n            maintenance_enabled = $9,\n            maintenance_message = $10,\n            updated_by = $11,\n            updated_at = CURRENT_TIMESTAMP\n        WHERE singleton = TRUE\n        RETURNING registration_open, require_email_verification,\n            captcha_login_required, captcha_registration_required, max_sessions,\n            max_websocket_connections, leaderboard_refresh_interval_seconds,\n            footer_additional_info, maintenance_enabled, maintenance_message, updated_by, updated_at",
+  "query": "SELECT registration_open, require_email_verification,\n            captcha_login_required, captcha_registration_required, max_sessions,\n            max_websocket_connections, leaderboard_refresh_interval_seconds,\n            footer_additional_info, no_game_message, maintenance_enabled, maintenance_message,\n            updated_by, updated_at\n        FROM rb_system_settings WHERE singleton = TRUE",
   "describe": {
     "columns": [
       {
@@ -45,41 +45,35 @@
       },
       {
         "ordinal": 8,
+        "name": "no_game_message",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
         "name": "maintenance_enabled",
         "type_info": "Bool"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "maintenance_message",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "updated_by",
         "type_info": "Int4"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
-      "Left": [
-        "Bool",
-        "Bool",
-        "Bool",
-        "Bool",
-        "Int2",
-        "Int2",
-        "Int4",
-        "Varchar",
-        "Bool",
-        "Varchar",
-        "Int4"
-      ]
+      "Left": []
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -94,5 +88,5 @@
       false
     ]
   },
-  "hash": "9cd0f8dd7583ab89c8030456ee30e91ecb7050ddf95ebb59477dd97cb5cb7e1f"
+  "hash": "c257e414ab82a6e4588d13fff05a3c0b4bde4fa7383f17af281a4201979e06e4"
 }

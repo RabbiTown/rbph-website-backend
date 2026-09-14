@@ -13,6 +13,7 @@ pub struct SystemSettings {
     pub max_websocket_connections: i16,
     pub leaderboard_refresh_interval_seconds: i32,
     pub footer_additional_info: String,
+    pub no_game_message: String,
     pub maintenance_enabled: bool,
     pub maintenance_message: String,
     pub updated_by: Option<i32>,
@@ -29,6 +30,7 @@ pub struct SystemSettingsUpdate<'a> {
     pub max_websocket_connections: i16,
     pub leaderboard_refresh_interval_seconds: i32,
     pub footer_additional_info: &'a str,
+    pub no_game_message: &'a str,
     pub maintenance_enabled: bool,
     pub maintenance_message: &'a str,
     pub updated_by: i32,
@@ -40,7 +42,8 @@ pub async fn get(pool: &DbPool) -> Result<SystemSettings, RbInternalError> {
         "SELECT registration_open, require_email_verification,
             captcha_login_required, captcha_registration_required, max_sessions,
             max_websocket_connections, leaderboard_refresh_interval_seconds,
-            footer_additional_info, maintenance_enabled, maintenance_message, updated_by, updated_at
+            footer_additional_info, no_game_message, maintenance_enabled, maintenance_message,
+            updated_by, updated_at
         FROM rb_system_settings WHERE singleton = TRUE"
     )
     .fetch_one(pool)
@@ -86,15 +89,17 @@ pub async fn update(
             max_websocket_connections = $6,
             leaderboard_refresh_interval_seconds = $7,
             footer_additional_info = $8,
-            maintenance_enabled = $9,
-            maintenance_message = $10,
-            updated_by = $11,
+            no_game_message = $9,
+            maintenance_enabled = $10,
+            maintenance_message = $11,
+            updated_by = $12,
             updated_at = CURRENT_TIMESTAMP
         WHERE singleton = TRUE
         RETURNING registration_open, require_email_verification,
             captcha_login_required, captcha_registration_required, max_sessions,
             max_websocket_connections, leaderboard_refresh_interval_seconds,
-            footer_additional_info, maintenance_enabled, maintenance_message, updated_by, updated_at",
+            footer_additional_info, no_game_message, maintenance_enabled, maintenance_message,
+            updated_by, updated_at",
         data.registration_open,
         data.require_email_verification,
         data.captcha_login_required,
@@ -103,6 +108,7 @@ pub async fn update(
         data.max_websocket_connections,
         data.leaderboard_refresh_interval_seconds,
         data.footer_additional_info,
+        data.no_game_message,
         data.maintenance_enabled,
         data.maintenance_message,
         data.updated_by,

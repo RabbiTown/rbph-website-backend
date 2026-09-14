@@ -19,6 +19,7 @@ struct SystemSettingsRequest {
     max_websocket_connections: i16,
     leaderboard_refresh_interval_seconds: i32,
     footer_additional_info: String,
+    no_game_message: String,
     maintenance_enabled: bool,
     maintenance_message: String,
 }
@@ -47,6 +48,7 @@ fn valid_request(
         && (1..=20).contains(&body.max_websocket_connections)
         && (1..=86_400).contains(&body.leaderboard_refresh_interval_seconds)
         && body.footer_additional_info.chars().count() <= 1000
+        && body.no_game_message.chars().count() <= 500
         && body.maintenance_message.chars().count() <= 500
         && (!body.require_email_verification || email_delivery_enabled)
         && (!(body.captcha_login_required || body.captcha_registration_required)
@@ -75,6 +77,7 @@ async fn update(
 ) -> Result<HttpResponse> {
     let mut body = body.into_inner();
     body.footer_additional_info = body.footer_additional_info.trim().to_string();
+    body.no_game_message = body.no_game_message.trim().to_string();
     body.maintenance_message = body.maintenance_message.trim().to_string();
     if !valid_request(&body, app.email.is_some(), app.captcha.is_some()) {
         return RbError::bad_req(SystemSettingsResult::Invalid.into()).http_err();
@@ -95,6 +98,7 @@ async fn update(
                     body.leaderboard_refresh_interval_seconds,
                 ),
             footer_additional_info: &body.footer_additional_info,
+            no_game_message: &body.no_game_message,
             maintenance_enabled: body.maintenance_enabled,
             maintenance_message: &body.maintenance_message,
             updated_by: actor.uid,
@@ -106,6 +110,7 @@ async fn update(
         .enforce_connection_limit(settings.max_websocket_connections as usize)
         .await;
     if previous.footer_additional_info != settings.footer_additional_info
+        || previous.no_game_message != settings.no_game_message
         || previous.maintenance_enabled != settings.maintenance_enabled
         || previous.maintenance_message != settings.maintenance_message
     {
@@ -130,6 +135,7 @@ async fn update(
                     "max_websocket_connections": previous.max_websocket_connections != settings.max_websocket_connections,
                     "leaderboard_refresh_interval_seconds": previous.leaderboard_refresh_interval_seconds != settings.leaderboard_refresh_interval_seconds,
                     "footer_additional_info": previous.footer_additional_info != settings.footer_additional_info,
+                    "no_game_message": previous.no_game_message != settings.no_game_message,
                     "maintenance_enabled": previous.maintenance_enabled != settings.maintenance_enabled,
                     "maintenance_message": previous.maintenance_message != settings.maintenance_message,
                 }
@@ -170,6 +176,7 @@ mod tests {
             max_websocket_connections: 5,
             leaderboard_refresh_interval_seconds: 5,
             footer_additional_info: String::new(),
+            no_game_message: String::new(),
             maintenance_enabled: false,
             maintenance_message: String::new(),
         }
@@ -199,6 +206,11 @@ mod tests {
         body.footer_additional_info.push('x');
         assert!(!valid_request(&body, false, false));
         body.footer_additional_info.clear();
+        body.no_game_message = "x".repeat(500);
+        assert!(valid_request(&body, false, false));
+        body.no_game_message.push('x');
+        assert!(!valid_request(&body, false, false));
+        body.no_game_message.clear();
         body.maintenance_enabled = true;
         assert!(valid_request(&body, false, false));
         body.maintenance_message = "x".repeat(500);

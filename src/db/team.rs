@@ -16,6 +16,60 @@ pub struct RbTeamPutData {
     pub game_id: i32,
 }
 
+async fn lock_duplicate_name_policy_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+) -> Result<Option<bool>, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT COALESCE(
+                settings #> '{team,allow_duplicate_names}' = 'true'::JSONB,
+                FALSE
+            ) AS "allow_duplicate_names!"
+        FROM rb_game
+        WHERE id = $1
+        FOR UPDATE;"#,
+        game_id
+    )
+    .fetch_optional(conn)
+    .await?)
+}
+
+async fn duplicate_team_name_exists_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    name: &str,
+    exclude_team_id: Option<i32>,
+) -> Result<bool, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+            SELECT 1
+            FROM rb_team
+            WHERE game_id = $1
+                AND LOWER(BTRIM(name)) = LOWER(BTRIM($2))
+                AND ($3::INT IS NULL OR id <> $3)
+        ) AS "exists!";"#,
+        game_id,
+        name,
+        exclude_team_id
+    )
+    .fetch_one(conn)
+    .await?)
+}
+
+async fn normalized_team_names_equal_conn(
+    conn: &mut PgConnection,
+    left: &str,
+    right: &str,
+) -> Result<bool, RbInternalError> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT LOWER(BTRIM($1)) = LOWER(BTRIM($2)) AS "equal!";"#,
+        left,
+        right
+    )
+    .fetch_one(conn)
+    .await?)
+}
+
 async fn init_team_puzzles_conn(
     conn: &mut PgConnection,
     team_id: i32,
@@ -273,6 +327,7 @@ pub async fn join(
 pub enum TeamCreateResult {
     NotOpen,
     ToMany,
+    NameConflict,
     Ok(i32),
 }
 
@@ -282,6 +337,12 @@ pub async fn user_create(
     data: &RbTeamPutData,
 ) -> Result<TeamCreateResult, RbInternalError> {
     let mut tx = db_pool.begin().await?;
+
+    let Some(allow_duplicate_names) =
+        lock_duplicate_name_policy_conn(&mut tx, data.game_id).await?
+    else {
+        return Ok(TeamCreateResult::NotOpen);
+    };
 
     let team_open = sqlx::query_scalar!(
         "SELECT COALESCE((SELECT gf.state = 1 FROM rb_game_feature gf
@@ -294,6 +355,12 @@ pub async fn user_create(
     .unwrap_or(false);
     if !team_open {
         return Ok(TeamCreateResult::NotOpen);
+    }
+
+    if !allow_duplicate_names
+        && duplicate_team_name_exists_conn(&mut tx, data.game_id, &data.name, None).await?
+    {
+        return Ok(TeamCreateResult::NameConflict);
     }
 
     let team_id = sqlx::query_scalar!(
@@ -446,12 +513,60 @@ pub struct UserUpdateData {
     pub bio: Option<String>,
 }
 
+pub enum UserUpdateResult {
+    Bad,
+    NameConflict,
+    Ok,
+}
+
+struct UserTeamUpdateCurrent {
+    id: i32,
+    name: String,
+    is_locked: bool,
+}
+
 pub async fn user_update(
     app: &AppState,
     game_id: i32,
     user_id: i32,
     data: &UserUpdateData,
-) -> Result<bool, RbInternalError> {
+) -> Result<UserUpdateResult, RbInternalError> {
+    let mut tx = app.db.begin().await?;
+    let Some(allow_duplicate_names) = lock_duplicate_name_policy_conn(&mut tx, game_id).await?
+    else {
+        return Ok(UserUpdateResult::Bad);
+    };
+
+    let current = sqlx::query_as!(
+        UserTeamUpdateCurrent,
+        "SELECT t.id, t.name, t.is_locked
+        FROM rb_team t
+        JOIN rb_team_member tm ON tm.team_id = t.id
+        WHERE tm.user_id = $1 AND tm.game_id = $2 AND tm.is_captain
+        FOR UPDATE OF t;",
+        user_id,
+        game_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        return Ok(UserUpdateResult::Bad);
+    };
+
+    if let Some(name) = &data.name {
+        if current.is_locked {
+            return Ok(UserUpdateResult::Bad);
+        }
+        let normalized_changed =
+            !normalized_team_names_equal_conn(&mut tx, &current.name, name).await?;
+        if normalized_changed
+            && !allow_duplicate_names
+            && duplicate_team_name_exists_conn(&mut tx, game_id, name, Some(current.id)).await?
+        {
+            return Ok(UserUpdateResult::NameConflict);
+        }
+    }
+
     let mut qb = QueryBuilder::new("UPDATE rb_team SET ");
 
     let mut first = true;
@@ -481,32 +596,21 @@ pub async fn user_update(
     }
 
     if first {
-        return Ok(false);
+        return Ok(UserUpdateResult::Bad);
     }
 
-    qb.push(
-        " WHERE id = (SELECT team_id FROM rb_team_member tm
-            WHERE user_id = ",
-    )
-    .push_bind(user_id)
-    .push(" AND game_id = ")
-    .push_bind(game_id)
-    .push(" AND is_captain)");
-
-    if data.name.is_some() {
-        qb.push(" AND NOT is_locked");
-    }
-
-    qb.push(" RETURNING id;");
+    qb.push(" WHERE id = ")
+        .push_bind(current.id)
+        .push(" RETURNING id;");
 
     let result = qb
         .build_query_scalar::<i32>()
-        .fetch_optional(&app.db)
+        .fetch_optional(&mut *tx)
         .await?;
 
     if let Some(team_id) = result {
-        db::event_log::insert_pool(
-            &app.db,
+        db::event_log::insert_conn(
+            &mut tx,
             db::event_log::EventLogInput {
                 event_type: "team.updated",
                 event_scope: i16::from(db::event_log::EventScope::TeamActivity),
@@ -526,11 +630,13 @@ pub async fn user_update(
         )
         .await?;
 
+        tx.commit().await?;
+
         // all member => TeamInfoUpdated
         db::cache::invalidate_team_info(app, team_id).await?;
-        Ok(true)
+        Ok(UserUpdateResult::Ok)
     } else {
-        Ok(false)
+        Ok(UserUpdateResult::Bad)
     }
 }
 

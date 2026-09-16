@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n            SELECT 1\n            FROM rb_team\n            WHERE game_id = $1\n                AND LOWER(BTRIM(name)) = LOWER(BTRIM($2))\n                AND ($3::INT IS NULL OR id <> $3)\n        ) AS \"exists!\";",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "60235fe5ffa3ab42fb3729d9ba05efe78eeace2158385c28f5927baa3babc9da"
+}

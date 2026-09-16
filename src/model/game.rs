@@ -34,6 +34,7 @@ pub struct RbGameSettings {
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct RbGameTeamSettings {
     pub max_members: Option<i32>,
+    pub allow_duplicate_names: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -78,6 +79,7 @@ impl RbGameTeamSettings {
                             max_members > 0 && max_members <= i32::MAX as i64
                         })
                 }
+                "allow_duplicate_names" => value.is_boolean(),
                 _ => false,
             }),
             _ => false,
@@ -269,12 +271,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn game_settings_default_team_is_unlimited() {
+    fn game_settings_default_team_values() {
         assert_eq!(RbGameTeamSettings::default().max_members, None);
+        assert!(!RbGameTeamSettings::default().allow_duplicate_names);
         assert_eq!(
             RbGameSettings::default_value(),
             json!({
-                "team": { "max_members": null },
+                "team": { "max_members": null, "allow_duplicate_names": false },
                 "display": {
                     "staff_nickname": null,
                     "staff_avatar_email": null,
@@ -316,6 +319,21 @@ mod tests {
         assert!(RbGameTeamSettings::validate_patch(
             &json!({ "max_members": 1 })
         ));
+        assert!(RbGameTeamSettings::validate_patch(
+            &json!({ "allow_duplicate_names": true })
+        ));
+        assert!(!RbGameTeamSettings::validate_patch(
+            &json!({ "allow_duplicate_names": "true" })
+        ));
+    }
+
+    #[test]
+    fn missing_duplicate_name_setting_uses_new_game_default() {
+        let settings = RbGameSettings::sanitize(Some(json!({
+            "team": { "max_members": 4 }
+        })));
+
+        assert!(!settings.team.allow_duplicate_names);
     }
 
     #[test]

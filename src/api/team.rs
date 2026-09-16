@@ -49,6 +49,7 @@ struct TeamCreateResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum TeamCreateResult {
+    NameConflict = -4,
     NotOpen = -3,
     Invalid = -2,
     ToMany = -1,
@@ -66,12 +67,16 @@ async fn create_self(
     let req = req.into_inner();
 
     let trimmed_pwd = req.pass.trim();
-    if !PWD_REGEX.is_match(trimmed_pwd) {
+    let trimmed_name = req.name.trim();
+    if trimmed_name.is_empty()
+        || trimmed_name.chars().count() > 40
+        || !PWD_REGEX.is_match(trimmed_pwd)
+    {
         RbError::bad_req(TeamCreateResult::Invalid.into()).err()?
     }
 
     let data = RbTeamPutData {
-        name: req.name.trim().to_string(),
+        name: trimmed_name.to_string(),
         pass: trimmed_pwd.to_string(),
         bio: req.bio,
         game_id: path.game_id,
@@ -83,6 +88,9 @@ async fn create_self(
         }
         TeamCreateDbResult::ToMany => {
             return RbError::conflict(TeamCreateResult::ToMany.into()).http_err();
+        }
+        TeamCreateDbResult::NameConflict => {
+            return RbError::conflict(TeamCreateResult::NameConflict.into()).http_err();
         }
         TeamCreateDbResult::Ok(team_id) => team_id,
     };
@@ -101,6 +109,7 @@ struct TeamUpdateResponse {
 #[repr(i32)]
 #[derive(IntoPrimitive, Serialize_repr)]
 enum TeamUpdateResult {
+    NameConflict = -3,
     Invalid = -2,
     Bad = -1,
     Ok = 0,
@@ -112,15 +121,24 @@ async fn update_self(
     user: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let mut req = req.into_inner();
+    if let Some(name) = &mut req.name {
+        *name = name.trim().to_string();
+    }
     if let Err(e) = req.validate() {
         RbError::bad_req(TeamUpdateResult::Invalid.into())
             .msg(e.to_string())
             .err()?;
     }
 
-    let result = db::team::user_update(&app, path.game_id, user.uid, &req).await?;
-    if !result {
-        RbError::conflict(TeamUpdateResult::Bad.into()).err()?;
+    match db::team::user_update(&app, path.game_id, user.uid, &req).await? {
+        db::team::UserUpdateResult::Bad => {
+            RbError::conflict(TeamUpdateResult::Bad.into()).err()?;
+        }
+        db::team::UserUpdateResult::NameConflict => {
+            RbError::conflict(TeamUpdateResult::NameConflict.into()).err()?;
+        }
+        db::team::UserUpdateResult::Ok => {}
     }
 
     Ok(HttpResponse::Ok().json(TeamUpdateResponse {

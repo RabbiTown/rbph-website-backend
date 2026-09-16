@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LOWER(BTRIM($1)) = LOWER(BTRIM($2)) AS \"equal!\";",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "equal!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7c006d6bb3bcb2a5e5c31bcd442a18c62e5119d80d1883c1398311ca9c7273e5"
+}

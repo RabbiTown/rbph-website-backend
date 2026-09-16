@@ -147,6 +147,8 @@ async fn create(
     req: web::Json<db::team::AdminTeamCreateData>,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let mut req = req.into_inner();
+    req.name = req.name.trim().to_string();
     if let Err(error) = req.validate() {
         return RbError::bad_req(TeamAdminResult::Invalid.into())
             .msg(error.to_string())
@@ -179,6 +181,10 @@ async fn update(
     actor: AuthUser,
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
+    let mut req = req.into_inner();
+    if let Some(name) = &mut req.name {
+        *name = name.trim().to_string();
+    }
     if let Err(error) = req.validate() {
         return RbError::bad_req(TeamAdminResult::Invalid.into())
             .msg(error.to_string())

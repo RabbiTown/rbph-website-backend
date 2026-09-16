@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.name, t.is_locked\n        FROM rb_team t\n        JOIN rb_team_member tm ON tm.team_id = t.id\n        WHERE tm.user_id = $1 AND tm.game_id = $2 AND tm.is_captain\n        FOR UPDATE OF t;",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "is_locked",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "80efc27d6b9594253754cab842c29ad6d847f3895a35f3648aadb5a72d8c42e2"
+}

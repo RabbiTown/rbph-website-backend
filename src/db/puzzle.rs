@@ -784,7 +784,7 @@ pub async fn get_staff_puzzle_team_status(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Option<StaffPuzzleTeamStatus>, RbInternalError> {
-    refresh_team_hint_enablements(pool, team_id, Some(puzzle_id)).await?;
+    refresh_team_hint_states(pool, team_id, Some(puzzle_id)).await?;
     let row = sqlx::query!(
         "SELECT NOW() AS \"server_time!\", tp.state,
             GREATEST(tp.ctime_at, rp.release_at) AS \"unlock_at!\",
@@ -876,17 +876,12 @@ pub async fn get_staff_puzzle_team_status(
             c.cname AS \"cost_name?\", c.prec AS \"cost_prec?\", h.cost_amount,
             (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL
                 OR COALESCE(th.unlocked, FALSE)) AS \"enabled!\",
-            CASE
-                WHEN h.enable_cond IS NOT NULL
-                    AND enabled.hint_id IS NULL
-                    AND NOT COALESCE(th.unlocked, FALSE)
-                THEN NULL
-                ELSE (CASE
-                    WHEN h.cooldown_after_enable
-                        THEN COALESCE(enabled.enabled_at, th.utime_at)
-                    ELSE GREATEST(tp.ctime_at, rp.release_at)
-                END) + (h.cooldown::BIGINT * INTERVAL '1 second')
-            END AS cooldown_until,
+            (CASE h.cooldown_origin
+                WHEN 1 THEN COALESCE(enabled.enabled_at, th.utime_at)
+                WHEN 2 THEN COALESCE(visibility.displayed_at, th.utime_at)
+                WHEN 3 THEN COALESCE(visibility.title_displayed_at, th.utime_at)
+                ELSE GREATEST(tp.ctime_at, rp.release_at)
+            END) + (h.cooldown::BIGINT * INTERVAL '1 second') AS cooldown_until,
             COALESCE(th.unlocked, FALSE) AS \"unlocked!\",
             CASE WHEN th.unlocked THEN th.utime_at ELSE NULL END AS unlocked_at
         FROM rb_hint h
@@ -896,6 +891,8 @@ pub async fn get_staff_puzzle_team_status(
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = $2
         LEFT JOIN rb_team_hint_enable enabled
             ON enabled.hint_id = h.id AND enabled.team_id = $2
+        LEFT JOIN rb_team_hint_visibility visibility
+            ON visibility.hint_id = h.id AND visibility.team_id = $2
         LEFT JOIN rb_currency c ON c.id = h.cost_id
         WHERE p.game_id = $1 AND p.id = $3
         ORDER BY h.sort, h.id;",
@@ -1698,7 +1695,7 @@ pub async fn submit_answer(
         vec![]
     };
     if do_unlock {
-        refresh_team_hint_enablements(&app.db, team_id, None).await?;
+        refresh_team_hint_states(&app.db, team_id, None).await?;
     }
     content_changed = content_changed || !unlocks.is_empty();
     let has_custom_judge = rules
@@ -1899,6 +1896,102 @@ pub async fn refresh_team_hint_enablements(
 
     tx.commit().await?;
     Ok(())
+}
+
+async fn refresh_team_hint_visibility(
+    pool: &DbPool,
+    team_id: i32,
+    puzzle_id: Option<i32>,
+) -> Result<(), RbInternalError> {
+    let mut tx = pool.begin().await?;
+    let pending = sqlx::query!(
+        r#"SELECT h.id, h.cooldown_origin, h.display_condition,
+            h.title_display_condition,
+            (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL) AS "enabled!"
+        FROM rb_hint h
+        JOIN rb_puzzle_effective_release release ON release.puzzle_id = h.puzzle_id
+        JOIN rb_team_puzzle tp
+            ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1 AND tp.state >= 0
+        LEFT JOIN rb_team_hint_enable enabled
+            ON enabled.team_id = $1 AND enabled.hint_id = h.id
+        LEFT JOIN rb_team_hint_visibility visibility
+            ON visibility.team_id = $1 AND visibility.hint_id = h.id
+        LEFT JOIN rb_team_hint purchased
+            ON purchased.team_id = $1 AND purchased.hint_id = h.id AND purchased.unlocked
+        WHERE h.cooldown_origin IN (2, 3)
+            AND ((h.cooldown_origin = 2 AND visibility.displayed_at IS NULL)
+                OR (h.cooldown_origin = 3 AND visibility.title_displayed_at IS NULL))
+            AND purchased.hint_id IS NULL
+            AND release.release_at <= NOW()
+            AND ($2::INT IS NULL OR h.puzzle_id = $2)
+        ORDER BY h.id"#,
+        team_id,
+        puzzle_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if !pending.is_empty()
+        && let Some(state) = team_gate_state_conn(&mut tx, team_id).await?
+    {
+        for hint in pending {
+            let visible = if hint.cooldown_origin == 2 {
+                hint_display_condition_met(
+                    hint.display_condition.as_deref(),
+                    true,
+                    &state,
+                    hint.enabled,
+                    false,
+                )
+            } else {
+                hint_display_condition_met(
+                    hint.title_display_condition.as_deref(),
+                    false,
+                    &state,
+                    hint.enabled,
+                    false,
+                )
+            };
+            if visible {
+                let displayed = hint.cooldown_origin == 2;
+                sqlx::query!(
+                    "INSERT INTO rb_team_hint_visibility (
+                        team_id, hint_id, displayed_at, title_displayed_at
+                    ) VALUES (
+                        $1, $2,
+                        CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                        CASE WHEN $3 THEN NULL ELSE CURRENT_TIMESTAMP END
+                    )
+                    ON CONFLICT (team_id, hint_id) DO UPDATE SET
+                        displayed_at = COALESCE(
+                            rb_team_hint_visibility.displayed_at,
+                            EXCLUDED.displayed_at
+                        ),
+                        title_displayed_at = COALESCE(
+                            rb_team_hint_visibility.title_displayed_at,
+                            EXCLUDED.title_displayed_at
+                        )",
+                    team_id,
+                    hint.id,
+                    displayed
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn refresh_team_hint_states(
+    pool: &DbPool,
+    team_id: i32,
+    puzzle_id: Option<i32>,
+) -> Result<(), RbInternalError> {
+    refresh_team_hint_enablements(pool, team_id, puzzle_id).await?;
+    refresh_team_hint_visibility(pool, team_id, puzzle_id).await
 }
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
@@ -2210,7 +2303,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
         .await?;
 
         for team_id in &inserted_team_ids {
-            refresh_team_hint_enablements(&app.db, *team_id, Some(puzzle_id)).await?;
+            refresh_team_hint_states(&app.db, *team_id, Some(puzzle_id)).await?;
         }
     }
 
@@ -2287,6 +2380,18 @@ pub async fn admin_clear_puzzle_team_states(
         .await?,
     );
 
+    hint_team_ids.extend(
+        sqlx::query_scalar!(
+            "DELETE FROM rb_team_hint_visibility visibility
+            USING rb_hint h
+            WHERE visibility.hint_id = h.id AND h.puzzle_id = $1
+            RETURNING visibility.team_id;",
+            puzzle_id
+        )
+        .fetch_all(&mut *tx)
+        .await?,
+    );
+
     let ticket_team_ids = sqlx::query_scalar!(
         "DELETE FROM rb_ticket
         WHERE puzzle_id = $1
@@ -2354,8 +2459,8 @@ struct RbHintShowRow {
     id: i32,
     title: String,
     cooldown: i32,
-    title_display_condition: i16,
-    display_condition: i16,
+    title_display_condition: Option<String>,
+    display_condition: Option<String>,
     purchased: bool,
     enabled: bool,
     cooldown_complete: bool,
@@ -2364,23 +2469,43 @@ struct RbHintShowRow {
     cost_amount: i64,
 }
 
-fn hint_display_condition_met(condition: i16, enabled: bool, cooldown_complete: bool) -> bool {
-    match condition {
-        0 => true,
-        1 => enabled,
-        2 => cooldown_complete,
-        3 => enabled && cooldown_complete,
-        _ => false,
-    }
+fn hint_display_condition_met<S: PuzzleStates>(
+    condition: Option<&str>,
+    default: bool,
+    state: &S,
+    enabled: bool,
+    cooldown_complete: bool,
+) -> bool {
+    let Some(condition) = condition else {
+        return default;
+    };
+    expr::compile_hint_display_expr(condition)
+        .ok()
+        .is_some_and(|condition| {
+            expr::ast::eval_hint_display_compiled(state, &condition, enabled, cooldown_complete)
+        })
 }
 
-fn hint_field_visible(
-    condition: i16,
+fn hint_field_visible<S: PuzzleStates>(
+    condition: Option<&str>,
+    default: bool,
+    state: &S,
     purchased: bool,
     enabled: bool,
     cooldown_complete: bool,
 ) -> bool {
-    purchased || hint_display_condition_met(condition, enabled, cooldown_complete)
+    purchased || hint_display_condition_met(condition, default, state, enabled, cooldown_complete)
+}
+
+fn hint_purchase_available<S: PuzzleStates>(
+    display_condition: Option<&str>,
+    state: &S,
+    enabled: bool,
+    cooldown_complete: bool,
+) -> bool {
+    enabled
+        && cooldown_complete
+        && hint_display_condition_met(display_condition, true, state, enabled, cooldown_complete)
 }
 
 pub async fn get_hints_show_for_team(
@@ -2388,16 +2513,18 @@ pub async fn get_hints_show_for_team(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Vec<RbHintShowData>, RbInternalError> {
-    refresh_team_hint_enablements(db_pool, team_id, Some(puzzle_id)).await?;
-    let result = sqlx::query_as!(
+    refresh_team_hint_states(db_pool, team_id, Some(puzzle_id)).await?;
+    let rows = sqlx::query_as!(
         RbHintShowRow,
         r#"WITH state AS (
             SELECT h.id, h.sort, h.title, h.cooldown, h.cost_id, h.cost_amount,
                 h.title_display_condition, h.display_condition,
                 purchased.hint_id IS NOT NULL AS purchased,
                 (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL) AS enabled,
-                (CASE
-                    WHEN h.cooldown_after_enable THEN enabled.enabled_at
+                (CASE h.cooldown_origin
+                    WHEN 1 THEN enabled.enabled_at
+                    WHEN 2 THEN visibility.displayed_at
+                    WHEN 3 THEN visibility.title_displayed_at
                     ELSE GREATEST(tp.ctime_at, release.release_at)
                 END) + (h.cooldown::BIGINT * INTERVAL '1 second') AS cooldown_until
             FROM rb_hint h
@@ -2406,6 +2533,8 @@ pub async fn get_hints_show_for_team(
             JOIN rb_team_puzzle tp ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1
             LEFT JOIN rb_team_hint_enable enabled
                 ON enabled.hint_id = h.id AND enabled.team_id = $1
+            LEFT JOIN rb_team_hint_visibility visibility
+                ON visibility.hint_id = h.id AND visibility.team_id = $1
             LEFT JOIN rb_team_hint purchased
                 ON purchased.hint_id = h.id AND purchased.team_id = $1 AND purchased.unlocked
             WHERE p.id = $2 AND tp.state >= 0 AND release.release_at <= NOW()
@@ -2420,32 +2549,41 @@ pub async fn get_hints_show_for_team(
         puzzle_id
     )
     .fetch_all(db_pool)
-    .await?
-    .into_iter()
-    .filter(|hint| {
-        hint_field_visible(
-            hint.display_condition,
-            hint.purchased,
-            hint.enabled,
-            hint.cooldown_complete,
-        )
-    })
-    .map(|hint| RbHintShowData {
-        id: hint.id,
-        title: hint_field_visible(
-            hint.title_display_condition,
-            hint.purchased,
-            hint.enabled,
-            hint.cooldown_complete,
-        )
-        .then_some(hint.title),
-        cooldown: hint.cooldown,
-        enabled: hint.enabled,
-        cooldown_until: hint.cooldown_until,
-        cost_id: hint.cost_id,
-        cost_amount: hint.cost_amount,
-    })
-    .collect();
+    .await?;
+    let mut conn = db_pool.acquire().await?;
+    let Some(state) = team_gate_state_conn(&mut conn, team_id).await? else {
+        return Ok(Vec::new());
+    };
+    let result = rows
+        .into_iter()
+        .filter(|hint| {
+            hint_field_visible(
+                hint.display_condition.as_deref(),
+                true,
+                &state,
+                hint.purchased,
+                hint.enabled,
+                hint.cooldown_complete,
+            )
+        })
+        .map(|hint| RbHintShowData {
+            id: hint.id,
+            title: hint_field_visible(
+                hint.title_display_condition.as_deref(),
+                hint.cooldown_complete,
+                &state,
+                hint.purchased,
+                hint.enabled,
+                hint.cooldown_complete,
+            )
+            .then_some(hint.title),
+            cooldown: hint.cooldown,
+            enabled: hint.enabled,
+            cooldown_until: hint.cooldown_until,
+            cost_id: hint.cost_id,
+            cost_amount: hint.cost_amount,
+        })
+        .collect();
 
     Ok(result)
 }
@@ -2511,8 +2649,10 @@ async fn next_hint_cooldown(
     puzzle_id: i32,
 ) -> Result<Option<OffsetDateTime>, RbInternalError> {
     let next_cooldown_at = sqlx::query!(
-        "SELECT MIN((CASE
-                WHEN h.cooldown_after_enable THEN enabled.enabled_at
+        "SELECT MIN((CASE h.cooldown_origin
+                WHEN 1 THEN enabled.enabled_at
+                WHEN 2 THEN visibility.displayed_at
+                WHEN 3 THEN visibility.title_displayed_at
                 ELSE GREATEST(tp.ctime_at, release.release_at)
             END) + (h.cooldown::BIGINT * INTERVAL '1 second')) AS next_cooldown_at
         FROM rb_hint h
@@ -2521,13 +2661,17 @@ async fn next_hint_cooldown(
             ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1 AND tp.state >= 0
         LEFT JOIN rb_team_hint_enable enabled
             ON enabled.hint_id = h.id AND enabled.team_id = $1
+        LEFT JOIN rb_team_hint_visibility visibility
+            ON visibility.hint_id = h.id AND visibility.team_id = $1
         LEFT JOIN rb_team_hint purchased
             ON purchased.hint_id = h.id AND purchased.team_id = $1 AND purchased.unlocked
         WHERE h.puzzle_id = $2
             AND release.release_at <= NOW()
             AND purchased.hint_id IS NULL
-            AND (CASE
-                    WHEN h.cooldown_after_enable THEN enabled.enabled_at
+            AND (CASE h.cooldown_origin
+                    WHEN 1 THEN enabled.enabled_at
+                    WHEN 2 THEN visibility.displayed_at
+                    WHEN 3 THEN visibility.title_displayed_at
                     ELSE GREATEST(tp.ctime_at, release.release_at)
                 END) + (h.cooldown::BIGINT * INTERVAL '1 second') > NOW();",
         team_id,
@@ -2545,7 +2689,7 @@ pub async fn sync_hint_cooldowns(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Option<OffsetDateTime>, RbInternalError> {
-    refresh_team_hint_enablements(db_pool, team_id, Some(puzzle_id)).await?;
+    refresh_team_hint_states(db_pool, team_id, Some(puzzle_id)).await?;
     next_hint_cooldown(db_pool, team_id, puzzle_id).await
 }
 
@@ -2579,12 +2723,13 @@ pub async fn purchase_hint(
     let Some(target) = target else {
         return Ok(PurchaseHintResult::Unavailable);
     };
-    refresh_team_hint_enablements(&app.db, target.team_id, Some(target.puzzle_id)).await?;
+    refresh_team_hint_states(&app.db, target.team_id, Some(target.puzzle_id)).await?;
 
     let info = sqlx::query!(
         "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,
             h.puzzle_id, p.round_id, p.title AS puzzle_title,
-            h.title AS hint_title, h.cost_id, h.cost_amount, h.backend_function, h.triggers
+            h.title AS hint_title, h.display_condition, h.cost_id, h.cost_amount,
+            h.backend_function, h.triggers
         FROM rb_hint h
         JOIN rb_puzzle p ON p.id = h.puzzle_id
         JOIN rb_round r ON r.id = p.round_id
@@ -2596,12 +2741,16 @@ pub async fn purchase_hint(
         LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id
         LEFT JOIN rb_team_hint_enable enabled
             ON enabled.hint_id = h.id AND enabled.team_id = tm.team_id
+        LEFT JOIN rb_team_hint_visibility visibility
+            ON visibility.hint_id = h.id AND visibility.team_id = tm.team_id
         WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0
             AND rp.release_at <= NOW()
             AND NOT COALESCE(th.unlocked, FALSE)
             AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL)
-            AND (CASE
-                    WHEN h.cooldown_after_enable THEN enabled.enabled_at
+            AND (CASE h.cooldown_origin
+                    WHEN 1 THEN enabled.enabled_at
+                    WHEN 2 THEN visibility.displayed_at
+                    WHEN 3 THEN visibility.title_displayed_at
                     ELSE GREATEST(tp.ctime_at, rp.release_at)
                 END) <= NOW() - (h.cooldown * INTERVAL '1 second');",
         user_id,
@@ -2614,6 +2763,14 @@ pub async fn purchase_hint(
         return Ok(PurchaseHintResult::Unavailable);
     }
     let info = info.unwrap();
+    let mut state_conn = app.db.acquire().await?;
+    let Some(state) = team_gate_state_conn(&mut state_conn, info.team_id).await? else {
+        return Ok(PurchaseHintResult::Unavailable);
+    };
+    if !hint_purchase_available(info.display_condition.as_deref(), &state, true, true) {
+        return Ok(PurchaseHintResult::Unavailable);
+    }
+    drop(state_conn);
 
     let mut precheck_currency_event: Option<db::event_log::CurrencyEventData> = None;
     if info.cost_id.is_some() {
@@ -2837,7 +2994,7 @@ pub async fn purchase_hint(
         vec![]
     };
     if trigger_inserted {
-        refresh_team_hint_enablements(&app.db, info.team_id, None).await?;
+        refresh_team_hint_states(&app.db, info.team_id, None).await?;
     }
     Ok(PurchaseHintResult::Ok {
         result,
@@ -3303,10 +3460,10 @@ pub struct RbHintAdminData {
     pub content: String,
     pub content_type: i16,
     pub cooldown: i32,
-    pub title_display_condition: i16,
-    pub display_condition: i16,
+    pub title_display_condition: Option<String>,
+    pub display_condition: Option<String>,
     pub enable_cond: Option<String>,
-    pub cooldown_after_enable: bool,
+    pub cooldown_origin: i16,
     pub cost_id: Option<i32>,
     pub cost_amount: i64,
     pub backend_function: Option<String>,
@@ -3326,13 +3483,11 @@ pub struct RbHintCreateData {
     pub content_type: i16,
     #[serde(default)]
     pub cooldown: i32,
-    #[serde(default = "default_hint_title_display_condition")]
-    pub title_display_condition: i16,
-    #[serde(default = "default_hint_display_condition")]
-    pub display_condition: i16,
+    pub title_display_condition: Option<String>,
+    pub display_condition: Option<String>,
     pub enable_cond: Option<String>,
     #[serde(default)]
-    pub cooldown_after_enable: bool,
+    pub cooldown_origin: i16,
     pub cost_id: Option<i32>,
     #[serde(default)]
     pub cost_amount: i64,
@@ -3349,14 +3504,22 @@ pub struct RbHintUpdateData {
     pub content: Option<String>,
     pub content_type: Option<i16>,
     pub cooldown: Option<i32>,
-    pub title_display_condition: Option<i16>,
-    pub display_condition: Option<i16>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
+    pub title_display_condition: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
+    pub display_condition: Option<Option<String>>,
     #[serde(
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
     )]
     pub enable_cond: Option<Option<String>>,
-    pub cooldown_after_enable: Option<bool>,
+    pub cooldown_origin: Option<i16>,
     #[serde(
         default,
         deserialize_with = "crate::serde_helpers::deserialize_nullable_i32_patch"
@@ -3372,14 +3535,6 @@ pub struct RbHintUpdateData {
     pub puzzle_id: Option<i32>,
 }
 
-fn default_hint_title_display_condition() -> i16 {
-    2
-}
-
-fn default_hint_display_condition() -> i16 {
-    1
-}
-
 pub async fn admin_list_hints(
     pool: &DbPool,
     puzzle_id: Option<i32>,
@@ -3389,7 +3544,7 @@ pub async fn admin_list_hints(
             RbHintAdminData,
             "SELECT id, sort, title, content, content_type, cooldown,
                 title_display_condition, display_condition,
-                enable_cond, cooldown_after_enable, cost_id,
+                enable_cond, cooldown_origin, cost_id,
                 cost_amount, backend_function, triggers, puzzle_id, ctime_at
             FROM rb_hint
             WHERE puzzle_id = $1
@@ -3403,7 +3558,7 @@ pub async fn admin_list_hints(
             RbHintAdminData,
             "SELECT id, sort, title, content, content_type, cooldown,
                 title_display_condition, display_condition,
-                enable_cond, cooldown_after_enable, cost_id,
+                enable_cond, cooldown_origin, cost_id,
                 cost_amount, backend_function, triggers, puzzle_id, ctime_at
             FROM rb_hint
             ORDER BY puzzle_id, sort, id;"
@@ -3423,7 +3578,7 @@ pub async fn admin_get_hint(
         RbHintAdminData,
         "SELECT id, sort, title, content, content_type, cooldown,
             title_display_condition, display_condition,
-            enable_cond, cooldown_after_enable, cost_id,
+            enable_cond, cooldown_origin, cost_id,
             cost_amount, backend_function, triggers, puzzle_id, ctime_at
         FROM rb_hint
         WHERE id = $1;",
@@ -3444,7 +3599,7 @@ pub async fn admin_create_hint(
         "INSERT INTO rb_hint (
             sort, title, content, content_type, cooldown,
             title_display_condition, display_condition,
-            enable_cond, cooldown_after_enable, cost_id, cost_amount,
+            enable_cond, cooldown_origin, cost_id, cost_amount,
             backend_function, triggers, puzzle_id
         )
         SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, p.id
@@ -3452,7 +3607,7 @@ pub async fn admin_create_hint(
         WHERE p.id = $1
         RETURNING id, sort, title, content, content_type, cooldown,
             title_display_condition, display_condition,
-            enable_cond, cooldown_after_enable, cost_id,
+            enable_cond, cooldown_origin, cost_id,
             cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
         data.puzzle_id,
         data.sort,
@@ -3463,7 +3618,7 @@ pub async fn admin_create_hint(
         data.title_display_condition,
         data.display_condition,
         data.enable_cond,
-        data.cooldown_after_enable,
+        data.cooldown_origin,
         data.cost_id,
         data.cost_amount,
         data.backend_function,
@@ -3486,6 +3641,10 @@ pub async fn admin_update_hint(
     let backend_function = data.backend_function.clone().flatten();
     let enable_cond_is_set = data.enable_cond.is_some();
     let enable_cond = data.enable_cond.clone().flatten();
+    let title_display_condition_is_set = data.title_display_condition.is_some();
+    let title_display_condition = data.title_display_condition.clone().flatten();
+    let display_condition_is_set = data.display_condition.is_some();
+    let display_condition = data.display_condition.clone().flatten();
 
     let result = sqlx::query_as!(
         RbHintAdminData,
@@ -3495,30 +3654,30 @@ pub async fn admin_update_hint(
             content = COALESCE($4, h.content),
             content_type = COALESCE($5, h.content_type),
             cooldown = COALESCE($6, h.cooldown),
-            title_display_condition = COALESCE($7, h.title_display_condition),
-            display_condition = COALESCE($8, h.display_condition),
-            cost_id = CASE WHEN $9 THEN $10 ELSE h.cost_id END,
+            title_display_condition = CASE WHEN $7 THEN $8 ELSE h.title_display_condition END,
+            display_condition = CASE WHEN $9 THEN $10 ELSE h.display_condition END,
+            cost_id = CASE WHEN $11 THEN $12 ELSE h.cost_id END,
             cost_amount = CASE
-                WHEN $9 AND $10::INT IS NULL THEN 0
-                ELSE COALESCE($11, h.cost_amount)
+                WHEN $11 AND $12::INT IS NULL THEN 0
+                ELSE COALESCE($13, h.cost_amount)
             END,
-            backend_function = CASE WHEN $12 THEN $13 ELSE h.backend_function END,
-            enable_cond = CASE WHEN $14 THEN $15 ELSE h.enable_cond END,
-            cooldown_after_enable = CASE
-                WHEN $14 AND $15::TEXT IS NULL THEN FALSE
-                ELSE COALESCE($16, h.cooldown_after_enable)
+            backend_function = CASE WHEN $14 THEN $15 ELSE h.backend_function END,
+            enable_cond = CASE WHEN $16 THEN $17 ELSE h.enable_cond END,
+            cooldown_origin = CASE
+                WHEN $16 AND $17::TEXT IS NULL AND COALESCE($18, h.cooldown_origin) = 1 THEN 0
+                ELSE COALESCE($18, h.cooldown_origin)
             END,
-            triggers = COALESCE($17, h.triggers),
+            triggers = COALESCE($19, h.triggers),
             puzzle_id = COALESCE((
-                SELECT p.id FROM rb_puzzle p WHERE p.id = $18::INT
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $20::INT
             ), h.puzzle_id)
         WHERE h.id = $1
-            AND ($18::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_puzzle p WHERE p.id = $18::INT
+            AND ($20::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $20::INT
             ))
         RETURNING id, sort, title, content, content_type, cooldown,
             title_display_condition, display_condition,
-            enable_cond, cooldown_after_enable, cost_id,
+            enable_cond, cooldown_origin, cost_id,
             cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
         hint_id,
         data.sort,
@@ -3526,8 +3685,10 @@ pub async fn admin_update_hint(
         data.content,
         data.content_type,
         data.cooldown,
-        data.title_display_condition,
-        data.display_condition,
+        title_display_condition_is_set,
+        title_display_condition,
+        display_condition_is_set,
+        display_condition,
         cost_id_is_set,
         cost_id,
         data.cost_amount,
@@ -3535,7 +3696,7 @@ pub async fn admin_update_hint(
         backend_function,
         enable_cond_is_set,
         enable_cond,
-        data.cooldown_after_enable,
+        data.cooldown_origin,
         data.triggers.as_deref(),
         data.puzzle_id
     )
@@ -3559,34 +3720,118 @@ pub async fn admin_delete_hint(pool: &DbPool, hint_id: i32) -> Result<bool, RbIn
 
 #[cfg(test)]
 mod tests {
-    use super::{hint_display_condition_met, hint_field_visible};
+    use super::{hint_display_condition_met, hint_field_visible, hint_purchase_available};
+    use crate::expr::types::{PuzzleId, PuzzleStates, RoundId};
+
+    struct EmptyState;
+
+    impl PuzzleStates for EmptyState {
+        fn is_solved(&self, _id: PuzzleId) -> bool {
+            false
+        }
+
+        fn solved(&self) -> Vec<PuzzleId> {
+            Vec::new()
+        }
+
+        fn puzzle_slug(&self, _slug: &str) -> Option<PuzzleId> {
+            None
+        }
+
+        fn round_slug(&self, _slug: &str) -> Option<RoundId> {
+            None
+        }
+
+        fn round_puzzles(&self, _id: RoundId) -> Option<Vec<PuzzleId>> {
+            None
+        }
+
+        fn game_started(&self) -> bool {
+            false
+        }
+    }
 
     #[test]
     fn hint_display_conditions_follow_the_state_truth_table() {
+        let state = EmptyState;
         for enabled in [false, true] {
             for cooldown_complete in [false, true] {
-                assert!(hint_display_condition_met(0, enabled, cooldown_complete));
+                assert!(hint_display_condition_met(
+                    Some("(true)"),
+                    false,
+                    &state,
+                    enabled,
+                    cooldown_complete
+                ));
                 assert_eq!(
-                    hint_display_condition_met(1, enabled, cooldown_complete),
+                    hint_display_condition_met(
+                        Some("(hint-enabled)"),
+                        false,
+                        &state,
+                        enabled,
+                        cooldown_complete
+                    ),
                     enabled
                 );
                 assert_eq!(
-                    hint_display_condition_met(2, enabled, cooldown_complete),
+                    hint_display_condition_met(
+                        Some("(hint-cooled-down)"),
+                        false,
+                        &state,
+                        enabled,
+                        cooldown_complete
+                    ),
                     cooldown_complete
                 );
                 assert_eq!(
-                    hint_display_condition_met(3, enabled, cooldown_complete),
+                    hint_display_condition_met(
+                        Some("(and (hint-enabled) (hint-cooled-down))"),
+                        false,
+                        &state,
+                        enabled,
+                        cooldown_complete
+                    ),
                     enabled && cooldown_complete
                 );
             }
         }
-        assert!(!hint_display_condition_met(4, true, true));
+        assert!(!hint_display_condition_met(
+            Some("(invalid)"),
+            true,
+            &state,
+            true,
+            true
+        ));
+        assert!(hint_display_condition_met(None, true, &state, false, false));
+        assert!(!hint_display_condition_met(None, false, &state, true, true));
     }
 
     #[test]
     fn purchased_hint_overrides_display_conditions() {
-        for condition in 0..=3 {
-            assert!(hint_field_visible(condition, true, false, false));
+        let state = EmptyState;
+        assert!(hint_field_visible(
+            Some("(false)"),
+            false,
+            &state,
+            true,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn hint_purchase_requires_display_enablement_and_cooldown() {
+        let state = EmptyState;
+        for displayed in [false, true] {
+            for enabled in [false, true] {
+                for cooled_down in [false, true] {
+                    let condition = if displayed { "(true)" } else { "(false)" };
+                    assert_eq!(
+                        hint_purchase_available(Some(condition), &state, enabled, cooled_down),
+                        displayed && enabled && cooled_down
+                    );
+                }
+            }
         }
     }
 }

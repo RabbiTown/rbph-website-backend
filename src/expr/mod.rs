@@ -5,15 +5,28 @@ mod compiler;
 mod parser;
 pub mod types;
 
-use crate::expr::{ast::GateExpr, types::PuzzleStates};
+use crate::expr::{
+    ast::{GateExpr, HintDisplayExpr},
+    types::PuzzleStates,
+};
 
-pub fn compile_gate_expr(expr: &str) -> Result<GateExpr, String> {
+fn parse(expr: &str) -> Result<parser::RawSexpr, String> {
     let tokens = parser::tokenize(expr);
     let (sexpr, used) = parser::parse_expr(&tokens).map_err(|e| format!("Parse Error: {e:?}"))?;
     if used != tokens.len() {
         return Err("Parse Error: trailing tokens".to_string());
     }
+    Ok(sexpr)
+}
+
+pub fn compile_gate_expr(expr: &str) -> Result<GateExpr, String> {
+    let sexpr = parse(expr)?;
     compiler::compile_gate(&sexpr).map_err(|e| format!("Compile Error: {e:?}"))
+}
+
+pub fn compile_hint_display_expr(expr: &str) -> Result<HintDisplayExpr, String> {
+    let sexpr = parse(expr)?;
+    compiler::compile_hint_display(&sexpr).map_err(|e| format!("Compile Error: {e:?}"))
 }
 
 /// A state-aware S-expression predicate language for gating and progression.
@@ -24,7 +37,7 @@ pub fn eval<S: PuzzleStates>(state: &S, expr: &str) -> bool {
 
 mod test {
     use crate::expr::{
-        compile_gate_expr, eval,
+        compile_gate_expr, compile_hint_display_expr, eval,
         types::{PuzzleId, PuzzleStates},
     };
 
@@ -182,5 +195,29 @@ mod test {
         assert!(!eval(&state, "(all-solved (puzzles intro unknown-puzzle))"));
         assert!(!eval(&state, "(all-solved (round unknown-round))"));
         assert!(!eval(&state, "(ge (solved-count (round unknown-round)) 1)"));
+    }
+
+    #[test]
+    fn test_hint_display_expr() {
+        let state = TestState {};
+        let expr =
+            compile_hint_display_expr("(and (hint-enabled) (hint-cooled-down) (solved intro))")
+                .unwrap();
+
+        assert!(super::ast::eval_hint_display_compiled(
+            &state, &expr, true, true
+        ));
+        assert!(!super::ast::eval_hint_display_compiled(
+            &state, &expr, false, true
+        ));
+        assert!(!super::ast::eval_hint_display_compiled(
+            &state, &expr, true, false
+        ));
+        assert!(super::ast::hint_display_uses_cooldown(&expr));
+        let independent = compile_hint_display_expr("(and (hint-enabled) (solved intro))").unwrap();
+        assert!(!super::ast::hint_display_uses_cooldown(&independent));
+        assert!(compile_gate_expr("(hint-enabled)").is_err());
+        assert!(compile_gate_expr("(hint-cooled-down)").is_err());
+        assert!(compile_hint_display_expr("(hint-enabled unexpected)").is_err());
     }
 }

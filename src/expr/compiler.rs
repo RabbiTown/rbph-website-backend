@@ -1,5 +1,5 @@
 use crate::expr::{
-    ast::{CmpOp, GateExpr, SetExpr, ValueExpr},
+    ast::{CmpOp, GateExpr, HintDisplayExpr, SetExpr, ValueExpr},
     parser::RawSexpr,
     types::{PuzzleRef, RoundRef},
 };
@@ -218,5 +218,51 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                 _ => Err(CompileError::UnknownOp(head.to_string())),
             }
         }
+    }
+}
+
+pub fn compile_hint_display(expr: &RawSexpr) -> Result<HintDisplayExpr, CompileError> {
+    let RawSexpr::List(items) = expr else {
+        return Err(CompileError::BadForm("bare atom not allowed"));
+    };
+    if items.is_empty() {
+        return Err(CompileError::BadForm("empty list"));
+    }
+
+    let head = atom(&items[0])?;
+    match head {
+        "hint-enabled" => {
+            if items.len() != 1 {
+                return Err(CompileError::BadForm("hint-enabled expects 0 arg"));
+            }
+            Ok(HintDisplayExpr::HintEnabled)
+        }
+        "hint-cooled-down" => {
+            if items.len() != 1 {
+                return Err(CompileError::BadForm("hint-cooled-down expects 0 arg"));
+            }
+            Ok(HintDisplayExpr::HintCooledDown)
+        }
+        "and" => Ok(HintDisplayExpr::And(
+            items[1..]
+                .iter()
+                .map(compile_hint_display)
+                .collect::<Result<_, _>>()?,
+        )),
+        "or" => Ok(HintDisplayExpr::Or(
+            items[1..]
+                .iter()
+                .map(compile_hint_display)
+                .collect::<Result<_, _>>()?,
+        )),
+        "not" => {
+            if items.len() != 2 {
+                return Err(CompileError::BadForm("not expects 1 arg"));
+            }
+            Ok(HintDisplayExpr::Not(Box::new(compile_hint_display(
+                &items[1],
+            )?)))
+        }
+        _ => compile_gate(expr).map(HintDisplayExpr::Gate),
     }
 }

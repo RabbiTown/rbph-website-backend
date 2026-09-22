@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_hint_visibility (\n                        team_id, hint_id, displayed_at, title_displayed_at\n                    ) VALUES (\n                        $1, $2,\n                        CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,\n                        CASE WHEN $3 THEN NULL ELSE CURRENT_TIMESTAMP END\n                    )\n                    ON CONFLICT (team_id, hint_id) DO UPDATE SET\n                        displayed_at = COALESCE(\n                            rb_team_hint_visibility.displayed_at,\n                            EXCLUDED.displayed_at\n                        ),\n                        title_displayed_at = COALESCE(\n                            rb_team_hint_visibility.title_displayed_at,\n                            EXCLUDED.title_displayed_at\n                        )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "623b9a008b009350877cc8be78fcbcbefcafb7ee14498411a742ab5c45d391e2"
+}

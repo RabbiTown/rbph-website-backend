@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.game_id, tm.team_id, t.name AS team_name, u.nickname AS user_nickname,\n            h.puzzle_id, p.round_id, p.title AS puzzle_title,\n            h.title AS hint_title, h.display_condition, h.cost_id, h.cost_amount,\n            h.backend_function, h.triggers\n        FROM rb_hint h\n        JOIN rb_puzzle p ON p.id = h.puzzle_id\n        JOIN rb_round r ON r.id = p.round_id\n        JOIN rb_puzzle_effective_release rp ON rp.puzzle_id = p.id\n        JOIN rb_team_member tm ON tm.game_id = r.game_id\n        JOIN rb_team t ON t.id = tm.team_id\n        JOIN rb_user u ON u.id = tm.user_id\n        JOIN rb_team_puzzle tp ON tp.puzzle_id = p.id AND tp.team_id = tm.team_id\n        LEFT JOIN rb_team_hint th ON th.hint_id = h.id AND th.team_id = tm.team_id\n        LEFT JOIN rb_team_hint_enable enabled\n            ON enabled.hint_id = h.id AND enabled.team_id = tm.team_id\n        LEFT JOIN rb_team_hint_visibility visibility\n            ON visibility.hint_id = h.id AND visibility.team_id = tm.team_id\n        WHERE tm.user_id = $1 AND h.id = $2 AND tp.state >= 0\n            AND rp.release_at <= NOW()\n            AND NOT COALESCE(th.unlocked, FALSE)\n            AND (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL)\n            AND (CASE h.cooldown_origin\n                    WHEN 1 THEN enabled.enabled_at\n                    WHEN 2 THEN visibility.displayed_at\n                    WHEN 3 THEN visibility.title_displayed_at\n                    ELSE GREATEST(tp.ctime_at, rp.release_at)\n                END) <= NOW() - (h.cooldown * INTERVAL '1 second');",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "game_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "user_nickname",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "round_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "puzzle_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "hint_title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "display_condition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "cost_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "cost_amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "backend_function",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "triggers",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "0697def400c39b89e59a5332864e2d2acb92988a1001566cbdcba09032e7c0f9"
+}

@@ -68,8 +68,9 @@ struct HintBasicValidation<'a> {
     title: Option<&'a str>,
     content_type: Option<i16>,
     cooldown: Option<i32>,
-    title_display_condition: Option<i16>,
-    display_condition: Option<i16>,
+    cooldown_origin: Option<i16>,
+    title_display_condition: Option<&'a str>,
+    display_condition: Option<&'a str>,
     cost_amount: Option<i64>,
     backend_function: Option<&'a str>,
     triggers: Option<&'a [String]>,
@@ -81,6 +82,9 @@ fn validate_basic(data: HintBasicValidation<'_>) -> bool {
         && data.content_type.is_none_or(validate_content_type)
         && data.cooldown.is_none_or(|value| value >= 0)
         && data
+            .cooldown_origin
+            .is_none_or(|value| (0..=3).contains(&value))
+        && data
             .title_display_condition
             .is_none_or(valid_display_condition)
         && data.display_condition.is_none_or(valid_display_condition)
@@ -89,8 +93,14 @@ fn validate_basic(data: HintBasicValidation<'_>) -> bool {
         && data.triggers.is_none_or(validate_triggers)
 }
 
-fn valid_display_condition(value: i16) -> bool {
-    (0..=3).contains(&value)
+fn valid_display_condition(value: &str) -> bool {
+    expr::compile_hint_display_expr(value).is_ok()
+}
+
+fn display_condition_uses_cooldown(value: Option<&str>) -> bool {
+    value
+        .and_then(|condition| expr::compile_hint_display_expr(condition).ok())
+        .is_some_and(|condition| expr::ast::hint_display_uses_cooldown(&condition))
 }
 
 fn validate_triggers(values: &[String]) -> bool {
@@ -122,8 +132,9 @@ async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool
         title: Some(&data.title),
         content_type: Some(data.content_type),
         cooldown: Some(data.cooldown),
-        title_display_condition: Some(data.title_display_condition),
-        display_condition: Some(data.display_condition),
+        cooldown_origin: Some(data.cooldown_origin),
+        title_display_condition: data.title_display_condition.as_deref(),
+        display_condition: data.display_condition.as_deref(),
         cost_amount: Some(data.cost_amount),
         backend_function: data.backend_function.as_deref(),
         triggers: Some(&data.triggers),
@@ -131,7 +142,13 @@ async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool
         return Ok(false);
     }
     if !validate_enable_condition(data.enable_cond.as_deref())
-        || (data.enable_cond.is_none() && data.cooldown_after_enable)
+        || (data.enable_cond.is_none() && data.cooldown_origin == 1)
+        || (data.display_condition.is_none() && data.cooldown_origin == 2)
+        || (data.title_display_condition.is_none() && data.cooldown_origin == 3)
+        || (data.cooldown_origin == 2
+            && display_condition_uses_cooldown(data.display_condition.as_deref()))
+        || (data.cooldown_origin == 3
+            && display_condition_uses_cooldown(data.title_display_condition.as_deref()))
     {
         return Ok(false);
     }
@@ -160,8 +177,15 @@ async fn validate_update(
         title: data.title.as_deref(),
         content_type: data.content_type,
         cooldown: data.cooldown,
-        title_display_condition: data.title_display_condition,
-        display_condition: data.display_condition,
+        cooldown_origin: data.cooldown_origin,
+        title_display_condition: data
+            .title_display_condition
+            .as_ref()
+            .and_then(|condition| condition.as_deref()),
+        display_condition: data
+            .display_condition
+            .as_ref()
+            .and_then(|condition| condition.as_deref()),
         cost_amount: data.cost_amount,
         backend_function: data
             .backend_function
@@ -178,13 +202,30 @@ async fn validate_update(
         .as_ref()
         .map(|condition| condition.as_deref())
         .unwrap_or(current.enable_cond.as_deref());
-    let cooldown_after_enable = if matches!(data.enable_cond, Some(None)) {
-        false
+    let cooldown_origin = if matches!(data.enable_cond, Some(None))
+        && data.cooldown_origin.unwrap_or(current.cooldown_origin) == 1
+    {
+        0
     } else {
-        data.cooldown_after_enable
-            .unwrap_or(current.cooldown_after_enable)
+        data.cooldown_origin.unwrap_or(current.cooldown_origin)
     };
-    if !validate_enable_condition(enable_cond) || (enable_cond.is_none() && cooldown_after_enable) {
+    let title_display_condition = data
+        .title_display_condition
+        .as_ref()
+        .map(|condition| condition.as_deref())
+        .unwrap_or(current.title_display_condition.as_deref());
+    let display_condition = data
+        .display_condition
+        .as_ref()
+        .map(|condition| condition.as_deref())
+        .unwrap_or(current.display_condition.as_deref());
+    if !validate_enable_condition(enable_cond)
+        || (enable_cond.is_none() && cooldown_origin == 1)
+        || (display_condition.is_none() && cooldown_origin == 2)
+        || (title_display_condition.is_none() && cooldown_origin == 3)
+        || (cooldown_origin == 2 && display_condition_uses_cooldown(display_condition))
+        || (cooldown_origin == 3 && display_condition_uses_cooldown(title_display_condition))
+    {
         return Ok(false);
     }
 
@@ -339,7 +380,16 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_triggers;
+    use super::{valid_display_condition, validate_triggers};
+
+    #[test]
+    fn hint_display_conditions_accept_hint_and_game_state() {
+        assert!(valid_display_condition(
+            "(or (hint-enabled) (and (hint-cooled-down) (solved intro)))"
+        ));
+        assert!(!valid_display_condition("(hint-enabled unexpected)"));
+        assert!(!valid_display_condition(""));
+    }
 
     #[test]
     fn hint_triggers_use_gate_trigger_key_rules() {

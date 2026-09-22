@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            content = COALESCE($4, h.content),\n            content_type = COALESCE($5, h.content_type),\n            cooldown = COALESCE($6, h.cooldown),\n            title_display_condition = COALESCE($7, h.title_display_condition),\n            display_condition = COALESCE($8, h.display_condition),\n            cost_id = CASE WHEN $9 THEN $10 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $9 AND $10::INT IS NULL THEN 0\n                ELSE COALESCE($11, h.cost_amount)\n            END,\n            backend_function = CASE WHEN $12 THEN $13 ELSE h.backend_function END,\n            enable_cond = CASE WHEN $14 THEN $15 ELSE h.enable_cond END,\n            cooldown_after_enable = CASE\n                WHEN $14 AND $15::TEXT IS NULL THEN FALSE\n                ELSE COALESCE($16, h.cooldown_after_enable)\n            END,\n            triggers = COALESCE($17, h.triggers),\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $18::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($18::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $18::INT\n            ))\n        RETURNING id, sort, title, content, content_type, cooldown,\n            title_display_condition, display_condition,\n            enable_cond, cooldown_after_enable, cost_id,\n            cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
+  "query": "UPDATE rb_hint h\n        SET sort = COALESCE($2, h.sort),\n            title = COALESCE($3, h.title),\n            content = COALESCE($4, h.content),\n            content_type = COALESCE($5, h.content_type),\n            cooldown = COALESCE($6, h.cooldown),\n            title_display_condition = CASE WHEN $7 THEN $8 ELSE h.title_display_condition END,\n            display_condition = CASE WHEN $9 THEN $10 ELSE h.display_condition END,\n            cost_id = CASE WHEN $11 THEN $12 ELSE h.cost_id END,\n            cost_amount = CASE\n                WHEN $11 AND $12::INT IS NULL THEN 0\n                ELSE COALESCE($13, h.cost_amount)\n            END,\n            backend_function = CASE WHEN $14 THEN $15 ELSE h.backend_function END,\n            enable_cond = CASE WHEN $16 THEN $17 ELSE h.enable_cond END,\n            cooldown_origin = CASE\n                WHEN $16 AND $17::TEXT IS NULL AND COALESCE($18, h.cooldown_origin) = 1 THEN 0\n                ELSE COALESCE($18, h.cooldown_origin)\n            END,\n            triggers = COALESCE($19, h.triggers),\n            puzzle_id = COALESCE((\n                SELECT p.id FROM rb_puzzle p WHERE p.id = $20::INT\n            ), h.puzzle_id)\n        WHERE h.id = $1\n            AND ($20::INT IS NULL OR EXISTS (\n                SELECT 1 FROM rb_puzzle p WHERE p.id = $20::INT\n            ))\n        RETURNING id, sort, title, content, content_type, cooldown,\n            title_display_condition, display_condition,\n            enable_cond, cooldown_origin, cost_id,\n            cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
   "describe": {
     "columns": [
       {
@@ -36,12 +36,12 @@
       {
         "ordinal": 6,
         "name": "title_display_condition",
-        "type_info": "Int2"
+        "type_info": "Text"
       },
       {
         "ordinal": 7,
         "name": "display_condition",
-        "type_info": "Int2"
+        "type_info": "Text"
       },
       {
         "ordinal": 8,
@@ -50,8 +50,8 @@
       },
       {
         "ordinal": 9,
-        "name": "cooldown_after_enable",
-        "type_info": "Bool"
+        "name": "cooldown_origin",
+        "type_info": "Int2"
       },
       {
         "ordinal": 10,
@@ -92,8 +92,10 @@
         "Text",
         "Int2",
         "Int4",
-        "Int2",
-        "Int2",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
         "Bool",
         "Int4",
         "Int8",
@@ -101,7 +103,7 @@
         "Varchar",
         "Bool",
         "Text",
-        "Bool",
+        "Int2",
         "TextArray",
         "Int4"
       ]
@@ -113,8 +115,8 @@
       false,
       false,
       false,
-      false,
-      false,
+      true,
+      true,
       true,
       false,
       true,
@@ -125,5 +127,5 @@
       false
     ]
   },
-  "hash": "b75e32a6dea5de2c71334fdcac9e15685e41288e76c3df404e0145ec459cf489"
+  "hash": "9b932de5205bd08d39a1cfd1991338fd3f5fcb2d326a84a33fdc0b2310761a2a"
 }

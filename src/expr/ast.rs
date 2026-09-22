@@ -50,6 +50,16 @@ pub enum GateExpr {
     },
 }
 
+#[derive(Debug, Clone)]
+pub enum HintDisplayExpr {
+    Gate(GateExpr),
+    And(Vec<HintDisplayExpr>),
+    Or(Vec<HintDisplayExpr>),
+    Not(Box<HintDisplayExpr>),
+    HintEnabled,
+    HintCooledDown,
+}
+
 fn cmp_usize(op: CmpOp, lhs: usize, rhs: usize) -> bool {
     match op {
         CmpOp::Gt => lhs > rhs,
@@ -133,5 +143,38 @@ pub fn eval_compiled<S: PuzzleStates>(state: &S, expr: &GateExpr) -> bool {
         GateExpr::Cmp { op, lhs, rhs } => {
             cmp_usize(op.clone(), eval_value(state, lhs), eval_value(state, rhs))
         }
+    }
+}
+
+pub fn eval_hint_display_compiled<S: PuzzleStates>(
+    state: &S,
+    expr: &HintDisplayExpr,
+    hint_enabled: bool,
+    hint_cooled_down: bool,
+) -> bool {
+    match expr {
+        HintDisplayExpr::Gate(expr) => eval_compiled(state, expr),
+        HintDisplayExpr::And(exprs) => exprs
+            .iter()
+            .all(|expr| eval_hint_display_compiled(state, expr, hint_enabled, hint_cooled_down)),
+        HintDisplayExpr::Or(exprs) => exprs
+            .iter()
+            .any(|expr| eval_hint_display_compiled(state, expr, hint_enabled, hint_cooled_down)),
+        HintDisplayExpr::Not(expr) => {
+            !eval_hint_display_compiled(state, expr, hint_enabled, hint_cooled_down)
+        }
+        HintDisplayExpr::HintEnabled => hint_enabled,
+        HintDisplayExpr::HintCooledDown => hint_cooled_down,
+    }
+}
+
+pub fn hint_display_uses_cooldown(expr: &HintDisplayExpr) -> bool {
+    match expr {
+        HintDisplayExpr::And(exprs) | HintDisplayExpr::Or(exprs) => {
+            exprs.iter().any(hint_display_uses_cooldown)
+        }
+        HintDisplayExpr::Not(expr) => hint_display_uses_cooldown(expr),
+        HintDisplayExpr::HintCooledDown => true,
+        HintDisplayExpr::Gate(_) | HintDisplayExpr::HintEnabled => false,
     }
 }

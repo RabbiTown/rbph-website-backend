@@ -66,6 +66,7 @@ fn validate_content_type(value: i16) -> bool {
 
 struct HintBasicValidation<'a> {
     title: Option<&'a str>,
+    hidden_title: Option<&'a str>,
     content_type: Option<i16>,
     cooldown: Option<i32>,
     cooldown_origin: Option<i16>,
@@ -76,9 +77,13 @@ struct HintBasicValidation<'a> {
     triggers: Option<&'a [String]>,
 }
 
+fn validate_title(value: &str) -> bool {
+    !value.trim().is_empty() && value.chars().count() <= 120
+}
+
 fn validate_basic(data: HintBasicValidation<'_>) -> bool {
-    data.title
-        .is_none_or(|value| !value.trim().is_empty() && value.chars().count() <= 120)
+    data.title.is_none_or(validate_title)
+        && data.hidden_title.is_none_or(validate_title)
         && data.content_type.is_none_or(validate_content_type)
         && data.cooldown.is_none_or(|value| value >= 0)
         && data
@@ -130,6 +135,7 @@ async fn get_hint_game(app: &AppState, puzzle_id: i32) -> Result<Option<i32>, Rb
 async fn validate_create(app: &AppState, data: &RbHintCreateData) -> Result<bool, RbInternalError> {
     if !validate_basic(HintBasicValidation {
         title: Some(&data.title),
+        hidden_title: data.hidden_title.as_deref(),
         content_type: Some(data.content_type),
         cooldown: Some(data.cooldown),
         cooldown_origin: Some(data.cooldown_origin),
@@ -175,6 +181,10 @@ async fn validate_update(
 ) -> Result<bool, RbInternalError> {
     if !validate_basic(HintBasicValidation {
         title: data.title.as_deref(),
+        hidden_title: data
+            .hidden_title
+            .as_ref()
+            .and_then(|title| title.as_deref()),
         content_type: data.content_type,
         cooldown: data.cooldown,
         cooldown_origin: data.cooldown_origin,
@@ -380,7 +390,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_display_condition, validate_triggers};
+    use super::{valid_display_condition, validate_title, validate_triggers};
 
     #[test]
     fn hint_display_conditions_accept_hint_and_game_state() {
@@ -400,5 +410,13 @@ mod tests {
         assert!(!validate_triggers(&["2-invalid".to_string()]));
         assert!(!validate_triggers(&["contains space".to_string()]));
         assert!(!validate_triggers(&["a".repeat(65)]));
+    }
+
+    #[test]
+    fn hint_titles_must_be_nonempty_and_at_most_120_characters() {
+        assert!(validate_title("Hidden hint"));
+        assert!(validate_title(&"a".repeat(120)));
+        assert!(!validate_title("   "));
+        assert!(!validate_title(&"a".repeat(121)));
     }
 }

@@ -2524,6 +2524,7 @@ pub struct RbHintShowData {
 struct RbHintShowRow {
     id: i32,
     title: String,
+    hidden_title: Option<String>,
     cooldown: i32,
     title_display_condition: Option<String>,
     display_condition: Option<String>,
@@ -2602,7 +2603,7 @@ pub async fn get_hints_show_for_team(
     let rows = sqlx::query_as!(
         RbHintShowRow,
         r#"WITH state AS (
-            SELECT h.id, h.sort, h.title, h.cooldown, h.cost_id, h.cost_amount,
+            SELECT h.id, h.sort, h.title, h.hidden_title, h.cooldown, h.cost_id, h.cost_amount,
                 h.title_display_condition, h.display_condition,
                 purchased.hint_id IS NOT NULL AS purchased,
                 (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL) AS enabled,
@@ -2624,7 +2625,7 @@ pub async fn get_hints_show_for_team(
                 ON purchased.hint_id = h.id AND purchased.team_id = $1 AND purchased.unlocked
             WHERE p.id = $2 AND tp.state >= 0 AND release.release_at <= NOW()
         )
-        SELECT id, title, cooldown, title_display_condition, display_condition,
+        SELECT id, title, hidden_title, cooldown, title_display_condition, display_condition,
             purchased AS "purchased!", enabled AS "enabled!",
             COALESCE(cooldown_until <= NOW(), FALSE) AS "cooldown_complete!",
             cooldown_until AS "cooldown_until?", cost_id, cost_amount
@@ -2659,15 +2660,18 @@ pub async fn get_hints_show_for_team(
         })
         .map(|hint| RbHintShowData {
             id: hint.id,
-            title: hint_field_visible(
+            title: if hint_field_visible(
                 hint.title_display_condition.as_deref(),
                 hint.cooldown_complete,
                 state.as_ref(),
                 hint.purchased,
                 hint.enabled,
                 hint.cooldown_complete,
-            )
-            .then_some(hint.title),
+            ) {
+                Some(hint.title)
+            } else {
+                hint.hidden_title
+            },
             cooldown: hint.cooldown,
             enabled: hint.enabled,
             cooldown_until: hint.cooldown_until,
@@ -3547,6 +3551,7 @@ pub struct RbHintAdminData {
     pub id: i32,
     pub sort: i32,
     pub title: String,
+    pub hidden_title: Option<String>,
     pub content: String,
     pub content_type: i16,
     pub cooldown: i32,
@@ -3568,6 +3573,7 @@ pub struct RbHintCreateData {
     #[serde(default)]
     pub sort: i32,
     pub title: String,
+    pub hidden_title: Option<String>,
     pub content: String,
     #[serde(default)]
     pub content_type: i16,
@@ -3591,6 +3597,11 @@ pub struct RbHintCreateData {
 pub struct RbHintUpdateData {
     pub sort: Option<i32>,
     pub title: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_helpers::deserialize_nullable_string_patch"
+    )]
+    pub hidden_title: Option<Option<String>>,
     pub content: Option<String>,
     pub content_type: Option<i16>,
     pub cooldown: Option<i32>,
@@ -3632,7 +3643,7 @@ pub async fn admin_list_hints(
     let result = if let Some(puzzle_id) = puzzle_id {
         sqlx::query_as!(
             RbHintAdminData,
-            "SELECT id, sort, title, content, content_type, cooldown,
+            "SELECT id, sort, title, hidden_title, content, content_type, cooldown,
                 title_display_condition, display_condition,
                 enable_cond, cooldown_origin, cost_id,
                 cost_amount, backend_function, triggers, puzzle_id, ctime_at
@@ -3646,7 +3657,7 @@ pub async fn admin_list_hints(
     } else {
         sqlx::query_as!(
             RbHintAdminData,
-            "SELECT id, sort, title, content, content_type, cooldown,
+            "SELECT id, sort, title, hidden_title, content, content_type, cooldown,
                 title_display_condition, display_condition,
                 enable_cond, cooldown_origin, cost_id,
                 cost_amount, backend_function, triggers, puzzle_id, ctime_at
@@ -3666,7 +3677,7 @@ pub async fn admin_get_hint(
 ) -> Result<Option<RbHintAdminData>, RbInternalError> {
     let result = sqlx::query_as!(
         RbHintAdminData,
-        "SELECT id, sort, title, content, content_type, cooldown,
+        "SELECT id, sort, title, hidden_title, content, content_type, cooldown,
             title_display_condition, display_condition,
             enable_cond, cooldown_origin, cost_id,
             cost_amount, backend_function, triggers, puzzle_id, ctime_at
@@ -3687,21 +3698,22 @@ pub async fn admin_create_hint(
     let result = sqlx::query_as!(
         RbHintAdminData,
         "INSERT INTO rb_hint (
-            sort, title, content, content_type, cooldown,
+            sort, title, hidden_title, content, content_type, cooldown,
             title_display_condition, display_condition,
             enable_cond, cooldown_origin, cost_id, cost_amount,
             backend_function, triggers, puzzle_id
         )
-        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, p.id
+        SELECT $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, p.id
         FROM rb_puzzle p
         WHERE p.id = $1
-        RETURNING id, sort, title, content, content_type, cooldown,
+        RETURNING id, sort, title, hidden_title, content, content_type, cooldown,
             title_display_condition, display_condition,
             enable_cond, cooldown_origin, cost_id,
             cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
         data.puzzle_id,
         data.sort,
         data.title,
+        data.hidden_title,
         data.content,
         data.content_type,
         data.cooldown,
@@ -3735,43 +3747,48 @@ pub async fn admin_update_hint(
     let title_display_condition = data.title_display_condition.clone().flatten();
     let display_condition_is_set = data.display_condition.is_some();
     let display_condition = data.display_condition.clone().flatten();
+    let hidden_title_is_set = data.hidden_title.is_some();
+    let hidden_title = data.hidden_title.clone().flatten();
 
     let result = sqlx::query_as!(
         RbHintAdminData,
         "UPDATE rb_hint h
         SET sort = COALESCE($2, h.sort),
             title = COALESCE($3, h.title),
-            content = COALESCE($4, h.content),
-            content_type = COALESCE($5, h.content_type),
-            cooldown = COALESCE($6, h.cooldown),
-            title_display_condition = CASE WHEN $7 THEN $8 ELSE h.title_display_condition END,
-            display_condition = CASE WHEN $9 THEN $10 ELSE h.display_condition END,
-            cost_id = CASE WHEN $11 THEN $12 ELSE h.cost_id END,
+            hidden_title = CASE WHEN $4 THEN $5 ELSE h.hidden_title END,
+            content = COALESCE($6, h.content),
+            content_type = COALESCE($7, h.content_type),
+            cooldown = COALESCE($8, h.cooldown),
+            title_display_condition = CASE WHEN $9 THEN $10 ELSE h.title_display_condition END,
+            display_condition = CASE WHEN $11 THEN $12 ELSE h.display_condition END,
+            cost_id = CASE WHEN $13 THEN $14 ELSE h.cost_id END,
             cost_amount = CASE
-                WHEN $11 AND $12::INT IS NULL THEN 0
-                ELSE COALESCE($13, h.cost_amount)
+                WHEN $13 AND $14::INT IS NULL THEN 0
+                ELSE COALESCE($15, h.cost_amount)
             END,
-            backend_function = CASE WHEN $14 THEN $15 ELSE h.backend_function END,
-            enable_cond = CASE WHEN $16 THEN $17 ELSE h.enable_cond END,
+            backend_function = CASE WHEN $16 THEN $17 ELSE h.backend_function END,
+            enable_cond = CASE WHEN $18 THEN $19 ELSE h.enable_cond END,
             cooldown_origin = CASE
-                WHEN $16 AND $17::TEXT IS NULL AND COALESCE($18, h.cooldown_origin) = 1 THEN 0
-                ELSE COALESCE($18, h.cooldown_origin)
+                WHEN $18 AND $19::TEXT IS NULL AND COALESCE($20, h.cooldown_origin) = 1 THEN 0
+                ELSE COALESCE($20, h.cooldown_origin)
             END,
-            triggers = COALESCE($19, h.triggers),
+            triggers = COALESCE($21, h.triggers),
             puzzle_id = COALESCE((
-                SELECT p.id FROM rb_puzzle p WHERE p.id = $20::INT
+                SELECT p.id FROM rb_puzzle p WHERE p.id = $22::INT
             ), h.puzzle_id)
         WHERE h.id = $1
-            AND ($20::INT IS NULL OR EXISTS (
-                SELECT 1 FROM rb_puzzle p WHERE p.id = $20::INT
+            AND ($22::INT IS NULL OR EXISTS (
+                SELECT 1 FROM rb_puzzle p WHERE p.id = $22::INT
             ))
-        RETURNING id, sort, title, content, content_type, cooldown,
+        RETURNING id, sort, title, hidden_title, content, content_type, cooldown,
             title_display_condition, display_condition,
             enable_cond, cooldown_origin, cost_id,
             cost_amount, backend_function, triggers, puzzle_id, ctime_at;",
         hint_id,
         data.sort,
         data.title,
+        hidden_title_is_set,
+        hidden_title,
         data.content,
         data.content_type,
         data.cooldown,
@@ -3981,8 +3998,12 @@ mod tests {
             .unwrap();
         let hint_id: i32 = sqlx::query_scalar(
             "INSERT INTO rb_hint (
-                title, content, puzzle_id, enable_cond, display_condition, cooldown_origin
-            ) VALUES ('Hint', 'Content', $1, '(true)', '(hint-enabled)', 2)
+                title, hidden_title, content, puzzle_id, enable_cond,
+                display_condition, title_display_condition, cooldown_origin
+            ) VALUES (
+                'Hint', 'Hidden hint', 'Content', $1, '(true)',
+                '(hint-enabled)', '(false)', 2
+            )
             RETURNING id",
         )
         .bind(puzzle_id)
@@ -3995,6 +4016,7 @@ mod tests {
             .unwrap();
         assert_eq!(hints.len(), 1);
         assert!(hints[0].enabled);
+        assert_eq!(hints[0].title.as_deref(), Some("Hidden hint"));
         assert!(
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS(

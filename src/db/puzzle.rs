@@ -1846,12 +1846,26 @@ async fn team_gate_state_conn(
     }))
 }
 
-pub async fn refresh_team_hint_enablements(
-    pool: &DbPool,
+async fn load_team_gate_state_once(
+    conn: &mut PgConnection,
+    team_id: i32,
+    state: &mut Option<RbPuzzleStates>,
+    loaded: &mut bool,
+) -> Result<(), RbInternalError> {
+    if !*loaded {
+        *state = team_gate_state_conn(conn, team_id).await?;
+        *loaded = true;
+    }
+    Ok(())
+}
+
+async fn refresh_team_hint_enablements_conn(
+    conn: &mut PgConnection,
     team_id: i32,
     puzzle_id: Option<i32>,
+    state: &mut Option<RbPuzzleStates>,
+    state_loaded: &mut bool,
 ) -> Result<(), RbInternalError> {
-    let mut tx = pool.begin().await?;
     let pending = sqlx::query!(
         r#"SELECT h.id, h.enable_cond AS "enable_cond!"
         FROM rb_hint h
@@ -1871,43 +1885,67 @@ pub async fn refresh_team_hint_enablements(
         team_id,
         puzzle_id
     )
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut *conn)
     .await?;
 
-    if !pending.is_empty()
-        && let Some(state) = team_gate_state_conn(&mut tx, team_id).await?
-    {
+    if !pending.is_empty() {
+        load_team_gate_state_once(conn, team_id, state, state_loaded).await?;
+    }
+
+    let mut enabled_hint_ids = Vec::new();
+    if let Some(state) = state.as_ref() {
         for hint in pending {
             let enabled = expr::compile_gate_expr(&hint.enable_cond)
                 .ok()
-                .is_some_and(|condition| expr::ast::eval_compiled(&state, &condition));
+                .is_some_and(|condition| expr::ast::eval_compiled(state, &condition));
             if enabled {
-                sqlx::query!(
-                    "INSERT INTO rb_team_hint_enable (team_id, hint_id)
-                    VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                    team_id,
-                    hint.id
-                )
-                .execute(&mut *tx)
-                .await?;
+                enabled_hint_ids.push(hint.id);
             }
         }
     }
 
-    tx.commit().await?;
+    if !enabled_hint_ids.is_empty() {
+        sqlx::query!(
+            "INSERT INTO rb_team_hint_enable (team_id, hint_id)
+            SELECT $1, UNNEST($2::INT[])
+            ON CONFLICT DO NOTHING",
+            team_id,
+            &enabled_hint_ids
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+
     Ok(())
 }
 
-async fn refresh_team_hint_visibility(
+pub async fn refresh_team_hint_enablements(
     pool: &DbPool,
     team_id: i32,
     puzzle_id: Option<i32>,
 ) -> Result<(), RbInternalError> {
     let mut tx = pool.begin().await?;
+    let mut state = None;
+    let mut state_loaded = false;
+    refresh_team_hint_enablements_conn(&mut tx, team_id, puzzle_id, &mut state, &mut state_loaded)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn refresh_team_hint_states_conn(
+    conn: &mut PgConnection,
+    team_id: i32,
+    puzzle_id: Option<i32>,
+    state: &mut Option<RbPuzzleStates>,
+    state_loaded: &mut bool,
+) -> Result<(), RbInternalError> {
     let pending = sqlx::query!(
-        r#"SELECT h.id, h.cooldown_origin, h.display_condition,
+        r#"SELECT h.id, h.enable_cond, h.cooldown_origin, h.display_condition,
             h.title_display_condition,
-            (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL) AS "enabled!"
+            (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL) AS "enabled!",
+            (h.cooldown_origin = 2 AND visibility.displayed_at IS NULL) AS "display_pending!",
+            (h.cooldown_origin = 3 AND visibility.title_displayed_at IS NULL) AS "title_display_pending!"
         FROM rb_hint h
         JOIN rb_puzzle_effective_release release ON release.puzzle_id = h.puzzle_id
         JOIN rb_team_puzzle tp
@@ -1918,9 +1956,9 @@ async fn refresh_team_hint_visibility(
             ON visibility.team_id = $1 AND visibility.hint_id = h.id
         LEFT JOIN rb_team_hint purchased
             ON purchased.team_id = $1 AND purchased.hint_id = h.id AND purchased.unlocked
-        WHERE h.cooldown_origin IN (2, 3)
-            AND ((h.cooldown_origin = 2 AND visibility.displayed_at IS NULL)
-                OR (h.cooldown_origin = 3 AND visibility.title_displayed_at IS NULL))
+        WHERE ((h.enable_cond IS NOT NULL AND enabled.hint_id IS NULL)
+            OR (h.cooldown_origin = 2 AND visibility.displayed_at IS NULL)
+            OR (h.cooldown_origin = 3 AND visibility.title_displayed_at IS NULL))
             AND purchased.hint_id IS NULL
             AND release.release_at <= NOW()
             AND ($2::INT IS NULL OR h.puzzle_id = $2)
@@ -1928,60 +1966,83 @@ async fn refresh_team_hint_visibility(
         team_id,
         puzzle_id
     )
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut *conn)
     .await?;
 
-    if !pending.is_empty()
-        && let Some(state) = team_gate_state_conn(&mut tx, team_id).await?
-    {
+    if !pending.is_empty() {
+        load_team_gate_state_once(conn, team_id, state, state_loaded).await?;
+    }
+
+    let mut enabled_hint_ids = Vec::new();
+    let mut visible_hint_ids = Vec::new();
+    let mut displayed_flags = Vec::new();
+    if let Some(state) = state.as_ref() {
         for hint in pending {
-            let visible = if hint.cooldown_origin == 2 {
-                hint_display_condition_met(
-                    hint.display_condition.as_deref(),
-                    true,
-                    &state,
-                    hint.enabled,
-                    false,
-                )
-            } else {
-                hint_display_condition_met(
-                    hint.title_display_condition.as_deref(),
-                    false,
-                    &state,
-                    hint.enabled,
-                    false,
-                )
+            let newly_enabled = !hint.enabled
+                && hint.enable_cond.as_deref().is_some_and(|condition| {
+                    expr::compile_gate_expr(condition)
+                        .ok()
+                        .is_some_and(|condition| expr::ast::eval_compiled(state, &condition))
+                });
+            if newly_enabled {
+                enabled_hint_ids.push(hint.id);
+            }
+            let enabled = hint.enabled || newly_enabled;
+
+            let visibility_condition = match hint.cooldown_origin {
+                2 if hint.display_pending => Some((hint.display_condition.as_deref(), true, true)),
+                3 if hint.title_display_pending => {
+                    Some((hint.title_display_condition.as_deref(), false, false))
+                }
+                _ => None,
             };
-            if visible {
-                let displayed = hint.cooldown_origin == 2;
-                sqlx::query!(
-                    "INSERT INTO rb_team_hint_visibility (
-                        team_id, hint_id, displayed_at, title_displayed_at
-                    ) VALUES (
-                        $1, $2,
-                        CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,
-                        CASE WHEN $3 THEN NULL ELSE CURRENT_TIMESTAMP END
-                    )
-                    ON CONFLICT (team_id, hint_id) DO UPDATE SET
-                        displayed_at = COALESCE(
-                            rb_team_hint_visibility.displayed_at,
-                            EXCLUDED.displayed_at
-                        ),
-                        title_displayed_at = COALESCE(
-                            rb_team_hint_visibility.title_displayed_at,
-                            EXCLUDED.title_displayed_at
-                        )",
-                    team_id,
-                    hint.id,
-                    displayed
-                )
-                .execute(&mut *tx)
-                .await?;
+            if let Some((condition, default, displayed)) = visibility_condition
+                && hint_display_condition_met(condition, default, Some(state), enabled, false)
+            {
+                visible_hint_ids.push(hint.id);
+                displayed_flags.push(displayed);
             }
         }
     }
 
-    tx.commit().await?;
+    if !enabled_hint_ids.is_empty() {
+        sqlx::query!(
+            "INSERT INTO rb_team_hint_enable (team_id, hint_id)
+            SELECT $1, UNNEST($2::INT[])
+            ON CONFLICT DO NOTHING",
+            team_id,
+            &enabled_hint_ids
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+
+    if !visible_hint_ids.is_empty() {
+        sqlx::query!(
+            "INSERT INTO rb_team_hint_visibility (
+                team_id, hint_id, displayed_at, title_displayed_at
+            )
+            SELECT $1, pending.hint_id,
+                CASE WHEN pending.displayed THEN CURRENT_TIMESTAMP ELSE NULL END,
+                CASE WHEN pending.displayed THEN NULL ELSE CURRENT_TIMESTAMP END
+            FROM UNNEST($2::INT[], $3::BOOL[]) AS pending(hint_id, displayed)
+            ON CONFLICT (team_id, hint_id) DO UPDATE SET
+                displayed_at = COALESCE(
+                    rb_team_hint_visibility.displayed_at,
+                    EXCLUDED.displayed_at
+                ),
+                title_displayed_at = COALESCE(
+                    rb_team_hint_visibility.title_displayed_at,
+                    EXCLUDED.title_displayed_at
+                )",
+            team_id,
+            &visible_hint_ids,
+            &displayed_flags
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -1990,8 +2051,13 @@ async fn refresh_team_hint_states(
     team_id: i32,
     puzzle_id: Option<i32>,
 ) -> Result<(), RbInternalError> {
-    refresh_team_hint_enablements(pool, team_id, puzzle_id).await?;
-    refresh_team_hint_visibility(pool, team_id, puzzle_id).await
+    let mut tx = pool.begin().await?;
+    let mut state = None;
+    let mut state_loaded = false;
+    refresh_team_hint_states_conn(&mut tx, team_id, puzzle_id, &mut state, &mut state_loaded)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn unlock_new_puzzles(app: &AppState, team_id: i32) -> Result<Vec<i32>, RbInternalError> {
@@ -2205,7 +2271,7 @@ pub async fn admin_unlock_puzzle_for_eligible_teams(
     let compiled_unlock_cond = unlock_cond
         .map(expr::compile_gate_expr)
         .transpose()
-        .map_err(RbInternalError::Other)?;
+        .map_err(|error| RbInternalError::Other(error.to_string()))?;
 
     let trigger_rows = sqlx::query!(
         "SELECT tpt.team_id, tpt.puzzle_id, tpt.trigger_key
@@ -2472,12 +2538,15 @@ struct RbHintShowRow {
 fn hint_display_condition_met<S: PuzzleStates>(
     condition: Option<&str>,
     default: bool,
-    state: &S,
+    state: Option<&S>,
     enabled: bool,
     cooldown_complete: bool,
 ) -> bool {
     let Some(condition) = condition else {
         return default;
+    };
+    let Some(state) = state else {
+        return false;
     };
     expr::compile_hint_display_expr(condition)
         .ok()
@@ -2489,7 +2558,7 @@ fn hint_display_condition_met<S: PuzzleStates>(
 fn hint_field_visible<S: PuzzleStates>(
     condition: Option<&str>,
     default: bool,
-    state: &S,
+    state: Option<&S>,
     purchased: bool,
     enabled: bool,
     cooldown_complete: bool,
@@ -2505,7 +2574,13 @@ fn hint_purchase_available<S: PuzzleStates>(
 ) -> bool {
     enabled
         && cooldown_complete
-        && hint_display_condition_met(display_condition, true, state, enabled, cooldown_complete)
+        && hint_display_condition_met(
+            display_condition,
+            true,
+            Some(state),
+            enabled,
+            cooldown_complete,
+        )
 }
 
 pub async fn get_hints_show_for_team(
@@ -2513,7 +2588,17 @@ pub async fn get_hints_show_for_team(
     team_id: i32,
     puzzle_id: i32,
 ) -> Result<Vec<RbHintShowData>, RbInternalError> {
-    refresh_team_hint_states(db_pool, team_id, Some(puzzle_id)).await?;
+    let mut tx = db_pool.begin().await?;
+    let mut state = None;
+    let mut state_loaded = false;
+    refresh_team_hint_states_conn(
+        &mut tx,
+        team_id,
+        Some(puzzle_id),
+        &mut state,
+        &mut state_loaded,
+    )
+    .await?;
     let rows = sqlx::query_as!(
         RbHintShowRow,
         r#"WITH state AS (
@@ -2548,19 +2633,25 @@ pub async fn get_hints_show_for_team(
         team_id,
         puzzle_id
     )
-    .fetch_all(db_pool)
+    .fetch_all(&mut *tx)
     .await?;
-    let mut conn = db_pool.acquire().await?;
-    let Some(state) = team_gate_state_conn(&mut conn, team_id).await? else {
-        return Ok(Vec::new());
-    };
+
+    let needs_state = rows.iter().any(|hint| {
+        !hint.purchased
+            && (hint.display_condition.is_some() || hint.title_display_condition.is_some())
+    });
+    if needs_state {
+        load_team_gate_state_once(&mut tx, team_id, &mut state, &mut state_loaded).await?;
+    }
+    tx.commit().await?;
+
     let result = rows
         .into_iter()
         .filter(|hint| {
             hint_field_visible(
                 hint.display_condition.as_deref(),
                 true,
-                &state,
+                state.as_ref(),
                 hint.purchased,
                 hint.enabled,
                 hint.cooldown_complete,
@@ -2571,7 +2662,7 @@ pub async fn get_hints_show_for_team(
             title: hint_field_visible(
                 hint.title_display_condition.as_deref(),
                 hint.cooldown_complete,
-                &state,
+                state.as_ref(),
                 hint.purchased,
                 hint.enabled,
                 hint.cooldown_complete,
@@ -2688,9 +2779,8 @@ pub async fn sync_hint_cooldowns(
     db_pool: &DbPool,
     team_id: i32,
     puzzle_id: i32,
-) -> Result<Option<OffsetDateTime>, RbInternalError> {
-    refresh_team_hint_states(db_pool, team_id, Some(puzzle_id)).await?;
-    next_hint_cooldown(db_pool, team_id, puzzle_id).await
+) -> Result<RbPuzzleHintTeamData, RbInternalError> {
+    get_hints_view_for_team(db_pool, team_id, puzzle_id).await
 }
 
 pub enum PurchaseHintResult {
@@ -3720,7 +3810,10 @@ pub async fn admin_delete_hint(pool: &DbPool, hint_id: i32) -> Result<bool, RbIn
 
 #[cfg(test)]
 mod tests {
-    use super::{hint_display_condition_met, hint_field_visible, hint_purchase_available};
+    use super::{
+        get_hints_show_for_team, hint_display_condition_met, hint_field_visible,
+        hint_purchase_available,
+    };
     use crate::expr::types::{PuzzleId, PuzzleStates, RoundId};
 
     struct EmptyState;
@@ -3759,7 +3852,7 @@ mod tests {
                 assert!(hint_display_condition_met(
                     Some("(true)"),
                     false,
-                    &state,
+                    Some(&state),
                     enabled,
                     cooldown_complete
                 ));
@@ -3767,7 +3860,7 @@ mod tests {
                     hint_display_condition_met(
                         Some("(hint-enabled)"),
                         false,
-                        &state,
+                        Some(&state),
                         enabled,
                         cooldown_complete
                     ),
@@ -3777,7 +3870,7 @@ mod tests {
                     hint_display_condition_met(
                         Some("(hint-cooled-down)"),
                         false,
-                        &state,
+                        Some(&state),
                         enabled,
                         cooldown_complete
                     ),
@@ -3787,7 +3880,7 @@ mod tests {
                     hint_display_condition_met(
                         Some("(and (hint-enabled) (hint-cooled-down))"),
                         false,
-                        &state,
+                        Some(&state),
                         enabled,
                         cooldown_complete
                     ),
@@ -3798,12 +3891,24 @@ mod tests {
         assert!(!hint_display_condition_met(
             Some("(invalid)"),
             true,
-            &state,
+            Some(&state),
             true,
             true
         ));
-        assert!(hint_display_condition_met(None, true, &state, false, false));
-        assert!(!hint_display_condition_met(None, false, &state, true, true));
+        assert!(hint_display_condition_met(
+            None,
+            true,
+            None::<&EmptyState>,
+            false,
+            false
+        ));
+        assert!(!hint_display_condition_met(
+            None,
+            false,
+            None::<&EmptyState>,
+            true,
+            true
+        ));
     }
 
     #[test]
@@ -3812,7 +3917,7 @@ mod tests {
         assert!(hint_field_visible(
             Some("(false)"),
             false,
-            &state,
+            Some(&state),
             true,
             false,
             false
@@ -3833,5 +3938,88 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[sqlx::test]
+    async fn hint_refresh_reuses_new_enablement_for_visibility(pool: sqlx::PgPool) {
+        let game_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_game (title, settings) VALUES ('Hint refresh', '{}') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let round_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_round (title, game_id) VALUES ('Round', $1) RETURNING id",
+        )
+        .bind(game_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let puzzle_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_puzzle (
+                title, unlock_cond, round_id, game_id, immediate_release_at
+            ) VALUES ('Puzzle', '', $1, $2, NOW()) RETURNING id",
+        )
+        .bind(round_id)
+        .bind(game_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let team_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_team (name, pass, bio, game_id)
+            VALUES ('Team', '', '', $1) RETURNING id",
+        )
+        .bind(game_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO rb_team_puzzle (team_id, puzzle_id) VALUES ($1, $2)")
+            .bind(team_id)
+            .bind(puzzle_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let hint_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_hint (
+                title, content, puzzle_id, enable_cond, display_condition, cooldown_origin
+            ) VALUES ('Hint', 'Content', $1, '(true)', '(hint-enabled)', 2)
+            RETURNING id",
+        )
+        .bind(puzzle_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let hints = get_hints_show_for_team(&pool, team_id, puzzle_id)
+            .await
+            .unwrap();
+        assert_eq!(hints.len(), 1);
+        assert!(hints[0].enabled);
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(
+                SELECT 1 FROM rb_team_hint_enable
+                WHERE team_id = $1 AND hint_id = $2
+            )"
+            )
+            .bind(team_id)
+            .bind(hint_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        );
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(
+                SELECT 1 FROM rb_team_hint_visibility
+                WHERE team_id = $1 AND hint_id = $2 AND displayed_at IS NOT NULL
+            )"
+            )
+            .bind(team_id)
+            .bind(hint_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        );
     }
 }

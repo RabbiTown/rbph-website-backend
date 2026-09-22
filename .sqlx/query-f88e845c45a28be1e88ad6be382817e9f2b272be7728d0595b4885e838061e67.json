@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_hint_visibility (\n                team_id, hint_id, displayed_at, title_displayed_at\n            )\n            SELECT $1, pending.hint_id,\n                CASE WHEN pending.displayed THEN CURRENT_TIMESTAMP ELSE NULL END,\n                CASE WHEN pending.displayed THEN NULL ELSE CURRENT_TIMESTAMP END\n            FROM UNNEST($2::INT[], $3::BOOL[]) AS pending(hint_id, displayed)\n            ON CONFLICT (team_id, hint_id) DO UPDATE SET\n                displayed_at = COALESCE(\n                    rb_team_hint_visibility.displayed_at,\n                    EXCLUDED.displayed_at\n                ),\n                title_displayed_at = COALESCE(\n                    rb_team_hint_visibility.title_displayed_at,\n                    EXCLUDED.title_displayed_at\n                )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4Array",
+        "BoolArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f88e845c45a28be1e88ad6be382817e9f2b272be7728d0595b4885e838061e67"
+}

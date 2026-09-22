@@ -59,6 +59,64 @@ fn op_to_cmp(op: &str) -> Option<CmpOp> {
     }
 }
 
+fn compile_gate_and(items: &[RawSexpr]) -> Result<GateExpr, CompileError> {
+    let children = items
+        .iter()
+        .map(compile_gate)
+        .collect::<Result<Vec<_>, _>>()?;
+    if children
+        .iter()
+        .any(|child| matches!(child, GateExpr::False))
+    {
+        return Ok(GateExpr::False);
+    }
+    let mut compiled = Vec::new();
+    for child in children {
+        match child {
+            GateExpr::True => {}
+            GateExpr::And(children) => compiled.extend(children),
+            child => compiled.push(child),
+        }
+    }
+    Ok(match compiled.len() {
+        0 => GateExpr::True,
+        1 => compiled.pop().unwrap(),
+        _ => GateExpr::And(compiled),
+    })
+}
+
+fn compile_gate_or(items: &[RawSexpr]) -> Result<GateExpr, CompileError> {
+    let children = items
+        .iter()
+        .map(compile_gate)
+        .collect::<Result<Vec<_>, _>>()?;
+    if children.iter().any(|child| matches!(child, GateExpr::True)) {
+        return Ok(GateExpr::True);
+    }
+    let mut compiled = Vec::new();
+    for child in children {
+        match child {
+            GateExpr::False => {}
+            GateExpr::Or(children) => compiled.extend(children),
+            child => compiled.push(child),
+        }
+    }
+    Ok(match compiled.len() {
+        0 => GateExpr::False,
+        1 => compiled.pop().unwrap(),
+        _ => GateExpr::Or(compiled),
+    })
+}
+
+fn negate_gate(expr: GateExpr) -> GateExpr {
+    match expr {
+        GateExpr::True => GateExpr::False,
+        GateExpr::False => GateExpr::True,
+        GateExpr::Not(inner) => *inner,
+        expr => GateExpr::Not(Box::new(expr)),
+    }
+}
+
 pub fn compile_set(expr: &RawSexpr) -> Result<SetExpr, CompileError> {
     match expr {
         RawSexpr::List(items) => {
@@ -140,23 +198,13 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
                     }
                     Ok(GateExpr::False)
                 }
-                "and" => Ok(GateExpr::And(
-                    items[1..]
-                        .iter()
-                        .map(compile_gate)
-                        .collect::<Result<_, _>>()?,
-                )),
-                "or" => Ok(GateExpr::Or(
-                    items[1..]
-                        .iter()
-                        .map(compile_gate)
-                        .collect::<Result<_, _>>()?,
-                )),
+                "and" => compile_gate_and(&items[1..]),
+                "or" => compile_gate_or(&items[1..]),
                 "not" => {
                     if items.len() != 2 {
                         return Err(CompileError::BadForm("not expects 1 arg"));
                     }
-                    Ok(GateExpr::Not(Box::new(compile_gate(&items[1])?)))
+                    Ok(negate_gate(compile_gate(&items[1])?))
                 }
                 "solved" => {
                     if items.len() != 2 {
@@ -221,6 +269,67 @@ pub fn compile_gate(expr: &RawSexpr) -> Result<GateExpr, CompileError> {
     }
 }
 
+fn compile_hint_and(items: &[RawSexpr]) -> Result<HintDisplayExpr, CompileError> {
+    let children = items
+        .iter()
+        .map(compile_hint_display)
+        .collect::<Result<Vec<_>, _>>()?;
+    if children
+        .iter()
+        .any(|child| matches!(child, HintDisplayExpr::Gate(GateExpr::False)))
+    {
+        return Ok(HintDisplayExpr::Gate(GateExpr::False));
+    }
+    let mut compiled = Vec::new();
+    for child in children {
+        match child {
+            HintDisplayExpr::Gate(GateExpr::True) => {}
+            HintDisplayExpr::And(children) => compiled.extend(children),
+            child => compiled.push(child),
+        }
+    }
+    Ok(match compiled.len() {
+        0 => HintDisplayExpr::Gate(GateExpr::True),
+        1 => compiled.pop().unwrap(),
+        _ => HintDisplayExpr::And(compiled),
+    })
+}
+
+fn compile_hint_or(items: &[RawSexpr]) -> Result<HintDisplayExpr, CompileError> {
+    let children = items
+        .iter()
+        .map(compile_hint_display)
+        .collect::<Result<Vec<_>, _>>()?;
+    if children
+        .iter()
+        .any(|child| matches!(child, HintDisplayExpr::Gate(GateExpr::True)))
+    {
+        return Ok(HintDisplayExpr::Gate(GateExpr::True));
+    }
+    let mut compiled = Vec::new();
+    for child in children {
+        match child {
+            HintDisplayExpr::Gate(GateExpr::False) => {}
+            HintDisplayExpr::Or(children) => compiled.extend(children),
+            child => compiled.push(child),
+        }
+    }
+    Ok(match compiled.len() {
+        0 => HintDisplayExpr::Gate(GateExpr::False),
+        1 => compiled.pop().unwrap(),
+        _ => HintDisplayExpr::Or(compiled),
+    })
+}
+
+fn negate_hint(expr: HintDisplayExpr) -> HintDisplayExpr {
+    match expr {
+        HintDisplayExpr::Gate(GateExpr::True) => HintDisplayExpr::Gate(GateExpr::False),
+        HintDisplayExpr::Gate(GateExpr::False) => HintDisplayExpr::Gate(GateExpr::True),
+        HintDisplayExpr::Not(inner) => *inner,
+        expr => HintDisplayExpr::Not(Box::new(expr)),
+    }
+}
+
 pub fn compile_hint_display(expr: &RawSexpr) -> Result<HintDisplayExpr, CompileError> {
     let RawSexpr::List(items) = expr else {
         return Err(CompileError::BadForm("bare atom not allowed"));
@@ -243,25 +352,13 @@ pub fn compile_hint_display(expr: &RawSexpr) -> Result<HintDisplayExpr, CompileE
             }
             Ok(HintDisplayExpr::HintCooledDown)
         }
-        "and" => Ok(HintDisplayExpr::And(
-            items[1..]
-                .iter()
-                .map(compile_hint_display)
-                .collect::<Result<_, _>>()?,
-        )),
-        "or" => Ok(HintDisplayExpr::Or(
-            items[1..]
-                .iter()
-                .map(compile_hint_display)
-                .collect::<Result<_, _>>()?,
-        )),
+        "and" => compile_hint_and(&items[1..]),
+        "or" => compile_hint_or(&items[1..]),
         "not" => {
             if items.len() != 2 {
                 return Err(CompileError::BadForm("not expects 1 arg"));
             }
-            Ok(HintDisplayExpr::Not(Box::new(compile_hint_display(
-                &items[1],
-            )?)))
+            Ok(negate_hint(compile_hint_display(&items[1])?))
         }
         _ => compile_gate(expr).map(HintDisplayExpr::Gate),
     }

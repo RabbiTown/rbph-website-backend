@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.id, h.enable_cond, h.cooldown_origin, h.display_condition,\n            h.title_display_condition,\n            (h.enable_cond IS NULL OR enabled.hint_id IS NOT NULL) AS \"enabled!\",\n            (h.cooldown_origin = 2 AND visibility.displayed_at IS NULL) AS \"display_pending!\",\n            (h.cooldown_origin = 3 AND visibility.title_displayed_at IS NULL) AS \"title_display_pending!\"\n        FROM rb_hint h\n        JOIN rb_puzzle_effective_release release ON release.puzzle_id = h.puzzle_id\n        JOIN rb_team_puzzle tp\n            ON tp.puzzle_id = h.puzzle_id AND tp.team_id = $1 AND tp.state >= 0\n        LEFT JOIN rb_team_hint_enable enabled\n            ON enabled.team_id = $1 AND enabled.hint_id = h.id\n        LEFT JOIN rb_team_hint_visibility visibility\n            ON visibility.team_id = $1 AND visibility.hint_id = h.id\n        LEFT JOIN rb_team_hint purchased\n            ON purchased.team_id = $1 AND purchased.hint_id = h.id AND purchased.unlocked\n        WHERE ((h.enable_cond IS NOT NULL AND enabled.hint_id IS NULL)\n            OR (h.cooldown_origin = 2 AND visibility.displayed_at IS NULL)\n            OR (h.cooldown_origin = 3 AND visibility.title_displayed_at IS NULL))\n            AND purchased.hint_id IS NULL\n            AND release.release_at <= NOW()\n            AND ($2::INT IS NULL OR h.puzzle_id = $2)\n        ORDER BY h.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "enable_cond",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "cooldown_origin",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "display_condition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "title_display_condition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "enabled!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "display_pending!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "title_display_pending!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5fe094c8ad60825df9ffdafe2fe4be4ac320e2b1a35dc113d403153ae557e468"
+}

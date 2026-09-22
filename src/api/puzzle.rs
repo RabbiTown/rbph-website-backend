@@ -279,8 +279,8 @@ pub enum PurchaseHintResult {
 struct SyncHintCooldownsResponse {
     #[serde(with = "crate::serde_helpers::serialize_offset_datetime")]
     server_time: OffsetDateTime,
-    #[serde(with = "crate::serde_helpers::serialize_option_offset_datetime")]
-    next_cooldown_at: Option<OffsetDateTime>,
+    #[serde(flatten)]
+    hints: db::puzzle::RbPuzzleHintTeamData,
 }
 
 #[derive(Serialize)]
@@ -297,12 +297,11 @@ async fn sync_hint_cooldowns(
     app: web::Data<AppState>,
 ) -> Result<HttpResponse> {
     let team_id = user.req_team_id()?.ok_or(RbError::forbid())?;
-    let next_cooldown_at =
-        db::puzzle::sync_hint_cooldowns(&app.db, team_id, path.puzzle_id).await?;
+    let hints = db::puzzle::sync_hint_cooldowns(&app.db, team_id, path.puzzle_id).await?;
 
     Ok(HttpResponse::Ok().json(SyncHintCooldownsResponse {
         server_time: OffsetDateTime::now_utc(),
-        next_cooldown_at,
+        hints,
     }))
 }
 

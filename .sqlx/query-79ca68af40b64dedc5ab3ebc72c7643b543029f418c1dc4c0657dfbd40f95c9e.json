@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_team_hint_enable (team_id, hint_id)\n            SELECT $1, UNNEST($2::INT[])\n            ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "79ca68af40b64dedc5ab3ebc72c7643b543029f418c1dc4c0657dfbd40f95c9e"
+}

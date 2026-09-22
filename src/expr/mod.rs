@@ -1,5 +1,12 @@
 #![allow(unused)]
 
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, RwLock},
+};
+
+use once_cell::sync::Lazy;
+
 pub mod ast;
 mod compiler;
 mod parser;
@@ -10,6 +17,51 @@ use crate::expr::{
     types::PuzzleStates,
 };
 
+const COMPILE_CACHE_CAPACITY: usize = 4096;
+
+struct CompileCache<T> {
+    values: HashMap<String, Result<Arc<T>, Arc<str>>>,
+    insertion_order: VecDeque<String>,
+}
+
+impl<T> CompileCache<T> {
+    fn new() -> Self {
+        Self {
+            values: HashMap::new(),
+            insertion_order: VecDeque::new(),
+        }
+    }
+
+    fn get(&self, expression: &str) -> Option<Result<Arc<T>, Arc<str>>> {
+        self.values.get(expression).cloned()
+    }
+
+    fn insert(
+        &mut self,
+        expression: String,
+        compiled: Result<Arc<T>, Arc<str>>,
+    ) -> Result<Arc<T>, Arc<str>> {
+        if let Some(existing) = self.values.get(&expression) {
+            return existing.clone();
+        }
+        while self.values.len() >= COMPILE_CACHE_CAPACITY {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.values.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        self.insertion_order.push_back(expression.clone());
+        self.values.insert(expression, compiled.clone());
+        compiled
+    }
+}
+
+static GATE_CACHE: Lazy<RwLock<CompileCache<GateExpr>>> =
+    Lazy::new(|| RwLock::new(CompileCache::new()));
+static HINT_DISPLAY_CACHE: Lazy<RwLock<CompileCache<HintDisplayExpr>>> =
+    Lazy::new(|| RwLock::new(CompileCache::new()));
+
 fn parse(expr: &str) -> Result<parser::RawSexpr, String> {
     let tokens = parser::tokenize(expr);
     let (sexpr, used) = parser::parse_expr(&tokens).map_err(|e| format!("Parse Error: {e:?}"))?;
@@ -19,14 +71,41 @@ fn parse(expr: &str) -> Result<parser::RawSexpr, String> {
     Ok(sexpr)
 }
 
-pub fn compile_gate_expr(expr: &str) -> Result<GateExpr, String> {
+fn compile_gate_expr_uncached(expr: &str) -> Result<GateExpr, String> {
     let sexpr = parse(expr)?;
     compiler::compile_gate(&sexpr).map_err(|e| format!("Compile Error: {e:?}"))
 }
 
-pub fn compile_hint_display_expr(expr: &str) -> Result<HintDisplayExpr, String> {
+fn compile_hint_display_expr_uncached(expr: &str) -> Result<HintDisplayExpr, String> {
     let sexpr = parse(expr)?;
     compiler::compile_hint_display(&sexpr).map_err(|e| format!("Compile Error: {e:?}"))
+}
+
+fn compile_cached<T>(
+    cache: &RwLock<CompileCache<T>>,
+    expression: &str,
+    compile: impl FnOnce(&str) -> Result<T, String>,
+) -> Result<Arc<T>, Arc<str>> {
+    if let Some(compiled) = cache.read().unwrap().get(expression) {
+        return compiled;
+    }
+    let compiled = compile(expression).map(Arc::new).map_err(Arc::<str>::from);
+    cache
+        .write()
+        .unwrap()
+        .insert(expression.to_string(), compiled)
+}
+
+pub fn compile_gate_expr(expr: &str) -> Result<Arc<GateExpr>, Arc<str>> {
+    compile_cached(&GATE_CACHE, expr, compile_gate_expr_uncached)
+}
+
+pub fn compile_hint_display_expr(expr: &str) -> Result<Arc<HintDisplayExpr>, Arc<str>> {
+    compile_cached(
+        &HINT_DISPLAY_CACHE,
+        expr,
+        compile_hint_display_expr_uncached,
+    )
 }
 
 /// A state-aware S-expression predicate language for gating and progression.
@@ -36,7 +115,10 @@ pub fn eval<S: PuzzleStates>(state: &S, expr: &str) -> bool {
 }
 
 mod test {
+    use std::sync::Arc;
+
     use crate::expr::{
+        ast::{GateExpr, HintDisplayExpr},
         compile_gate_expr, compile_hint_display_expr, eval,
         types::{PuzzleId, PuzzleStates},
     };
@@ -219,5 +301,38 @@ mod test {
         assert!(compile_gate_expr("(hint-enabled)").is_err());
         assert!(compile_gate_expr("(hint-cooled-down)").is_err());
         assert!(compile_hint_display_expr("(hint-enabled unexpected)").is_err());
+    }
+
+    #[test]
+    fn compiled_expressions_are_cached_and_simplified() {
+        let first = compile_gate_expr("(and (true) (solved intro))").unwrap();
+        let second = compile_gate_expr("(and (true) (solved intro))").unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(matches!(&*first, GateExpr::Solved(_)));
+
+        let hint = compile_hint_display_expr("(and (true) (or (false) (hint-enabled)))").unwrap();
+        assert!(matches!(&*hint, HintDisplayExpr::HintEnabled));
+
+        let first_error = compile_gate_expr("(unknown)").unwrap_err();
+        let second_error = compile_gate_expr("(unknown)").unwrap_err();
+        assert!(Arc::ptr_eq(&first_error, &second_error));
+
+        assert!(compile_gate_expr("(and (false) (unknown))").is_err());
+        assert!(compile_hint_display_expr("(or (true) (unknown))").is_err());
+    }
+
+    #[test]
+    fn compiled_expression_cache_is_bounded() {
+        let mut cache = super::CompileCache::new();
+        for index in 0..=super::COMPILE_CACHE_CAPACITY {
+            cache.insert(index.to_string(), Ok(Arc::new(index)));
+        }
+        assert_eq!(cache.values.len(), super::COMPILE_CACHE_CAPACITY);
+        assert!(cache.get("0").is_none());
+        assert!(
+            cache
+                .get(&super::COMPILE_CACHE_CAPACITY.to_string())
+                .is_some()
+        );
     }
 }

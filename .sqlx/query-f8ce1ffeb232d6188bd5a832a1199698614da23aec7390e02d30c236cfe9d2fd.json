@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tp.puzzle_id,\n                COUNT(*) FILTER (WHERE tp.state = 1) AS \"solved!\",\n                COUNT(*) FILTER (\n                    WHERE tp.state = 1\n                        OR EXISTS (\n                            SELECT 1\n                            FROM rb_submission s\n                            WHERE s.team_id = tp.team_id\n                                AND s.puzzle_id = tp.puzzle_id\n                                AND NOT s.ignored\n                        )\n                ) AS \"tried!\",\n                COUNT(*) AS \"unlocked!\"\n            FROM rb_team_puzzle tp\n            JOIN rb_team t ON t.id = tp.team_id AND NOT t.is_banned\n            JOIN rb_puzzle p ON p.id = tp.puzzle_id\n            WHERE p.round_id = $1\n                AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)\n                AND tp.state >= 0\n            GROUP BY tp.puzzle_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "puzzle_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "solved!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "tried!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "unlocked!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f8ce1ffeb232d6188bd5a832a1199698614da23aec7390e02d30c236cfe9d2fd"
+}

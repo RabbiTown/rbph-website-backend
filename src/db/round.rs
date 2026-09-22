@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -114,12 +116,69 @@ pub struct RbRoundShowData {
 }
 
 #[derive(Serialize)]
+pub struct RbPuzzleSolveStats {
+    pub solved: i64,
+    pub tried: i64,
+    pub unlocked: i64,
+}
+
+#[derive(Serialize)]
 pub struct RbPuzzleSimpleData {
     pub id: i32,
     pub slug: Option<String>,
     pub title: String,
     pub state: RbTeamPuzzleState,
     pub answer: Option<String>,
+    pub solve_stats: RbPuzzleSolveStats,
+}
+
+struct RbPuzzleSimpleRow {
+    id: i32,
+    slug: Option<String>,
+    title: String,
+    state: RbTeamPuzzleState,
+    answer: Option<String>,
+}
+
+struct RbPuzzleSolveStatsRow {
+    puzzle_id: i32,
+    solved: i64,
+    tried: i64,
+    unlocked: i64,
+}
+
+async fn get_solve_stats_for_round(
+    db_pool: &DbPool,
+    round_id: i32,
+) -> Result<HashMap<i32, RbPuzzleSolveStatsRow>, RbInternalError> {
+    let rows = sqlx::query_as!(
+        RbPuzzleSolveStatsRow,
+        r#"SELECT tp.puzzle_id,
+                COUNT(*) FILTER (WHERE tp.state = 1) AS "solved!",
+                COUNT(*) FILTER (
+                    WHERE tp.state = 1
+                        OR EXISTS (
+                            SELECT 1
+                            FROM rb_submission s
+                            WHERE s.team_id = tp.team_id
+                                AND s.puzzle_id = tp.puzzle_id
+                                AND NOT s.ignored
+                        )
+                ) AS "tried!",
+                COUNT(*) AS "unlocked!"
+            FROM rb_team_puzzle tp
+            JOIN rb_team t ON t.id = tp.team_id AND NOT t.is_banned
+            JOIN rb_puzzle p ON p.id = tp.puzzle_id
+            WHERE p.round_id = $1
+                AND p.id IS DISTINCT FROM (SELECT puzzle FROM rb_round WHERE id = $1)
+                AND tp.state >= 0
+            GROUP BY tp.puzzle_id"#,
+        round_id
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|row| (row.puzzle_id, row)).collect())
 }
 
 #[derive(Serialize)]
@@ -135,8 +194,8 @@ pub async fn get_state_for_team(
     team_id: i32,
     round_id: i32,
 ) -> Result<RbRoundTeamStateShowData, RbInternalError> {
-    let puzzles = sqlx::query_as!(
-        RbPuzzleSimpleData,
+    let puzzle_rows = sqlx::query_as!(
+        RbPuzzleSimpleRow,
         "SELECT p.id, p.slug, p.title, tp.state AS state,
                 CASE WHEN COUNT(s.id) = 1 THEN MAX(s.real_answer) ELSE NULL END AS answer
         FROM rb_puzzle p
@@ -156,6 +215,27 @@ pub async fn get_state_for_team(
     )
     .fetch_all(db_pool)
     .await?;
+
+    let solve_stats = get_solve_stats_for_round(db_pool, round_id).await?;
+
+    let puzzles = puzzle_rows
+        .into_iter()
+        .map(|puzzle| {
+            let stats = solve_stats.get(&puzzle.id);
+            RbPuzzleSimpleData {
+                id: puzzle.id,
+                slug: puzzle.slug,
+                title: puzzle.title,
+                state: puzzle.state,
+                answer: puzzle.answer,
+                solve_stats: RbPuzzleSolveStats {
+                    solved: stats.map_or(0, |row| row.solved),
+                    tried: stats.map_or(0, |row| row.tried),
+                    unlocked: stats.map_or(0, |row| row.unlocked),
+                },
+            }
+        })
+        .collect();
 
     let row = sqlx::query!(
         "SELECT GREATEST(tp.ctime_at, rp.release_at) AS \"utime_at!\",
@@ -463,4 +543,100 @@ pub async fn admin_delete(pool: &DbPool, round_id: i32) -> Result<bool, RbIntern
     .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_solve_stats_for_round;
+
+    #[sqlx::test]
+    async fn solve_stats_count_distinct_eligible_teams(pool: sqlx::PgPool) {
+        let user_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_user (email, pass) VALUES ('stats@example.com', 'password') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let game_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_game (title, settings) VALUES ('Stats game', '{}') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let round_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_round (title, game_id) VALUES ('Round', $1) RETURNING id",
+        )
+        .bind(game_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let puzzle_id: i32 = sqlx::query_scalar(
+            "INSERT INTO rb_puzzle (title, unlock_cond, round_id, game_id) VALUES ('Puzzle', '', $1, $2) RETURNING id",
+        )
+        .bind(round_id)
+        .bind(game_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let mut team_ids = Vec::new();
+        for index in 0..6 {
+            let team_id: i32 = sqlx::query_scalar(
+                "INSERT INTO rb_team (name, pass, bio, game_id, is_banned) VALUES ($1, '', '', $2, $3) RETURNING id",
+            )
+            .bind(format!("Team {index}"))
+            .bind(game_id)
+            .bind(index == 5)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            team_ids.push(team_id);
+        }
+
+        for (index, team_id) in team_ids.iter().enumerate() {
+            let state = match index {
+                0 | 5 => 1,
+                4 => -1,
+                _ => 0,
+            };
+            sqlx::query(
+                "INSERT INTO rb_team_puzzle (team_id, puzzle_id, state) VALUES ($1, $2, $3)",
+            )
+            .bind(team_id)
+            .bind(puzzle_id)
+            .bind(state)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        for answer in ["first", "second"] {
+            sqlx::query(
+                "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer, saction) VALUES ($1, $2, $3, $4, $4, 0)",
+            )
+            .bind(team_ids[1])
+            .bind(user_id)
+            .bind(puzzle_id)
+            .bind(answer)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO rb_submission (team_id, user_id, puzzle_id, user_answer, norm_answer, saction, ignored) VALUES ($1, $2, $3, 'ignored', 'ignored', -2, TRUE)",
+        )
+        .bind(team_ids[2])
+        .bind(user_id)
+        .bind(puzzle_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let stats = get_solve_stats_for_round(&pool, round_id).await.unwrap();
+        let stats = stats.get(&puzzle_id).unwrap();
+        assert_eq!(stats.solved, 1);
+        assert_eq!(stats.tried, 2);
+        assert_eq!(stats.unlocked, 4);
+        assert!(stats.solved <= stats.tried && stats.tried <= stats.unlocked);
+    }
 }

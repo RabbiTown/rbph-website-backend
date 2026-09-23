@@ -6,7 +6,7 @@ use crate::{
     AppState, DbPool,
     db::{self, game::GameUserInfo, puzzle::RbPuzzleTeamStateShowData},
     error::RbInternalError,
-    model::game::RbTeamPuzzleState,
+    model::game::{RbGameDisplaySettings, RbTeamPuzzleState},
     model::user::RbUserRole,
 };
 
@@ -129,7 +129,8 @@ pub struct RbPuzzleSimpleData {
     pub title: String,
     pub state: RbTeamPuzzleState,
     pub answer: Option<String>,
-    pub solve_stats: RbPuzzleSolveStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solve_stats: Option<RbPuzzleSolveStats>,
 }
 
 struct RbPuzzleSimpleRow {
@@ -216,6 +217,25 @@ pub async fn get_state_for_team(
     .fetch_all(db_pool)
     .await?;
 
+    let game_id = get_round_game(db_pool, round_id).await?;
+    let delay_solve_stats = if let Some(game_id) = game_id {
+        db::game::get_setting_group::<RbGameDisplaySettings>(db_pool, game_id)
+            .await?
+            .is_some_and(|settings| settings.delay_solve_stats)
+    } else {
+        false
+    };
+    let participating_teams = if delay_solve_stats {
+        sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM rb_team WHERE game_id = $1 AND start_at IS NOT NULL AND NOT is_banned",
+            game_id
+        )
+        .fetch_one(db_pool)
+        .await?
+        .unwrap_or(0)
+    } else {
+        0
+    };
     let solve_stats = get_solve_stats_for_round(db_pool, round_id).await?;
 
     let puzzles = puzzle_rows
@@ -228,11 +248,13 @@ pub async fn get_state_for_team(
                 title: puzzle.title,
                 state: puzzle.state,
                 answer: puzzle.answer,
-                solve_stats: RbPuzzleSolveStats {
+                solve_stats: (!delay_solve_stats
+                    || stats_visible(stats.map_or(0, |row| row.solved), participating_teams))
+                .then_some(RbPuzzleSolveStats {
                     solved: stats.map_or(0, |row| row.solved),
                     tried: stats.map_or(0, |row| row.tried),
                     unlocked: stats.map_or(0, |row| row.unlocked),
-                },
+                }),
             }
         })
         .collect();
@@ -276,6 +298,10 @@ pub async fn get_state_for_team(
             cooldown_till: r.cooldown_till,
         }),
     })
+}
+
+fn stats_visible(solved: i64, participating_teams: i64) -> bool {
+    solved >= 50 || solved >= participating_teams / 5
 }
 
 #[derive(Serialize)]
@@ -547,7 +573,16 @@ pub async fn admin_delete(pool: &DbPool, round_id: i32) -> Result<bool, RbIntern
 
 #[cfg(test)]
 mod tests {
-    use super::get_solve_stats_for_round;
+    use super::{get_solve_stats_for_round, stats_visible};
+
+    #[test]
+    fn delayed_stats_threshold_uses_either_limit() {
+        assert!(stats_visible(0, 4));
+        assert!(!stats_visible(0, 5));
+        assert!(stats_visible(1, 9));
+        assert!(!stats_visible(49, 1000));
+        assert!(stats_visible(50, 1000));
+    }
 
     #[sqlx::test]
     async fn solve_stats_count_distinct_eligible_teams(pool: sqlx::PgPool) {

@@ -42,6 +42,7 @@ pub struct RbGameDisplaySettings {
     pub staff_nickname: Option<String>,
     pub staff_avatar_email: Option<String>,
     pub staff_avatar_provider: AvatarProvider,
+    pub delay_solve_stats: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +112,7 @@ impl RbGameDisplaySettings {
                 "staff_avatar_provider" => {
                     serde_json::from_value::<AvatarProvider>(value.clone()).is_ok()
                 }
+                "delay_solve_stats" => value.is_boolean(),
                 _ => false,
             }),
             _ => false,
@@ -281,7 +283,8 @@ mod tests {
                 "display": {
                     "staff_nickname": null,
                     "staff_avatar_email": null,
-                    "staff_avatar_provider": "cravatar"
+                    "staff_avatar_provider": "cravatar",
+                    "delay_solve_stats": false
                 },
                 "ticket": {},
             })
@@ -298,7 +301,11 @@ mod tests {
         ));
         assert!(RbGameDisplaySettings::validate_patch(&json!({
             "staff_avatar_email": "avatar@example.com",
-            "staff_avatar_provider": "catavatar"
+            "staff_avatar_provider": "catavatar",
+            "delay_solve_stats": true
+        })));
+        assert!(!RbGameDisplaySettings::validate_patch(&json!({
+            "delay_solve_stats": "true"
         })));
         assert!(!RbGameDisplaySettings::validate_patch(
             &json!({ "staff_nickname": "   " })

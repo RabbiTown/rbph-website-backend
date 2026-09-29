@@ -106,6 +106,16 @@
       const actualKey = requireString(arguments[selected.offset], `${label}.kv.getEntry requires a key`);
       return call('kvGetEntry', { scope: selected.scope, key: actualKey });
     },
+    getEntries: function getEntries(scopeOrKeys, keys) {
+      const selected = scopeProvider(selector, arguments);
+      const actual = arguments[selected.offset];
+      if (!Array.isArray(actual) || actual.length > 128) fail(`${label}.kv.getEntries requires at most 128 keys`);
+      for (const key of actual) {
+        if (typeof key !== 'string' || [...key].length < 1 || [...key].length > 255 || key.includes('\0')) fail(`${label}.kv.getEntries key is invalid`);
+      }
+      if (!actual.length) return [];
+      return call('kvGetEntries', { scope: selected.scope, keys: actual });
+    },
     set: function set(scopeOrKey, keyOrValue, valueOrOptions, options) {
       const selected = scopeProvider(selector, arguments);
       const actualKey = requireString(arguments[selected.offset], `${label}.kv.set requires a key`);
@@ -228,6 +238,31 @@
       };
     },
   });
+
+  const makeCommit = selector =>
+    function commit(scopeOrBatch, batch) {
+      const selected = scopeProvider(selector, arguments);
+      const actual = arguments[selected.offset];
+      if (!isObject(actual) || !Array.isArray(actual.writes) || actual.writes.length > 16) fail('commit accepts at most 16 writes');
+      const inserts = actual.inserts === undefined ? [] : actual.inserts;
+      if (!Array.isArray(inserts) || inserts.length > 32) fail('commit accepts at most 32 inserts');
+      if (actual.writes.length === 0 && inserts.length === 0) fail('commit requires at least one write or insert');
+      const keys = new Set();
+      const writes = actual.writes.map(write => {
+        if (!isObject(write) || typeof write.key !== 'string' || [...write.key].length < 1 || [...write.key].length > 255 || write.key.includes('\0') || keys.has(write.key)) fail('commit write key is invalid or duplicated');
+        keys.add(write.key);
+        const version = write.expectedVersion;
+        if (version !== null && (typeof version !== 'string' || !/^[1-9][0-9]*$/.test(version) || BigInt(version) > 9223372036854775807n)) fail('commit expectedVersion must be null or a positive i64 string');
+        if (!Object.prototype.hasOwnProperty.call(write, 'value')) fail('commit write value is required');
+        return { key: write.key, expectedVersion: version, value: requireJson(write.value), expiry: kvExpiry(write.options, version === null ? 'permanent' : 'preserve', 'commit') };
+      });
+      const documents = inserts.map(insert => {
+        if (!isObject(insert) || typeof insert.collection !== 'string' || !isObject(insert.value)) fail('commit insert requires a collection and object value');
+        validStoreName(insert.collection, 'commit collection name is invalid');
+        return { collection: insert.collection, schema: storeSchema(insert.schema), value: insert.value };
+      });
+      return call('storageCommit', { scope: selected.scope, writes, inserts: documents });
+    };
 
   const currencyRef = (value, message) => {
     if (typeof value === 'number') {
@@ -384,6 +419,7 @@
   const game = {
     id: metadata.gameId,
     kv: makeKv('game', '$game'),
+    commit: makeCommit('game'),
     store: makeStore('game', '$game'),
     currency: makeCurrency('game'),
   };
@@ -391,6 +427,7 @@
     id: metadata.team.id,
     name: metadata.team.name,
     kv: makeKv('team', '$team'),
+    commit: makeCommit('team'),
     store: makeStore('team', '$team'),
     currency: makeCurrency('team'),
   };
@@ -399,6 +436,7 @@
     gameId: metadata.gameId,
     title: metadata.puzzle.title,
     kv: makeKv('puzzle', '$puzzle'),
+    commit: makeCommit('puzzle'),
     store: makeStore('puzzle', '$puzzle'),
     assets,
   };
@@ -407,6 +445,7 @@
     team,
     puzzle,
     kv: makeKv('this', '$this'),
+    commit: makeCommit('this'),
     store: makeStore('this', '$this'),
     submission: {
       add: function add(submission) {

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO rb_user (email, pass, nickname) VALUES ('batch@example.invalid', '', 'Tester') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "04a9e086cfa871a9951f70982503fb3b52f69995aaf5dac29ab39383e83b536a"
+}

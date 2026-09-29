@@ -1,6 +1,8 @@
 use std::{
     cell::RefCell,
+    collections::HashMap,
     future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
@@ -149,12 +151,38 @@ pub(super) struct HostCaptureReport {
     pub events: Result<Vec<PuzzleBackendEventSync>, HostError>,
 }
 
+#[derive(Default)]
+struct ScopeCache {
+    entries:
+        Mutex<HashMap<(i32, puzzle_backend::BackendScope), puzzle_backend::ValidatedBackendScope>>,
+}
+
+impl ScopeCache {
+    async fn get(
+        &self,
+        conn: &mut PgConnection,
+        game_id: i32,
+        scope: puzzle_backend::BackendScope,
+    ) -> Result<puzzle_backend::ValidatedBackendScope, RbInternalError> {
+        if let Some(checked) = self.entries.lock().unwrap().get(&(game_id, scope)).copied() {
+            return Ok(checked);
+        }
+        let checked = puzzle_backend::validate_backend_scope_conn(conn, game_id, scope).await?;
+        self.entries
+            .lock()
+            .unwrap()
+            .insert((game_id, scope), checked);
+        Ok(checked)
+    }
+}
+
 pub(super) struct HostDispatcher {
     app: AppState,
     runtime: RuntimeContext,
     console: Mutex<BackendConsoleCapture>,
     events: Mutex<Vec<EmittedPuzzleBackendEvent>>,
     max_asset_read_bytes: u64,
+    validated_scopes: ScopeCache,
 }
 
 impl HostDispatcher {
@@ -165,6 +193,7 @@ impl HostDispatcher {
             console: Mutex::new(BackendConsoleCapture::default()),
             events: Mutex::new(Vec::new()),
             max_asset_read_bytes: DEFAULT_MAX_ASSET_READ_BYTES,
+            validated_scopes: ScopeCache::default(),
         }
     }
 
@@ -226,6 +255,41 @@ impl HostDispatcher {
         }
     }
 
+    fn storage<T>(
+        &self,
+        scope: HostScope,
+        action: impl for<'a> FnOnce(
+            &'a mut PgConnection,
+            puzzle_backend::ValidatedBackendScope,
+        )
+            -> Pin<Box<dyn Future<Output = Result<T, RbInternalError>> + 'a>>,
+    ) -> Result<T, HostError> {
+        self.deadline()?;
+        let scope = Self::scope(scope)?;
+        if in_transactional_judge() {
+            with_judge_conn(|conn| {
+                block_on_db(async {
+                    let checked = self
+                        .validated_scopes
+                        .get(conn, self.runtime.game_id, scope)
+                        .await?;
+                    action(conn, checked).await
+                })
+            })
+            .expect("judge connection must be installed")
+        } else {
+            block_on_db(async {
+                let mut conn = self.app.db.acquire().await?;
+                let checked = self
+                    .validated_scopes
+                    .get(&mut conn, self.runtime.game_id, scope)
+                    .await?;
+                action(&mut conn, checked).await
+            })
+        }
+        .map_err(Self::db_error)
+    }
+
     fn db_error(error: impl ToString) -> HostError {
         HostError::internal(error.to_string())
     }
@@ -275,6 +339,15 @@ impl HostDispatcher {
             "entry": result.entry.map(Self::kv_entry_json),
             "serverTime": crate::serde_helpers::format_offset_datetime(&result.server_time),
         })
+    }
+
+    fn validate_kv_key(key: &str) -> Result<(), HostError> {
+        if !(1..=255).contains(&key.chars().count()) || key.contains('\0') {
+            return Err(HostError::invalid(
+                "KV key must contain 1-255 characters without NUL",
+            ));
+        }
+        Ok(())
     }
 
     fn validate_store_name(name: &str, message: &str) -> Result<(), HostError> {
@@ -970,49 +1043,120 @@ impl HostBridge for HostDispatcher {
         let json = match request.call {
             HostCall::KvGet { scope, key } => {
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
-                if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::get_kv_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::get_kv(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                    ))
-                }
-                .map_err(Self::db_error)?
+                self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::get_kv_validated_conn(conn, &checked, &key).await
+                    })
+                })?
                 .unwrap_or(Value::Null)
             }
             HostCall::KvGetEntry { scope, key } => {
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
-                let entry = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::get_kv_entry_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::get_kv_entry(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let entry = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::get_kv_entry_validated_conn(conn, &checked, &key).await
+                    })
+                })?;
                 entry.map(Self::kv_entry_json).unwrap_or(Value::Null)
+            }
+            HostCall::KvGetEntries { scope, keys } => {
+                if keys.len() > 128 {
+                    return Err(HostError::invalid("getEntries accepts at most 128 keys"));
+                }
+                for key in &keys {
+                    Self::validate_kv_key(key)?;
+                }
+                if keys.is_empty() {
+                    return Ok(HostValue::Json(json!([])));
+                }
+                let entries = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::get_kv_entries_validated_conn(conn, &checked, &keys).await
+                    })
+                })?;
+                Value::Array(
+                    entries
+                        .into_iter()
+                        .map(|entry| entry.map(Self::kv_entry_json).unwrap_or(Value::Null))
+                        .collect(),
+                )
+            }
+            HostCall::StorageCommit {
+                scope,
+                writes,
+                inserts,
+            } => {
+                if writes.len() > 16 || inserts.len() > 32 {
+                    return Err(HostError::invalid(
+                        "commit accepts at most 16 writes and 32 inserts",
+                    ));
+                }
+                if writes.is_empty() && inserts.is_empty() {
+                    return Err(HostError::invalid(
+                        "commit requires at least one write or insert",
+                    ));
+                }
+                let mut keys = std::collections::HashSet::new();
+                let writes = writes
+                    .into_iter()
+                    .map(|write| {
+                        Self::validate_kv_key(&write.key)?;
+                        if !keys.insert(write.key.clone()) {
+                            return Err(HostError::invalid("commit write key is duplicated"));
+                        }
+                        let expected_version = write
+                            .expected_version
+                            .map(|version| {
+                                let parsed = version
+                                    .parse::<i64>()
+                                    .map_err(|_| HostError::invalid("invalid expected version"))?;
+                                if parsed < 1 || parsed.to_string() != version {
+                                    return Err(HostError::invalid("invalid expected version"));
+                                }
+                                Ok(parsed)
+                            })
+                            .transpose()?;
+                        Ok(puzzle_backend::BackendCommitWrite {
+                            key: write.key,
+                            expected_version,
+                            value: write.value,
+                            expiry: Self::expiry(write.expiry)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, HostError>>()?;
+                let inserts = inserts
+                    .into_iter()
+                    .map(|insert| {
+                        Self::validate_store_name(
+                            &insert.collection,
+                            "commit collection name is invalid",
+                        )?;
+                        if !insert.value.is_object() {
+                            return Err(HostError::invalid(
+                                "commit insert value must be an object",
+                            ));
+                        }
+                        Ok(puzzle_backend::BackendCommitInsert {
+                            indexes: Self::index_entries(&insert.value, &insert.schema)?,
+                            collection: insert.collection,
+                            value: insert.value,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, HostError>>()?;
+                let user_id = self.runtime.user_id;
+                let deadline = self.runtime.started_at + self.runtime.timeout;
+                let result = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::commit_backend_conn(
+                            conn, &checked, &writes, &inserts, user_id, deadline,
+                        )
+                        .await
+                    })
+                })?;
+                json!({ "applied": result.applied,
+                    "entries": result.entries.into_iter().map(|entry| entry.map(Self::kv_entry_json)).collect::<Vec<_>>(),
+                    "documents": result.documents,
+                    "serverTime": crate::serde_helpers::format_offset_datetime(&result.server_time) })
             }
             HostCall::KvSet {
                 scope,
@@ -1021,30 +1165,13 @@ impl HostBridge for HostDispatcher {
                 expiry,
             } => {
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
                 let expiry = Self::expiry(expiry)?;
-                let mutation = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::set_kv_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        &value,
-                        expiry,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::set_kv(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        &value,
-                        expiry,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let mutation = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::set_kv_validated_conn(conn, &checked, &key, &value, expiry)
+                            .await
+                    })
+                })?;
                 Self::kv_mutation_json(mutation)
             }
             HostCall::KvIncrement {
@@ -1057,30 +1184,15 @@ impl HostBridge for HostDispatcher {
                 if !amount.is_finite() {
                     return Err(HostError::invalid("kv increment amount must be finite"));
                 }
-                let scope = Self::scope(scope)?;
                 let expiry = Self::expiry(expiry)?;
-                let mutation = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::increment_kv_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        amount,
-                        expiry,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::increment_kv(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        amount,
-                        expiry,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let mutation = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::increment_kv_validated_conn(
+                            conn, &checked, &key, amount, expiry,
+                        )
+                        .await
+                    })
+                })?;
                 Self::kv_mutation_json(mutation)
             }
             HostCall::KvSetIfAbsent {
@@ -1090,7 +1202,6 @@ impl HostBridge for HostDispatcher {
                 expiry,
             } => {
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
                 let ttl_ms = match expiry {
                     HostKvExpiry::Ttl { ttl_ms } if (1..=MAX_KV_TTL_MS).contains(&ttl_ms) => {
                         Some(ttl_ms)
@@ -1103,28 +1214,14 @@ impl HostBridge for HostDispatcher {
                         return Err(HostError::invalid("setIfAbsent cannot preserve expiry"));
                     }
                 };
-                let mutation = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::set_kv_if_absent_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        &value,
-                        ttl_ms,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::set_kv_if_absent(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        &value,
-                        ttl_ms,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let mutation = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::set_kv_if_absent_validated_conn(
+                            conn, &checked, &key, &value, ttl_ms,
+                        )
+                        .await
+                    })
+                })?;
                 Self::kv_mutation_json(mutation)
             }
             HostCall::KvCompareAndSet {
@@ -1135,60 +1232,34 @@ impl HostBridge for HostDispatcher {
                 expiry,
             } => {
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
                 let expected_version = expected_version
                     .parse::<i64>()
                     .ok()
                     .filter(|value| *value > 0)
                     .ok_or_else(|| HostError::invalid("invalid expected KV version"))?;
                 let expiry = Self::expiry(expiry)?;
-                let mutation = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::compare_and_set_kv_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        expected_version,
-                        &value,
-                        expiry,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::compare_and_set_kv(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                        expected_version,
-                        &value,
-                        expiry,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let mutation = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::compare_and_set_kv_validated_conn(
+                            conn,
+                            &checked,
+                            &key,
+                            expected_version,
+                            &value,
+                            expiry,
+                        )
+                        .await
+                    })
+                })?;
                 Self::kv_mutation_json(mutation)
             }
             HostCall::KvDelete { scope, key } => {
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
-                let deleted = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::delete_kv_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::delete_kv(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &key,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let deleted = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::delete_kv_validated_conn(conn, &checked, &key).await
+                    })
+                })?;
                 Value::Bool(deleted)
             }
             HostCall::StoreInsert {
@@ -1208,31 +1279,20 @@ impl HostBridge for HostDispatcher {
                 }
                 let indexes = Self::index_entries(&value, &schema)?;
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
-                let doc = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::insert_store_doc_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &collection,
-                        self.runtime.user_id,
-                        &value,
-                        &indexes,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::insert_store_doc(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &collection,
-                        self.runtime.user_id,
-                        &value,
-                        &indexes,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let user_id = self.runtime.user_id;
+                let doc = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::insert_store_doc_atomic_conn(
+                            conn,
+                            &checked,
+                            &collection,
+                            user_id,
+                            &value,
+                            &indexes,
+                        )
+                        .await
+                    })
+                })?;
                 serde_json::to_value(doc).map_err(Self::db_error)?
             }
             HostCall::StoreGet {
@@ -1248,27 +1308,17 @@ impl HostBridge for HostDispatcher {
                     .parse::<i64>()
                     .map_err(|_| HostError::invalid("invalid store document id"))?;
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
-                let doc = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::get_store_doc_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &collection,
-                        doc_id,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::get_store_doc(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &collection,
-                        doc_id,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let doc = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::get_store_doc_validated_conn(
+                            conn,
+                            &checked,
+                            &collection,
+                            doc_id,
+                        )
+                        .await
+                    })
+                })?;
                 serde_json::to_value(doc).map_err(Self::db_error)?
             }
             HostCall::StoreList {
@@ -1283,27 +1333,17 @@ impl HostBridge for HostDispatcher {
                 )?;
                 let options = Self::store_list_options(&options, &schema)?;
                 self.deadline()?;
-                let scope = Self::scope(scope)?;
-                let docs = if let Some(result) = with_judge_conn(|conn| {
-                    block_on_db(puzzle_backend::list_store_docs_conn(
-                        conn,
-                        self.runtime.game_id,
-                        scope,
-                        &collection,
-                        &options,
-                    ))
-                }) {
-                    result
-                } else {
-                    block_on_db(puzzle_backend::list_store_docs(
-                        &self.app.db,
-                        self.runtime.game_id,
-                        scope,
-                        &collection,
-                        &options,
-                    ))
-                }
-                .map_err(Self::db_error)?;
+                let docs = self.storage(scope, move |conn, checked| {
+                    Box::pin(async move {
+                        puzzle_backend::list_store_docs_validated_conn(
+                            conn,
+                            &checked,
+                            &collection,
+                            &options,
+                        )
+                        .await
+                    })
+                })?;
                 serde_json::to_value(docs).map_err(Self::db_error)?
             }
             HostCall::CurrencyQuery {
@@ -1548,5 +1588,48 @@ mod tests {
         .expect("submission should parse");
         assert_eq!(i16::from(input.action), 3);
         assert_eq!(input.result.as_deref(), Some("close"));
+    }
+}
+
+#[cfg(test)]
+mod scope_cache_tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn scope_cache_reuses_only_successes_in_one_execution(pool: PgPool) {
+        let game: i32 = sqlx::query_scalar!(
+            "INSERT INTO rb_game (title, settings) VALUES ('Cache', '{}') RETURNING id"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let team: i32 = sqlx::query_scalar!("INSERT INTO rb_team (name, pass, bio, game_id) VALUES ('Cache', '', '', $1) RETURNING id" , game).fetch_one(&pool).await.unwrap();
+        let scope = puzzle_backend::BackendScope::Team { team_id: team };
+        let cache = ScopeCache::default();
+        let mut conn = pool.acquire().await.unwrap();
+        cache.get(&mut conn, game, scope).await.unwrap();
+        assert_eq!(cache.entries.lock().unwrap().len(), 1);
+        assert!(cache.get(&mut conn, game + 1, scope).await.is_err());
+        assert_eq!(cache.entries.lock().unwrap().len(), 1);
+        cache
+            .get(&mut conn, game, puzzle_backend::BackendScope::Global)
+            .await
+            .unwrap();
+        assert_eq!(cache.entries.lock().unwrap().len(), 2);
+        // Removing the team makes a repeated database validation fail. The existing
+        // execution reuses its proof; a fresh execution must check again and fail.
+        sqlx::query!("DELETE FROM rb_team WHERE id = $1", team)
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        cache.get(&mut conn, game, scope).await.unwrap();
+        assert!(
+            ScopeCache::default()
+                .get(&mut conn, game, scope)
+                .await
+                .is_err()
+        );
+        assert_eq!(cache.entries.lock().unwrap().len(), 2);
     }
 }

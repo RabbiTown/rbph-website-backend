@@ -88,6 +88,29 @@ impl HostConsoleLevel {
     }
 }
 
+fn required_expected_version<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct HostCommitWrite {
+    pub key: String,
+    #[serde(deserialize_with = "required_expected_version")]
+    pub expected_version: Option<String>,
+    pub value: Value,
+    pub expiry: HostKvExpiry,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct HostCommitInsert {
+    pub collection: String,
+    pub schema: HostStoreSchema,
+    pub value: Value,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "operation",
@@ -102,6 +125,15 @@ pub(super) enum HostCall {
     KvGetEntry {
         scope: HostScope,
         key: String,
+    },
+    KvGetEntries {
+        scope: HostScope,
+        keys: Vec<String>,
+    },
+    StorageCommit {
+        scope: HostScope,
+        writes: Vec<HostCommitWrite>,
+        inserts: Vec<HostCommitInsert>,
     },
     KvSet {
         scope: HostScope,
@@ -352,5 +384,20 @@ mod tests {
             serde_json::from_value::<HostError>(json).expect("host error should deserialize"),
             error
         );
+    }
+}
+
+#[cfg(test)]
+mod commit_protocol_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn expected_version_must_be_explicit_even_for_absence() {
+        let mut call = json!({"operation":"storageCommit", "scope":{"type":"global"},
+            "writes":[{"key":"a", "value":1, "expiry":{"mode":"permanent"}}], "inserts":[]});
+        assert!(serde_json::from_value::<HostCall>(call.clone()).is_err());
+        call["writes"][0]["expectedVersion"] = Value::Null;
+        assert!(serde_json::from_value::<HostCall>(call).is_ok());
     }
 }

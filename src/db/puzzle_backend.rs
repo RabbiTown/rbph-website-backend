@@ -2,12 +2,12 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{FromRow, PgConnection};
+use sqlx::{Connection, FromRow, PgConnection};
 use time::OffsetDateTime;
 
 use crate::{DbPool, error::RbInternalError};
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize)]
 #[serde(tag = "type")]
 pub enum BackendScope {
     #[serde(rename = "global")]
@@ -528,6 +528,22 @@ async fn require_scope_in_game_conn(
     }
 }
 
+/// Proof that this game/scope pair was checked by the database.
+#[derive(Clone, Copy)]
+pub(crate) struct ValidatedBackendScope {
+    game_id: i32,
+    scope: BackendScope,
+}
+
+pub(crate) async fn validate_backend_scope_conn(
+    conn: &mut PgConnection,
+    game_id: i32,
+    scope: BackendScope,
+) -> Result<ValidatedBackendScope, RbInternalError> {
+    require_scope_in_game_conn(conn, game_id, scope).await?;
+    Ok(ValidatedBackendScope { game_id, scope })
+}
+
 pub async fn get_kv(
     db_pool: &DbPool,
     game_id: i32,
@@ -544,7 +560,16 @@ pub async fn get_kv_conn(
     scope: BackendScope,
     key: &str,
 ) -> Result<Option<Value>, RbInternalError> {
-    Ok(get_kv_entry_conn(conn, game_id, scope, key)
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    get_kv_validated_conn(conn, &checked, key).await
+}
+
+pub(crate) async fn get_kv_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+) -> Result<Option<Value>, RbInternalError> {
+    Ok(get_kv_entry_validated_conn(conn, checked, key)
         .await?
         .map(|entry| entry.value))
 }
@@ -565,7 +590,17 @@ pub async fn get_kv_entry_conn(
     scope: BackendScope,
     key: &str,
 ) -> Result<Option<PuzzleBackendKvValue>, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    get_kv_entry_validated_conn(conn, &checked, key).await
+}
+
+pub(crate) async fn get_kv_entry_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+) -> Result<Option<PuzzleBackendKvValue>, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let row = sqlx::query_as!(
         PuzzleBackendKvValue,
@@ -607,7 +642,19 @@ pub async fn set_kv_conn(
     value: &Value,
     expiry: PuzzleBackendKvExpiry,
 ) -> Result<PuzzleBackendKvMutation, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    set_kv_validated_conn(conn, &checked, key, value, expiry).await
+}
+
+pub(crate) async fn set_kv_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+    value: &Value,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let (preserve_expiry, ttl_ms) = match expiry {
         PuzzleBackendKvExpiry::Preserve => (true, None),
@@ -645,7 +692,7 @@ pub async fn set_kv_conn(
     .fetch_one(&mut *conn)
     .await?;
 
-    current_kv_mutation_conn(conn, game_id, scope, key, Some(entry)).await
+    current_kv_mutation_conn(conn, checked, key, Some(entry)).await
 }
 
 pub async fn increment_kv(
@@ -668,12 +715,24 @@ pub async fn increment_kv_conn(
     amount: f64,
     expiry: PuzzleBackendKvExpiry,
 ) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    increment_kv_validated_conn(conn, &checked, key, amount, expiry).await
+}
+
+pub(crate) async fn increment_kv_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+    amount: f64,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     if !amount.is_finite() {
         return Err(RbInternalError::Other(
             "KV increment amount must be a finite number".to_string(),
         ));
     }
-    require_scope_in_game_conn(conn, game_id, scope).await?;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let (preserve_expiry, ttl_ms) = match expiry {
         PuzzleBackendKvExpiry::Preserve => (true, None),
@@ -726,13 +785,12 @@ pub async fn increment_kv_conn(
     .fetch_one(&mut *conn)
     .await?;
 
-    current_kv_mutation_conn(conn, game_id, scope, key, Some(entry)).await
+    current_kv_mutation_conn(conn, checked, key, Some(entry)).await
 }
 
 async fn current_kv_mutation_conn(
     conn: &mut PgConnection,
-    game_id: i32,
-    scope: BackendScope,
+    checked: &ValidatedBackendScope,
     key: &str,
     applied_entry: Option<PuzzleBackendKvValue>,
 ) -> Result<PuzzleBackendKvMutation, RbInternalError> {
@@ -740,7 +798,7 @@ async fn current_kv_mutation_conn(
     let entry = if applied {
         applied_entry
     } else {
-        get_kv_entry_conn(conn, game_id, scope, key).await?
+        get_kv_entry_validated_conn(conn, checked, key).await?
     };
     let server_time =
         sqlx::query_scalar!(r#"SELECT statement_timestamp() AS "server_time!: OffsetDateTime""#)
@@ -773,7 +831,19 @@ pub async fn set_kv_if_absent_conn(
     value: &Value,
     ttl_ms: Option<i64>,
 ) -> Result<PuzzleBackendKvMutation, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    set_kv_if_absent_validated_conn(conn, &checked, key, value, ttl_ms).await
+}
+
+pub(crate) async fn set_kv_if_absent_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+    value: &Value,
+    ttl_ms: Option<i64>,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let entry = sqlx::query_as!(
         PuzzleBackendKvValue,
@@ -804,7 +874,7 @@ pub async fn set_kv_if_absent_conn(
     .fetch_optional(&mut *conn)
     .await?;
 
-    current_kv_mutation_conn(conn, game_id, scope, key, entry).await
+    current_kv_mutation_conn(conn, checked, key, entry).await
 }
 
 pub async fn compare_and_set_kv(
@@ -838,7 +908,20 @@ pub async fn compare_and_set_kv_conn(
     value: &Value,
     expiry: PuzzleBackendKvExpiry,
 ) -> Result<PuzzleBackendKvMutation, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    compare_and_set_kv_validated_conn(conn, &checked, key, expected_version, value, expiry).await
+}
+
+pub(crate) async fn compare_and_set_kv_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+    expected_version: i64,
+    value: &Value,
+    expiry: PuzzleBackendKvExpiry,
+) -> Result<PuzzleBackendKvMutation, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let (preserve_expiry, ttl_ms) = match expiry {
         PuzzleBackendKvExpiry::Preserve => (true, None),
@@ -876,7 +959,7 @@ pub async fn compare_and_set_kv_conn(
     .fetch_optional(&mut *conn)
     .await?;
 
-    current_kv_mutation_conn(conn, game_id, scope, key, entry).await
+    current_kv_mutation_conn(conn, checked, key, entry).await
 }
 
 pub async fn delete_kv(
@@ -895,7 +978,17 @@ pub async fn delete_kv_conn(
     scope: BackendScope,
     key: &str,
 ) -> Result<bool, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    delete_kv_validated_conn(conn, &checked, key).await
+}
+
+pub(crate) async fn delete_kv_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    key: &str,
+) -> Result<bool, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let result = sqlx::query!(
         r#"DELETE FROM rb_puzzle_kv
@@ -1011,7 +1104,20 @@ pub async fn insert_store_doc_conn(
     value: &Value,
     indexes: &[PuzzleStoreIndexEntry],
 ) -> Result<PuzzleStoreDoc, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    insert_store_doc_validated_conn(conn, &checked, collection, created_by, value, indexes).await
+}
+
+pub(crate) async fn insert_store_doc_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    collection: &str,
+    created_by: i32,
+    value: &Value,
+    indexes: &[PuzzleStoreIndexEntry],
+) -> Result<PuzzleStoreDoc, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
 
     let row = sqlx::query!(
@@ -1114,7 +1220,18 @@ pub async fn get_store_doc_conn(
     collection: &str,
     doc_id: i64,
 ) -> Result<Option<PuzzleStoreDoc>, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    get_store_doc_validated_conn(conn, &checked, collection, doc_id).await
+}
+
+pub(crate) async fn get_store_doc_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    collection: &str,
+    doc_id: i64,
+) -> Result<Option<PuzzleStoreDoc>, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let row = sqlx::query!(
         r#"SELECT d.id, d.scope_type, d.team_id, d.puzzle_id, d.collection,
@@ -1169,7 +1286,18 @@ pub async fn list_store_docs_conn(
     collection: &str,
     options: &PuzzleStoreListOptions,
 ) -> Result<Vec<PuzzleStoreDoc>, RbInternalError> {
-    require_scope_in_game_conn(conn, game_id, scope).await?;
+    let checked = validate_backend_scope_conn(conn, game_id, scope).await?;
+    list_store_docs_validated_conn(conn, &checked, collection, options).await
+}
+
+pub(crate) async fn list_store_docs_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    collection: &str,
+    options: &PuzzleStoreListOptions,
+) -> Result<Vec<PuzzleStoreDoc>, RbInternalError> {
+    let game_id = checked.game_id;
+    let scope = checked.scope;
     let (scope_type, team_id, puzzle_id) = scope.parts();
     let text_keys: Vec<String> = options
         .filters
@@ -1387,6 +1515,749 @@ pub async fn count_call_logs(
     .await?;
 
     Ok(count)
+}
+
+struct BatchKvRow {
+    key: String,
+    value: Value,
+    version: i64,
+    expires_at: Option<OffsetDateTime>,
+}
+
+pub(crate) async fn get_kv_entries_validated_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    keys: &[String],
+) -> Result<Vec<Option<PuzzleBackendKvValue>>, RbInternalError> {
+    if keys.is_empty() {
+        return Ok(vec![]);
+    }
+    let (scope_type, team_id, puzzle_id) = checked.scope.parts();
+    let rows = sqlx::query_as!(
+        BatchKvRow,
+        "SELECT key, value, version, expires_at FROM rb_puzzle_kv
+         WHERE game_id = $1 AND scope_type = $2
+         AND team_id IS NOT DISTINCT FROM $3 AND puzzle_id IS NOT DISTINCT FROM $4
+         AND key = ANY($5) AND (expires_at IS NULL OR expires_at > statement_timestamp())",
+        checked.game_id,
+        scope_type,
+        team_id,
+        puzzle_id,
+        keys,
+    )
+    .fetch_all(conn)
+    .await?;
+    let entries: std::collections::HashMap<_, _> = rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.key,
+                PuzzleBackendKvValue {
+                    value: row.value,
+                    version: row.version,
+                    expires_at: row.expires_at,
+                },
+            )
+        })
+        .collect();
+    Ok(keys.iter().map(|key| entries.get(key).cloned()).collect())
+}
+
+pub(crate) struct BackendCommitWrite {
+    pub key: String,
+    pub expected_version: Option<i64>,
+    pub value: Value,
+    pub expiry: PuzzleBackendKvExpiry,
+}
+
+pub(crate) struct BackendCommitInsert {
+    pub collection: String,
+    pub value: Value,
+    pub indexes: Vec<PuzzleStoreIndexEntry>,
+}
+
+pub(crate) struct BackendCommitResult {
+    pub applied: bool,
+    pub entries: Vec<Option<PuzzleBackendKvValue>>,
+    pub documents: Vec<PuzzleStoreDoc>,
+    pub server_time: OffsetDateTime,
+}
+
+// Begin on the connection, rather than the pool: SQLx creates a savepoint
+// when the caller already holds a judge transaction.
+pub(crate) async fn insert_store_doc_atomic_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    collection: &str,
+    created_by: i32,
+    value: &Value,
+    indexes: &[PuzzleStoreIndexEntry],
+) -> Result<PuzzleStoreDoc, RbInternalError> {
+    let mut tx = conn.begin().await?;
+    let doc =
+        insert_store_doc_validated_conn(&mut tx, checked, collection, created_by, value, indexes)
+            .await?;
+    tx.commit().await?;
+    Ok(doc)
+}
+
+fn ensure_commit_deadline(
+    deadline: std::time::Instant,
+) -> Result<std::time::Duration, RbInternalError> {
+    deadline
+        .checked_duration_since(std::time::Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| RbInternalError::Other("backend function execution timed out".into()))
+}
+
+fn bounded_timeout(current: &str, budget_ms: u128) -> String {
+    // PostgreSQL renders these settings as an integer and a unit, or 0 (disabled).
+    let split = current
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(current.len());
+    let amount = current[..split].parse::<u128>().unwrap_or(0);
+    let multiplier = match &current[split..] {
+        "s" => 1000,
+        "min" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => 1,
+    };
+    let existing_ms = amount.saturating_mul(multiplier);
+    format!(
+        "{}ms",
+        if existing_ms == 0 {
+            budget_ms
+        } else {
+            existing_ms.min(budget_ms)
+        }
+        .max(1)
+    )
+}
+
+pub(crate) async fn commit_backend_conn(
+    conn: &mut PgConnection,
+    checked: &ValidatedBackendScope,
+    writes: &[BackendCommitWrite],
+    inserts: &[BackendCommitInsert],
+    created_by: i32,
+    deadline: std::time::Instant,
+) -> Result<BackendCommitResult, RbInternalError> {
+    let budget = ensure_commit_deadline(deadline)?.as_millis().max(1);
+    let mut tx = conn.begin().await?;
+    let previous = sqlx::query!(
+        r#"SELECT current_setting('statement_timeout') AS "statement_timeout!",
+                  current_setting('lock_timeout') AS "lock_timeout!""#,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let statement_timeout = bounded_timeout(&previous.statement_timeout, budget);
+    let lock_timeout = bounded_timeout(&previous.lock_timeout, budget.min(500));
+    sqlx::query!(
+        r#"SELECT set_config('statement_timeout', $1, true) AS "statement_timeout!",
+                  set_config('lock_timeout', $2, true) AS "lock_timeout!""#,
+        statement_timeout,
+        lock_timeout,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let mut order: Vec<usize> = (0..writes.len()).collect();
+    order.sort_by(|a, b| writes[*a].key.cmp(&writes[*b].key));
+    let mut entries = vec![None; writes.len()];
+    for index in order {
+        ensure_commit_deadline(deadline)?;
+        let write = &writes[index];
+        let mutation = match write.expected_version {
+            Some(version) => {
+                compare_and_set_kv_validated_conn(
+                    &mut tx,
+                    checked,
+                    &write.key,
+                    version,
+                    &write.value,
+                    write.expiry,
+                )
+                .await?
+            }
+            None => {
+                set_kv_if_absent_validated_conn(
+                    &mut tx,
+                    checked,
+                    &write.key,
+                    &write.value,
+                    match write.expiry {
+                        PuzzleBackendKvExpiry::Ttl(ms) => Some(ms),
+                        _ => None,
+                    },
+                )
+                .await?
+            }
+        };
+        if !mutation.applied {
+            tx.rollback().await?;
+            ensure_commit_deadline(deadline)?;
+            let keys: Vec<_> = writes.iter().map(|write| write.key.clone()).collect();
+            let entries = get_kv_entries_validated_conn(conn, checked, &keys).await?;
+            return Ok(BackendCommitResult {
+                applied: false,
+                entries,
+                documents: vec![],
+                server_time: OffsetDateTime::now_utc(),
+            });
+        }
+        entries[index] = mutation.entry;
+    }
+    let mut documents = Vec::with_capacity(inserts.len());
+    for insert in inserts {
+        ensure_commit_deadline(deadline)?;
+        documents.push(
+            insert_store_doc_validated_conn(
+                &mut tx,
+                checked,
+                &insert.collection,
+                created_by,
+                &insert.value,
+                &insert.indexes,
+            )
+            .await?,
+        );
+    }
+    // Restore local settings before releasing a judge savepoint.
+    sqlx::query!(
+        r#"SELECT set_config('statement_timeout', $1, true) AS "statement_timeout!",
+                  set_config('lock_timeout', $2, true) AS "lock_timeout!""#,
+        previous.statement_timeout,
+        previous.lock_timeout,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure_commit_deadline(deadline)?;
+    tx.commit().await?;
+    Ok(BackendCommitResult {
+        applied: true,
+        entries,
+        documents,
+        server_time: OffsetDateTime::now_utc(),
+    })
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use serde_json::json;
+    use sqlx::PgPool;
+    use std::time::{Duration, Instant};
+
+    async fn fixture(pool: &PgPool) -> (i32, i32, BackendScope) {
+        let game: i32 = sqlx::query_scalar!(
+            "INSERT INTO rb_game (title, settings) VALUES ('Batch test', '{}') RETURNING id"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let user: i32 = sqlx::query_scalar!("INSERT INTO rb_user (email, pass, nickname) VALUES ('batch@example.invalid', '', 'Tester') RETURNING id").fetch_one(pool).await.unwrap();
+        let team: i32 = sqlx::query_scalar!("INSERT INTO rb_team (name, pass, bio, game_id) VALUES ('Batch team', '', '', $1) RETURNING id" , game).fetch_one(pool).await.unwrap();
+        (game, user, BackendScope::Team { team_id: team })
+    }
+
+    fn write(key: &str, version: Option<i64>, value: Value) -> BackendCommitWrite {
+        BackendCommitWrite {
+            key: key.into(),
+            expected_version: version,
+            value,
+            expiry: PuzzleBackendKvExpiry::Permanent,
+        }
+    }
+
+    fn insert() -> BackendCommitInsert {
+        BackendCommitInsert {
+            collection: "attempts".into(),
+            value: json!({"puzzleId": "a", "answer": "wrong"}),
+            indexes: vec![PuzzleStoreIndexEntry {
+                key: "puzzleId".into(),
+                value: PuzzleStoreIndexValue::Text("a".into()),
+            }],
+        }
+    }
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn batch_read_orders_duplicates_expiry_and_scope(pool: PgPool) {
+        let (game, _, scope) = fixture(&pool).await;
+        set_kv(
+            &pool,
+            game,
+            scope,
+            "a",
+            &json!(1),
+            PuzzleBackendKvExpiry::Permanent,
+        )
+        .await
+        .unwrap();
+        set_kv(
+            &pool,
+            game,
+            scope,
+            "b",
+            &json!(2),
+            PuzzleBackendKvExpiry::Permanent,
+        )
+        .await
+        .unwrap();
+        sqlx::query!("UPDATE rb_puzzle_kv SET expires_at = NOW() - INTERVAL '1 second' WHERE game_id = $1 AND key = 'b'" , game).execute(&pool).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let checked = validate_backend_scope_conn(&mut conn, game, scope)
+            .await
+            .unwrap();
+        let entries = get_kv_entries_validated_conn(
+            &mut conn,
+            &checked,
+            &["b".into(), "a".into(), "missing".into(), "a".into()],
+        )
+        .await
+        .unwrap();
+        assert!(entries[0].is_none());
+        assert!(entries[2].is_none());
+        assert_eq!(entries[1].as_ref().unwrap().value, json!(1));
+        assert_eq!(entries[3].as_ref().unwrap().version, 1);
+        assert!(
+            get_kv_entries_validated_conn(&mut conn, &checked, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            validate_backend_scope_conn(&mut conn, game + 1, scope)
+                .await
+                .is_err()
+        );
+        let other = validate_backend_scope_conn(&mut conn, game, BackendScope::Global)
+            .await
+            .unwrap();
+        assert!(
+            get_kv_entries_validated_conn(&mut conn, &other, &["a".into()])
+                .await
+                .unwrap()[0]
+                .is_none()
+        );
+        let other_team: i32 = sqlx::query_scalar!("INSERT INTO rb_team (name, pass, bio, game_id) VALUES ('Other', '', '', $1) RETURNING id" , game).fetch_one(&mut *conn).await.unwrap();
+        let other = validate_backend_scope_conn(
+            &mut conn,
+            game,
+            BackendScope::Team {
+                team_id: other_team,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            get_kv_entries_validated_conn(&mut conn, &other, &["a".into()])
+                .await
+                .unwrap()[0]
+                .is_none()
+        );
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn commit_success_conflict_and_insert_failure_are_atomic(pool: PgPool) {
+        let (game, user, scope) = fixture(&pool).await;
+        let mut conn = pool.acquire().await.unwrap();
+        let checked = validate_backend_scope_conn(&mut conn, game, scope)
+            .await
+            .unwrap();
+        let first = commit_backend_conn(
+            &mut conn,
+            &checked,
+            &[write("b", None, json!(2)), write("a", None, json!(1))],
+            &[insert()],
+            user,
+            deadline(),
+        )
+        .await
+        .unwrap();
+        assert!(first.applied);
+        assert_eq!(first.entries[0].as_ref().unwrap().value, json!(2));
+        assert_eq!(first.documents.len(), 1);
+        // a changes first, b then conflicts: a must be rolled back too.
+        let conflict = commit_backend_conn(
+            &mut conn,
+            &checked,
+            &[
+                write("a", Some(1), json!(10)),
+                write("b", Some(99), json!(20)),
+            ],
+            &[insert()],
+            user,
+            deadline(),
+        )
+        .await
+        .unwrap();
+        assert!(!conflict.applied);
+        assert!(conflict.documents.is_empty());
+        assert_eq!(conflict.entries[0].as_ref().unwrap().value, json!(1));
+        let mut bad = insert();
+        bad.indexes[0].value = PuzzleStoreIndexValue::Text("\0".into());
+        // Failure occurs after the KV update and document INSERT, inside the index INSERT.
+        assert!(
+            commit_backend_conn(
+                &mut conn,
+                &checked,
+                &[write("a", Some(1), json!(10))],
+                &[insert(), bad],
+                user,
+                deadline()
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            get_kv_entry_validated_conn(&mut conn, &checked, "a")
+                .await
+                .unwrap()
+                .unwrap()
+                .version,
+            1
+        );
+        let count: i64 =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_doc"#)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+        let count: i64 =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_index"#)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+        assert!(
+            commit_backend_conn(
+                &mut conn,
+                &checked,
+                &[write("a", Some(1), json!(10))],
+                &[insert()],
+                user,
+                Instant::now() - Duration::from_millis(1)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            get_kv_entry_validated_conn(&mut conn, &checked, "a")
+                .await
+                .unwrap()
+                .unwrap()
+                .version,
+            1
+        );
+        let inserted = commit_backend_conn(
+            &mut conn,
+            &checked,
+            &[],
+            &[insert(), insert()],
+            user,
+            deadline(),
+        )
+        .await
+        .unwrap();
+        assert!(inserted.applied);
+        assert!(inserted.entries.is_empty());
+        assert_eq!(inserted.documents.len(), 2);
+        assert!(inserted.documents[0].id < inserted.documents[1].id);
+        let mut bad = insert();
+        bad.indexes[0].value = PuzzleStoreIndexValue::Text("\0".into());
+        assert!(
+            commit_backend_conn(&mut conn, &checked, &[], &[insert(), bad], user, deadline())
+                .await
+                .is_err()
+        );
+        let count = sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_doc"#)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
+        let count =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_index"#)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn commit_savepoint_preserves_outer_transaction_and_settings(pool: PgPool) {
+        let (game, user, scope) = fixture(&pool).await;
+        let mut outer = pool.begin().await.unwrap();
+        let checked = validate_backend_scope_conn(&mut outer, game, scope)
+            .await
+            .unwrap();
+        sqlx::query!("SET LOCAL statement_timeout = '500ms'")
+            .execute(&mut *outer)
+            .await
+            .unwrap();
+        let first = commit_backend_conn(
+            &mut outer,
+            &checked,
+            &[write("a", None, json!(1))],
+            &[insert()],
+            user,
+            deadline(),
+        )
+        .await
+        .unwrap();
+        assert!(first.applied);
+        let conflict = commit_backend_conn(
+            &mut outer,
+            &checked,
+            &[write("a", Some(99), json!(2))],
+            &[insert()],
+            user,
+            deadline(),
+        )
+        .await
+        .unwrap();
+        assert!(!conflict.applied);
+        let mut bad = insert();
+        bad.indexes[0].value = PuzzleStoreIndexValue::Text("\0".into());
+        assert!(
+            commit_backend_conn(
+                &mut outer,
+                &checked,
+                &[write("a", Some(1), json!(2))],
+                &[bad],
+                user,
+                deadline()
+            )
+            .await
+            .is_err()
+        );
+        let value = get_kv_entry_validated_conn(&mut outer, &checked, "a")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.version, 1);
+        let timeout: String =
+            sqlx::query_scalar!(r#"SELECT current_setting('statement_timeout') AS "timeout!""#)
+                .fetch_one(&mut *outer)
+                .await
+                .unwrap();
+        assert_eq!(timeout, "500ms");
+        outer.rollback().await.unwrap();
+        assert!(
+            get_kv_entry(&pool, game, scope, "a")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let count: i64 =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_doc"#)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn commit_concurrent_batches_have_one_winner(pool: PgPool) {
+        let (game, user, scope) = fixture(&pool).await;
+        for key in ["a", "b"] {
+            set_kv(
+                &pool,
+                game,
+                scope,
+                key,
+                &json!(0),
+                PuzzleBackendKvExpiry::Permanent,
+            )
+            .await
+            .unwrap();
+        }
+        let run = |reverse: bool| {
+            let pool = pool.clone();
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                let checked = validate_backend_scope_conn(&mut conn, game, scope)
+                    .await
+                    .unwrap();
+                let mut writes = vec![write("a", Some(1), json!(1)), write("b", Some(1), json!(2))];
+                if reverse {
+                    writes.reverse();
+                }
+                commit_backend_conn(&mut conn, &checked, &writes, &[insert()], user, deadline())
+                    .await
+                    .unwrap()
+            }
+        };
+        let (a, b) = tokio::join!(run(false), run(true));
+        assert_ne!(a.applied, b.applied);
+        for key in ["a", "b"] {
+            assert_eq!(
+                get_kv_entry(&pool, game, scope, key)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .version,
+                2
+            );
+        }
+        let count: i64 =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_doc"#)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+        let run = || {
+            let pool = pool.clone();
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                let checked = validate_backend_scope_conn(&mut conn, game, scope)
+                    .await
+                    .unwrap();
+                commit_backend_conn(
+                    &mut conn,
+                    &checked,
+                    &[write("new", None, json!(1))],
+                    &[insert()],
+                    user,
+                    deadline(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let (a, b) = tokio::join!(run(), run());
+        assert_ne!(a.applied, b.applied);
+        let count: i64 =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_doc"#)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn commit_expiry_and_ttl_match_single_key_operations(pool: PgPool) {
+        let (game, user, scope) = fixture(&pool).await;
+        set_kv(
+            &pool,
+            game,
+            scope,
+            "a",
+            &json!(0),
+            PuzzleBackendKvExpiry::Ttl(60_000),
+        )
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let checked = validate_backend_scope_conn(&mut conn, game, scope)
+            .await
+            .unwrap();
+        let before = get_kv_entry_validated_conn(&mut conn, &checked, "a")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut keep = write("a", Some(1), json!(1));
+        keep.expiry = PuzzleBackendKvExpiry::Preserve;
+        let result = commit_backend_conn(&mut conn, &checked, &[keep], &[], user, deadline())
+            .await
+            .unwrap();
+        assert_eq!(
+            result.entries[0].as_ref().unwrap().expires_at,
+            before.expires_at
+        );
+        sqlx::query!(
+            "UPDATE rb_puzzle_kv SET expires_at = NOW() - INTERVAL '1 second' WHERE game_id = $1",
+            game
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        assert!(
+            !commit_backend_conn(
+                &mut conn,
+                &checked,
+                &[write("a", Some(2), json!(2))],
+                &[],
+                user,
+                deadline()
+            )
+            .await
+            .unwrap()
+            .applied
+        );
+        let mut reclaim = write("a", None, json!(3));
+        reclaim.expiry = PuzzleBackendKvExpiry::Ttl(60_000);
+        let result = commit_backend_conn(&mut conn, &checked, &[reclaim], &[], user, deadline())
+            .await
+            .unwrap();
+        assert!(result.applied);
+        assert_eq!(result.entries[0].as_ref().unwrap().version, 3);
+        assert!(result.entries[0].as_ref().unwrap().expires_at.is_some());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn commit_lock_wait_is_bounded_and_rolls_back(pool: PgPool) {
+        let (game, user, scope) = fixture(&pool).await;
+        for key in ["a", "b"] {
+            set_kv(
+                &pool,
+                game,
+                scope,
+                key,
+                &json!(0),
+                PuzzleBackendKvExpiry::Permanent,
+            )
+            .await
+            .unwrap();
+        }
+        let mut blocker = pool.begin().await.unwrap();
+        sqlx::query!(
+            "SELECT key FROM rb_puzzle_kv WHERE game_id = $1 AND key = 'b' FOR UPDATE",
+            game
+        )
+        .fetch_one(&mut *blocker)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let checked = validate_backend_scope_conn(&mut conn, game, scope)
+            .await
+            .unwrap();
+        let result = commit_backend_conn(
+            &mut conn,
+            &checked,
+            &[write("a", Some(1), json!(1)), write("b", Some(1), json!(1))],
+            &[insert()],
+            user,
+            Instant::now() + Duration::from_millis(100),
+        )
+        .await;
+        assert!(result.is_err());
+        blocker.rollback().await.unwrap();
+        assert_eq!(
+            get_kv_entry_validated_conn(&mut conn, &checked, "a")
+                .await
+                .unwrap()
+                .unwrap()
+                .version,
+            1
+        );
+        let count: i64 =
+            sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM rb_puzzle_store_doc"#)
+                .fetch_one(&mut *conn)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn timeouts_preserve_stricter_existing_limits() {
+        assert_eq!(bounded_timeout("500ms", 5000), "500ms");
+        assert_eq!(bounded_timeout("0", 100), "100ms");
+        assert_eq!(bounded_timeout("1min", 5000), "5000ms");
+    }
 }
 
 #[cfg(test)]

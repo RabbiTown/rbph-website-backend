@@ -7,7 +7,7 @@ use super::v8::V8Engine;
 use super::{EngineRequest, ExecutionKind, JsEngine, ResultMode, boa::BoaEngine};
 use crate::module::puzzle_backend_js::{
     host::HostBridge,
-    protocol::{HOST_PROTOCOL_VERSION, HostError, HostRequest, HostValue},
+    protocol::{HOST_PROTOCOL_VERSION, HostCall, HostError, HostRequest, HostValue},
 };
 
 struct NullHost;
@@ -215,4 +215,152 @@ fn v8_disables_wasm_code_generation() {
         )
         .expect_err("WebAssembly compilation must be disabled");
     assert!(error.to_string().contains("WebAssembly"));
+}
+
+#[derive(Default)]
+struct StorageRecordingHost {
+    calls: std::sync::Mutex<Vec<HostCall>>,
+}
+
+impl HostBridge for StorageRecordingHost {
+    fn call(&self, request: HostRequest) -> Result<HostValue, HostError> {
+        let result = match &request.call {
+            HostCall::KvGetEntries { keys, .. } => json!(keys.iter().map(|key| {
+                if key == "missing" { Value::Null } else { json!({ "value": key, "version": "9007199254740993", "expiresAt": null }) }
+            }).collect::<Vec<_>>()),
+            HostCall::StorageCommit { .. } => json!({"applied": true, "entries": [], "documents": [], "serverTime": "2026-09-28T00:00:00Z"}),
+            _ => Value::Null,
+        };
+        self.calls.lock().unwrap().push(request.call);
+        Ok(HostValue::Json(result))
+    }
+}
+
+#[test]
+fn engines_batch_reads_preserve_order_and_use_one_host_call() {
+    for (name, engine) in engines() {
+        let host = Arc::new(StorageRecordingHost::default());
+        let result = engine
+            .execute(
+                request(
+                    r#"export function run() {
+            const empty = $this.kv.getEntries([]);
+            const entries = $this.kv.getEntries(['b', 'missing', 'b', 'a']);
+            $game.kv.getEntries({type: 'global'}, ['c']);
+            return {empty, entries};
+        }"#,
+                    Value::Null,
+                    ResultMode::JsonRequired,
+                ),
+                host.clone(),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let HostValue::Json(result) = result else {
+            panic!("JSON required");
+        };
+        assert_eq!(result["empty"], json!([]));
+        assert_eq!(result["entries"][0], result["entries"][2]);
+        assert_eq!(result["entries"][0]["version"], "9007199254740993");
+        assert!(result["entries"][1].is_null());
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(matches!(
+            &calls[0],
+            HostCall::KvGetEntries {
+                scope: super::super::protocol::HostScope::TeamPuzzle {
+                    team_id: 2,
+                    puzzle_id: 3
+                },
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn engines_commit_encodes_conditions_expiry_and_all_scopes() {
+    for (name, engine) in engines() {
+        let host = Arc::new(StorageRecordingHost::default());
+        engine.execute(request(r#"export function run() {
+            const batch = {writes: [{key:'a', expectedVersion:null, value:{x:1}}],
+                inserts:[{collection:'attempts', schema:{indexes:{puzzleId:'string'}}, value:{puzzleId:'a'}}]};
+            $this.commit(batch); $team.commit({writes:[], inserts:batch.inserts}); $puzzle.commit(batch);
+            $game.commit({type:'global'}, {writes:[{key:'b',expectedVersion:'9007199254740993',value:null}]});
+            return true;
+        }"#, Value::Null, ResultMode::JsonRequired), host.clone()).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        let HostCall::StorageCommit {
+            writes, inserts, ..
+        } = &calls[0]
+        else {
+            panic!("commit required");
+        };
+        assert!(writes[0].expected_version.is_none());
+        assert_eq!(
+            writes[0].expiry,
+            super::super::protocol::HostKvExpiry::Permanent
+        );
+        assert_eq!(inserts.len(), 1);
+        let HostCall::StorageCommit {
+            writes, inserts, ..
+        } = &calls[1]
+        else {
+            panic!("commit required");
+        };
+        assert!(writes.is_empty());
+        assert_eq!(inserts.len(), 1);
+        let HostCall::StorageCommit { writes, .. } = &calls[3] else {
+            panic!("commit required");
+        };
+        assert_eq!(
+            writes[0].expected_version.as_deref(),
+            Some("9007199254740993")
+        );
+        assert_eq!(
+            writes[0].expiry,
+            super::super::protocol::HostKvExpiry::Preserve
+        );
+    }
+}
+
+#[test]
+fn engines_storage_validation_rejects_invalid_batches_before_host_call() {
+    for (name, engine) in engines() {
+        for expression in [
+            "$this.kv.getEntries('a')",
+            "$this.kv.getEntries(Array(129).fill('a'))",
+            "$this.kv.getEntries([''])",
+            "$this.kv.getEntries([1])",
+            "$this.kv.getEntries(['a'.repeat(256)])",
+            "$this.kv.getEntries(['\\0'])",
+            "$this.commit({writes:[],inserts:[]})",
+            "$this.commit({writes:[],inserts:Array(33).fill({collection:'a',value:{}})})",
+            "$this.commit({writes:Array(17).fill({key:'a',expectedVersion:null,value:1})})",
+            "$this.commit({writes:[{key:'a',value:1}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:'0',value:1}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:'9223372036854775808',value:1}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:null}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:null,value:1},{key:'a',expectedVersion:null,value:2}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:null,value:1,options:{ttl:0}}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:null,value:1}],inserts:[{collection:'../a',value:{}}]})",
+            "$this.commit({writes:[{key:'a',expectedVersion:null,value:1}],inserts:[{collection:'a',value:[]} ]})",
+        ] {
+            let host = Arc::new(StorageRecordingHost::default());
+            let source = format!("export function run() {{ return {expression}; }}");
+            assert!(
+                engine
+                    .execute(
+                        request(&source, Value::Null, ResultMode::JsonRequired),
+                        host.clone()
+                    )
+                    .is_err(),
+                "{name}: {expression}"
+            );
+            assert!(
+                host.calls.lock().unwrap().is_empty(),
+                "{name}: {expression}"
+            );
+        }
+    }
 }
